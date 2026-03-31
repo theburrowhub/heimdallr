@@ -111,7 +111,7 @@ func main() {
 
 		broker.Publish(sse.Event{Type: sse.EventPRDetected, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
 		broker.Publish(sse.Event{Type: sse.EventReviewStarted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
-		rev, err := p.Run(pr, aiCfg.Primary, aiCfg.Fallback)
+		rev, err := p.Run(pr, aiCfg.Primary, aiCfg.Fallback, aiCfg.Prompt)
 		if err != nil {
 			slog.Error("pipeline run failed", "repo", pr.Repo, "pr", pr.Number, "err", err)
 			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q,"error":%q}`, pr.Number, pr.Repo, err.Error())})
@@ -270,7 +270,7 @@ func main() {
 			reviewMu.Unlock()
 		}()
 
-		rev, err := p.Run(ghPR, aiCfg.Primary, aiCfg.Fallback)
+		rev, err := p.Run(ghPR, aiCfg.Primary, aiCfg.Fallback, aiCfg.Prompt)
 		if err != nil {
 			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_id":%d,"error":%q}`, prID, err.Error())})
 			return err

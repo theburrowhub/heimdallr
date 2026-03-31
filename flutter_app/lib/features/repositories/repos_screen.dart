@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/config_model.dart';
+import '../../core/models/agent.dart';
 import '../../core/setup/first_run_setup.dart';
 import '../../core/setup/repo_discovery.dart';
 import '../../shared/widgets/toast.dart';
+import '../agents/agents_screen.dart' show agentsProvider;
 import '../config/config_providers.dart';
 import '../dashboard/dashboard_providers.dart';
 
@@ -66,10 +68,17 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
       data: (config) {
         _initFrom(config);
 
-        final sorted = _repoConfigs.keys.toList()..sort();
+        // Monitored first, disabled last; both groups sorted alphabetically
+        final allRepos = _repoConfigs.keys.toList()
+          ..sort((a, b) {
+            final ma = _repoConfigs[a]!.monitored ? 0 : 1;
+            final mb = _repoConfigs[b]!.monitored ? 0 : 1;
+            if (ma != mb) return ma.compareTo(mb);
+            return a.compareTo(b);
+          });
         final filtered = _search.isEmpty
-            ? sorted
-            : sorted.where((r) => r.toLowerCase().contains(_search.toLowerCase())).toList();
+            ? allRepos
+            : allRepos.where((r) => r.toLowerCase().contains(_search.toLowerCase())).toList();
 
         return Column(
           children: [
@@ -112,18 +121,15 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 child: Text(_discoverError!, style: const TextStyle(color: Colors.orange)),
               ),
-            // Repo list
+            // Repo list with section dividers
             Expanded(
               child: filtered.isEmpty
                   ? const Center(child: Text('No repos yet. Tap Discover.'))
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      itemCount: filtered.length,
-                      itemBuilder: (_, i) => _RepoTile(
-                        repo: filtered[i],
-                        config: _repoConfigs[filtered[i]]!,
-                        onChanged: (rc) => setState(() => _repoConfigs[filtered[i]] = rc),
-                      ),
+                  : _RepoListWithSections(
+                      repos: filtered,
+                      configs: _repoConfigs,
+                      onChanged: (repo, rc) =>
+                          setState(() => _repoConfigs[repo] = rc),
                     ),
             ),
           ],
@@ -133,19 +139,86 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
   }
 }
 
+// ── List with section headers ──────────────────────────────────────────────
+
+class _RepoListWithSections extends ConsumerWidget {
+  final List<String> repos;
+  final Map<String, RepoConfig> configs;
+  final void Function(String repo, RepoConfig rc) onChanged;
+
+  const _RepoListWithSections({
+    required this.repos,
+    required this.configs,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final prompts = ref.watch(agentsProvider).valueOrNull ?? [];
+    final monitored = repos.where((r) => configs[r]!.monitored).toList();
+    final disabled  = repos.where((r) => !configs[r]!.monitored).toList();
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      children: [
+        if (monitored.isNotEmpty) ...[
+          _header(context, 'Monitored — auto-review enabled', monitored.length,
+              Colors.green.shade700),
+          ...monitored.map((r) => _RepoTile(
+            repo: r,
+            config: configs[r]!,
+            prompts: prompts,
+            onChanged: (rc) => onChanged(r, rc),
+          )),
+        ],
+        if (disabled.isNotEmpty) ...[
+          _header(context, 'Watching — PRs visible, no auto-review', disabled.length,
+              Colors.grey.shade600),
+          ...disabled.map((r) => _RepoTile(
+            repo: r,
+            config: configs[r]!,
+            prompts: prompts,
+            onChanged: (rc) => onChanged(r, rc),
+          )),
+        ],
+      ],
+    );
+  }
+
+  Widget _header(BuildContext ctx, String label, int count, Color color) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Row(children: [
+        Container(width: 8, height: 8,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        const SizedBox(width: 6),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade400,
+            fontWeight: FontWeight.w500)),
+        const SizedBox(width: 6),
+        Text('$count', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+      ]),
+    );
+  }
+}
+
+// ── Repo tile ─────────────────────────────────────────────────────────────
+
 class _RepoTile extends StatelessWidget {
   final String repo;
   final RepoConfig config;
+  final List<ReviewPrompt> prompts;
   final ValueChanged<RepoConfig> onChanged;
 
   const _RepoTile({
     required this.repo,
     required this.config,
+    required this.prompts,
     required this.onChanged,
   });
 
   @override
   Widget build(BuildContext context) {
+    final subtitle = _buildSubtitle();
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
       child: ExpansionTile(
@@ -158,46 +231,85 @@ class _RepoTile extends StatelessWidget {
               fontWeight: config.monitored ? FontWeight.w600 : FontWeight.normal,
               color: config.monitored ? null : Colors.grey,
             )),
-        subtitle: config.hasAiOverride
-            ? Text('AI: ${config.aiPrimary ?? "global"}',
-                style: const TextStyle(fontSize: 12))
+        subtitle: subtitle != null
+            ? Text(subtitle, style: const TextStyle(fontSize: 12))
             : null,
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
         children: [
           const Divider(height: 1),
           const SizedBox(height: 10),
-          const Text('AI overrides for this repo',
+          // AI overrides
+          const Text('AI agent override',
               style: TextStyle(fontSize: 12, color: Colors.grey)),
           const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(child: _aiDropdown('Primary agent', config.aiPrimary,
-                  (v) => onChanged(config.copyWith(aiPrimary: v)))),
-              const SizedBox(width: 12),
-              Expanded(child: _aiDropdown('Fallback', config.aiFallback,
-                  (v) => onChanged(config.copyWith(aiFallback: v)))),
-            ],
-          ),
+          Row(children: [
+            Expanded(child: _aiDropdown('Primary', config.aiPrimary,
+                (v) => onChanged(config.copyWith(aiPrimary: v)))),
+            const SizedBox(width: 10),
+            Expanded(child: _aiDropdown('Fallback', config.aiFallback,
+                (v) => onChanged(config.copyWith(aiFallback: v)))),
+          ]),
+          const SizedBox(height: 12),
+          // Prompt override
+          const Text('Review prompt',
+              style: TextStyle(fontSize: 12, color: Colors.grey)),
+          const SizedBox(height: 8),
+          _promptDropdown(),
         ],
       ),
     );
   }
 
+  String? _buildSubtitle() {
+    final parts = <String>[];
+    if (config.aiPrimary != null) parts.add('AI: ${config.aiPrimary}');
+    if (config.promptId != null) {
+      final p = prompts.where((p) => p.id == config.promptId).firstOrNull;
+      parts.add('Prompt: ${p?.name ?? config.promptId}');
+    }
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
   Widget _aiDropdown(String label, String? value, ValueChanged<String?> onChanged) {
     return DropdownButtonFormField<String?>(
       value: value,
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
-        isDense: true,
-      ),
+      decoration: InputDecoration(labelText: label,
+          border: const OutlineInputBorder(), isDense: true),
       items: const [
-        DropdownMenuItem<String?>(value: null, child: Text('Global (no override)')),
+        DropdownMenuItem<String?>(value: null, child: Text('Global')),
         DropdownMenuItem<String?>(value: 'claude', child: Text('claude')),
         DropdownMenuItem<String?>(value: 'gemini', child: Text('gemini')),
-        DropdownMenuItem<String?>(value: 'codex', child: Text('codex')),
+        DropdownMenuItem<String?>(value: 'codex',  child: Text('codex')),
       ],
       onChanged: onChanged,
     );
+  }
+
+  Widget _promptDropdown() {
+    return DropdownButtonFormField<String?>(
+      value: config.promptId,
+      decoration: const InputDecoration(
+          labelText: 'Override prompt',
+          border: OutlineInputBorder(), isDense: true),
+      items: [
+        const DropdownMenuItem<String?>(value: null,
+            child: Text('Global active prompt')),
+        ...prompts.map((p) => DropdownMenuItem<String?>(
+          value: p.id,
+          child: Text('${_focusEmoji(p.focus)} ${p.name}'),
+        )),
+      ],
+      onChanged: (v) => onChanged(config.copyWith(promptId: v)),
+    );
+  }
+
+  String _focusEmoji(String f) {
+    switch (f) {
+      case 'security':     return '🔒';
+      case 'performance':  return '⚡';
+      case 'architecture': return '🏛️';
+      case 'docs':         return '📝';
+      default:             return '🔍';
+    }
   }
 }

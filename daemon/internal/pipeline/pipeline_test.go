@@ -62,7 +62,7 @@ func TestPipeline_Run(t *testing.T) {
 		UpdatedAt: time.Now(), HTMLURL: "https://github.com/org/repo/pull/1",
 	}
 
-	rev, err := p.Run(pr, "claude", "gemini")
+	rev, err := p.Run(pr, "claude", "gemini", "")
 	if err != nil {
 		t.Fatalf("pipeline run: %v", err)
 	}

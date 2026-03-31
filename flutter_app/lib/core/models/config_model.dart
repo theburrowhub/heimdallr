@@ -3,24 +3,28 @@ class RepoConfig {
   final bool monitored;
   final String? aiPrimary;  // null = use global
   final String? aiFallback; // null = use global
+  final String? promptId;   // null = use globally active prompt
 
   const RepoConfig({
     this.monitored = true,
     this.aiPrimary,
     this.aiFallback,
+    this.promptId,
   });
 
-  bool get hasAiOverride => aiPrimary != null || aiFallback != null;
+  bool get hasAiOverride => aiPrimary != null || aiFallback != null || promptId != null;
 
   RepoConfig copyWith({
     bool? monitored,
-    Object? aiPrimary = _sentinel, // use sentinel to distinguish null from "not provided"
+    Object? aiPrimary = _sentinel,
     Object? aiFallback = _sentinel,
+    Object? promptId = _sentinel,
   }) {
     return RepoConfig(
       monitored: monitored ?? this.monitored,
       aiPrimary: aiPrimary == _sentinel ? this.aiPrimary : aiPrimary as String?,
       aiFallback: aiFallback == _sentinel ? this.aiFallback : aiFallback as String?,
+      promptId: promptId == _sentinel ? this.promptId : promptId as String?,
     );
   }
 }

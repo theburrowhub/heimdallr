@@ -52,10 +52,46 @@ func New(s *store.Store, gh interface {
 	return &Pipeline{store: s, gh: gh, executor: exec, notify: n}
 }
 
+// applyPrompt resolves a prompt by ID (or the default if ID is empty) and
+// sets the template and CLI flags accordingly.
+func (p *Pipeline) applyPrompt(promptID string, tmpl *string, flags *string) {
+	agents, err := p.store.ListAgents()
+	if err != nil || len(agents) == 0 {
+		return
+	}
+	var a *store.Agent
+	// Look for specific prompt first, then fall back to default
+	for _, ag := range agents {
+		if promptID != "" && ag.ID == promptID {
+			a = ag
+			break
+		}
+	}
+	if a == nil {
+		for _, ag := range agents {
+			if ag.IsDefault {
+				a = ag
+				break
+			}
+		}
+	}
+	if a == nil {
+		return
+	}
+	switch {
+	case a.Prompt != "":
+		*tmpl = a.Prompt
+	case a.Instructions != "":
+		*tmpl = executor.DefaultTemplateWithInstructions(a.Instructions)
+	}
+	*flags = a.CLIFlags
+}
+
 // Run executes the full review pipeline for one PR and publishes the review to GitHub.
+// promptOverride selects a specific review prompt profile (empty = use global default).
 // SQLite is the source of truth: review is stored first, then published.
 // If publishing fails, it is retried on the next call (when GitHubReviewID == 0).
-func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback string) (*store.Review, error) {
+func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback, promptOverride string) (*store.Review, error) {
 	slog.Info("pipeline: starting review", "repo", pr.Repo, "pr", pr.Number)
 
 	// 1. Upsert PR record
@@ -83,23 +119,11 @@ func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback string) (*store
 		return nil, fmt.Errorf("pipeline: fetch diff: %w", err)
 	}
 
-	// 3. Build prompt from active review profile (agent):
-	//    - If the profile has a full custom template, use it
-	//    - If it only has instructions, embed them into the default template
-	//    - If no profile, use the built-in default
+	// 3. Build prompt:
+	//    Priority: per-repo prompt override > globally active prompt > built-in default
 	promptTemplate := executor.DefaultTemplate()
 	var cliFlags string
-	if agent, err := p.store.DefaultAgent(); err == nil && agent != nil {
-		switch {
-		case agent.Prompt != "":
-			// Advanced mode: full custom template
-			promptTemplate = agent.Prompt
-		case agent.Instructions != "":
-			// Simple mode: inject instructions into the default template
-			promptTemplate = executor.DefaultTemplateWithInstructions(agent.Instructions)
-		}
-		cliFlags = agent.CLIFlags
-	}
+	p.applyPrompt(promptOverride, &promptTemplate, &cliFlags)
 	prompt := executor.BuildPromptFromTemplate(promptTemplate, executor.PRContext{
 		Title:  pr.Title,
 		Number: pr.Number,

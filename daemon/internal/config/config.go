@@ -35,6 +35,9 @@ type AIConfig struct {
 
 type RepoAI struct {
 	Primary  string `toml:"primary"`
+	// Prompt is the ID of a review prompt profile to use for this repo.
+	// Overrides the globally active default prompt.
+	Prompt   string `toml:"prompt"`
 	Fallback string `toml:"fallback"`
 }
 

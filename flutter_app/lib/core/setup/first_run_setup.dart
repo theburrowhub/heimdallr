@@ -95,16 +95,15 @@ class FirstRunSetup {
     }
     buf.writeln();
 
-    // Per-repo AI overrides
+    // Per-repo overrides (AI + prompt)
     for (final entry in config.repoConfigs.entries) {
       final repo = entry.key;
       final rc = entry.value;
-      if (rc.monitored && rc.hasAiOverride) {
+      if (rc.hasAiOverride) {
         buf.writeln('[ai.repos."$repo"]');
         if (rc.aiPrimary != null) buf.writeln('primary = "${rc.aiPrimary}"');
-        if (rc.aiPrimary != null && rc.aiFallback != null) {
-          buf.writeln('fallback = "${rc.aiFallback}"');
-        }
+        if (rc.aiFallback != null) buf.writeln('fallback = "${rc.aiFallback}"');
+        if (rc.promptId != null) buf.writeln('prompt = "${rc.promptId}"');
         buf.writeln();
       }
     }
