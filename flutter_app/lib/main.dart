@@ -18,9 +18,32 @@ GoRouter get appRouter => _appRouter;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await _setupWindow();
-  await _setupTray();
-  await localNotifier.setup(appName: 'Heimdallr');
+
+  // Catch all init errors so a crash shows a window rather than silently dying.
+  FlutterError.onError = (details) {
+    debugPrint('Flutter error: ${details.exceptionAsString()}');
+    FlutterError.presentError(details);
+  };
+
+  try {
+    await _setupWindow();
+  } catch (e) {
+    debugPrint('window_manager init failed: $e');
+    // Continue without custom window options — better than a blank crash
+  }
+
+  try {
+    await _setupTray();
+  } catch (e) {
+    debugPrint('tray_manager init failed: $e');
+  }
+
+  try {
+    await localNotifier.setup(appName: 'Heimdallr');
+  } catch (e) {
+    debugPrint('local_notifier init failed: $e');
+  }
+
   runApp(ProviderScope(child: _BootstrapApp(appRouter: _appRouter)));
 }
 
@@ -119,39 +142,61 @@ class _BootstrapAppState extends State<_BootstrapApp> {
       await FirstRunSetup.writeConfig(config);
     }
 
-    // ── 4. Start daemon if binary exists ─────────────────────────────────
+    // ── 4. Locate daemon binary — fail fast with a clear message ──────────
     final binaryPath = _daemonBinaryPath();
-    if (binaryPath != null && File(binaryPath).existsSync()) {
-      _setStatus('Starting Heimdallr…');
-      try {
-        await Process.start(binaryPath, []);
-      } catch (_) {}
+    if (binaryPath == null) {
+      // Binary not found: broken install (daemon not embedded) or dev env
+      // without HEIMDALLR_DAEMON_PATH. Show actionable message.
+      _setStatus(
+        'Daemon binary not found.\n'
+        'If installed from DMG, try:\n'
+        'xattr -cr /Applications/Heimdallr.app',
+      );
+      // Still wait — the user might fix it without restarting
+      await _waitForHealth(api, retryBinary: null);
+      return;
     }
 
-    // ── 5. Wait indefinitely for daemon to be healthy ────────────────────
-    //      The daemon may take a moment to bind to the port.
-    //      Show the splash with the icon until it responds.
+    // ── 5. Launch daemon ──────────────────────────────────────────────────
+    _setStatus('Starting Heimdallr…');
+    try {
+      await Process.start(binaryPath, []);
+    } catch (e) {
+      _setStatus('Could not start daemon: $e');
+    }
+
+    // ── 6. Wait for daemon to become healthy ──────────────────────────────
     _setStatus('Waiting for Heimdallr…');
+    await _waitForHealth(api, retryBinary: binaryPath);
+  }
+
+  Future<void> _waitForHealth(ApiClient api, {String? retryBinary}) async {
     for (var attempt = 0; ; attempt++) {
       await Future.delayed(const Duration(milliseconds: 400));
       if (await api.checkHealth()) {
         _go('/');
         return;
       }
-      // Every 10 seconds try re-launching (in case it crashed at start)
-      if (attempt > 0 && attempt % 25 == 0 && binaryPath != null) {
-        try { await Process.start(binaryPath, []); } catch (_) {}
+      // Re-launch every 10 seconds in case the daemon crashed at startup
+      if (attempt > 0 && attempt % 25 == 0 && retryBinary != null) {
+        try { await Process.start(retryBinary, []); } catch (_) {}
       }
     }
   }
 
-  /// Returns the daemon binary path, or null if not determinable.
+  /// Returns the daemon binary path, or null if not found.
   String? _daemonBinaryPath() {
+    // 1. Explicit env var (set by `make dev`)
     final env = Platform.environment['HEIMDALLR_DAEMON_PATH'];
-    if (env != null && env.isNotEmpty) return env;
+    if (env != null && env.isNotEmpty && File(env).existsSync()) return env;
+
+    // 2. Alongside the Flutter binary inside the .app bundle
     final dir = File(Platform.resolvedExecutable).parent.path;
     final candidate = '$dir/heimdallr';
-    return File(candidate).existsSync() ? candidate : null;
+    if (File(candidate).existsSync()) return candidate;
+
+    debugPrint('Daemon binary not found. Checked: $candidate');
+    return null;
   }
 
   void _setStatus(String s) {

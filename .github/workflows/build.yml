@@ -64,24 +64,69 @@ jobs:
         run: flutter build macos --release --build-name="${GITHUB_REF_NAME#v}" --build-number="${GITHUB_RUN_NUMBER}"
 
       # ── Bundle ──────────────────────────────────────────────────────────────
-      - name: Embed daemon inside .app
+      - name: Locate .app and embed daemon
         run: |
-          APP="flutter_app/build/macos/Build/Products/Release/Heimdallr.app"
-          cp daemon/bin/heimdallr "$APP/Contents/MacOS/heimdallr"
+          RELEASE_DIR="flutter_app/build/macos/Build/Products/Release"
+
+          # Find the .app bundle — name can vary with Xcode settings
+          APP=$(find "$RELEASE_DIR" -maxdepth 1 -name "*.app" | head -1)
+          if [ -z "$APP" ]; then
+            echo "❌ No .app bundle found in $RELEASE_DIR"
+            ls -la "$RELEASE_DIR" || true
+            exit 1
+          fi
+          echo "✓ Found bundle: $APP"
+
+          # Verify daemon binary was compiled
+          if [ ! -f "daemon/bin/heimdallr" ]; then
+            echo "❌ daemon/bin/heimdallr not found"
+            exit 1
+          fi
+
+          # Embed daemon
+          cp "daemon/bin/heimdallr" "$APP/Contents/MacOS/heimdallr"
           chmod +x "$APP/Contents/MacOS/heimdallr"
-          echo "Bundle contents:"
+
+          echo "Bundle contents after embedding:"
           ls -lh "$APP/Contents/MacOS/"
 
-      - name: Ad-hoc codesign
+          # Verify daemon is really there
+          if [ ! -f "$APP/Contents/MacOS/heimdallr" ]; then
+            echo "❌ Embedding failed — daemon binary not found inside bundle"
+            exit 1
+          fi
+          echo "✓ Daemon embedded successfully"
+
+          # Export path for subsequent steps
+          echo "APP=$APP" >> "$GITHUB_ENV"
+
+      - name: Ad-hoc codesign (preserving entitlements)
         run: |
-          APP="flutter_app/build/macos/Build/Products/Release/Heimdallr.app"
-          codesign --force --deep --sign - "$APP"
+          ENTITLEMENTS="flutter_app/macos/Runner/Release.entitlements"
+
+          echo "Entitlements file:"
+          cat "$ENTITLEMENTS"
+
+          # Sign each nested binary first, then the bundle.
+          # --entitlements ensures app-sandbox=false and network.client are preserved.
+          # Without this, macOS sandbox blocks all network calls and the app crashes on launch.
+          find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.framework" \) | while read f; do
+            codesign --force --sign - "$f" 2>/dev/null || true
+          done
+
+          codesign --force --deep \
+            --sign - \
+            --entitlements "$ENTITLEMENTS" \
+            "$APP"
+
+          echo "Signature info:"
+          codesign --display --verbose=2 "$APP" 2>&1
           codesign --verify --verbose "$APP"
 
       # ── Package ─────────────────────────────────────────────────────────────
       - name: Create DMG
         run: |
-          APP="flutter_app/build/macos/Build/Products/Release/Heimdallr.app"
+          APP="${APP}"
           VERSION="${GITHUB_REF_NAME}"
           DMG="dist/Heimdallr-${VERSION}.dmg"
           mkdir -p dist
