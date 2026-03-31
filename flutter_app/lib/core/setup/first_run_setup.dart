@@ -1,5 +1,6 @@
 import 'dart:io';
 import '../models/config_model.dart';
+import 'gh_cli.dart';
 
 /// Handles first-run setup: writes config file to disk and stores
 /// the GitHub token in macOS Keychain via the `security` CLI.
@@ -30,18 +31,7 @@ class FirstRunSetup {
     return null;
   }
 
-  static Future<String?> _tokenFromGhCli() async {
-    try {
-      final which = await Process.run('which', ['gh']);
-      if (which.exitCode != 0) return null;
-      final result = await Process.run('gh', ['auth', 'token']);
-      if (result.exitCode == 0) {
-        final t = (result.stdout as String).trim();
-        return t.isEmpty ? null : t;
-      }
-    } catch (_) {}
-    return null;
-  }
+  static Future<String?> _tokenFromGhCli() => GhCli.authToken();
 
   /// Stores the GitHub token in macOS Keychain.
   static Future<void> storeToken(String token) async {

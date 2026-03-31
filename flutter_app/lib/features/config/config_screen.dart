@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/daemon/daemon_lifecycle.dart';
 import '../../core/models/config_model.dart';
 import '../../core/setup/first_run_setup.dart';
+import '../../core/setup/gh_cli.dart';
 import '../../core/setup/repo_discovery.dart';
 import '../../shared/widgets/toast.dart';
 import 'config_providers.dart';
@@ -66,18 +67,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     setState(() => _tokenController.text = stored);
   }
 
-  Future<String?> _getGhCliToken() async {
-    try {
-      final which = await Process.run('which', ['gh']);
-      if (which.exitCode != 0) return null;
-      final result = await Process.run('gh', ['auth', 'token']);
-      if (result.exitCode == 0) {
-        final t = (result.stdout as String).trim();
-        return t.isEmpty ? null : t;
-      }
-    } catch (_) {}
-    return null;
-  }
+  Future<String?> _getGhCliToken() => GhCli.authToken();
 
   void _initFromConfig(AppConfig config) {
     if (_initialized) return;
@@ -420,10 +410,6 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
           final token = _tokenController.text.trim();
           if (!_tokenFromGh && token.isEmpty) {
             showToast(context, 'GitHub token is required', isError: true);
-            return;
-          }
-          if (updated.repositories.isEmpty) {
-            showToast(context, 'Enable at least one repository', isError: true);
             return;
           }
           await ref.read(configNotifierProvider.notifier).saveAndStartDaemon(

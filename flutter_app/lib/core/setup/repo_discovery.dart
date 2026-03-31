@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'gh_cli.dart';
 
 /// Discovers GitHub repos from the user's open PRs
 /// (review-requested, assignee, or author).
@@ -14,8 +15,8 @@ class RepoDiscovery {
   /// Returns repos as "org/repo" strings, sorted alphabetically.
   /// Tries gh CLI first, falls back to GitHub API.
   static Future<List<String>> discoverFromPRs(String token) async {
-    // Try gh CLI — avoids needing to pass the token explicitly
-    final ghPath = await _which('gh');
+    // Try gh CLI first (uses GhCli which handles Homebrew PATH)
+    final ghPath = await GhCli.findPath();
     if (ghPath != null) {
       final repos = await _viaGhCli(ghPath);
       if (repos.isNotEmpty) return repos;
@@ -25,34 +26,18 @@ class RepoDiscovery {
     return _viaApi(token);
   }
 
-  // Uses `gh search prs` which queries globally across all repos
   static Future<List<String>> _viaGhCli(String ghPath) async {
-    try {
-      final result = await Process.run(ghPath, [
-        'search', 'prs',
-        '--review-requested=@me',
-        '--limit', '200',
-        '--json', 'repository',
-      ]);
-      if (result.exitCode == 0) {
-        final repos = _parseGhSearchOutput(result.stdout as String);
-        if (repos.isNotEmpty) return repos;
-      }
-      // Also search for PRs authored or assigned to @me
-      final result2 = await Process.run(ghPath, [
-        'search', 'prs',
-        '--assignee=@me',
-        '--limit', '200',
-        '--json', 'repository',
-      ]);
-      if (result2.exitCode == 0) {
-        final repos2 = _parseGhSearchOutput(result2.stdout as String);
-        // Merge the two sets
-        final all = {..._parseGhSearchOutput(result.stdout as String), ...repos2}.toList()..sort();
-        if (all.isNotEmpty) return all;
-      }
-    } catch (_) {}
-    return [];
+    final all = <String>{};
+    // review-requested
+    final r1 = await GhCli.searchPRs(['--review-requested=@me', '--limit', '200', '--json', 'repository']);
+    if (r1 != null) all.addAll(_parseGhSearchOutput(r1));
+    // assignee
+    final r2 = await GhCli.searchPRs(['--assignee=@me', '--limit', '200', '--json', 'repository']);
+    if (r2 != null) all.addAll(_parseGhSearchOutput(r2));
+    // authored (state:open is default)
+    final r3 = await GhCli.searchPRs(['--author=@me', '--state=open', '--limit', '200', '--json', 'repository']);
+    if (r3 != null) all.addAll(_parseGhSearchOutput(r3));
+    return all.toList()..sort();
   }
 
   static List<String> _parseGhSearchOutput(String output) {
@@ -112,11 +97,4 @@ class RepoDiscovery {
     return repos.toList()..sort();
   }
 
-  static Future<String?> _which(String cmd) async {
-    try {
-      final r = await Process.run('which', [cmd]);
-      if (r.exitCode == 0) return (r.stdout as String).trim();
-    } catch (_) {}
-    return null;
-  }
 }
