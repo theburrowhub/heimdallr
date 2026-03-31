@@ -30,8 +30,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Fix critical bug'), findsOneWidget);
-    expect(find.text('org/repo'), findsOneWidget);
+    expect(find.textContaining('Fix critical bug'), findsOneWidget);
+    expect(find.textContaining('org/repo'), findsOneWidget);
   });
 
   testWidgets('DashboardScreen shows loading indicator while fetching', (tester) async {

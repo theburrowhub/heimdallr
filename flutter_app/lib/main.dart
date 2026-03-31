@@ -1,17 +1,39 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:local_notifier/local_notifier.dart';
 import 'package:tray_manager/tray_manager.dart';
+import 'package:window_manager/window_manager.dart';
 import 'core/api/api_client.dart';
 import 'core/setup/first_run_setup.dart';
 import 'core/setup/repo_discovery.dart';
 import 'core/models/config_model.dart';
 import 'shared/router.dart';
 
+/// Global router reference for notification deep-linking.
+final _appRouter = createRouter(initialLocation: '/');
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await _setupWindow();
   await _setupTray();
-  runApp(const ProviderScope(child: _BootstrapApp()));
+  await localNotifier.setup(appName: 'Heimdallr');
+  runApp(ProviderScope(child: _BootstrapApp(appRouter: _appRouter)));
+}
+
+Future<void> _setupWindow() async {
+  await windowManager.ensureInitialized();
+  const options = WindowOptions(
+    size: Size(1200, 720),
+    minimumSize: Size(900, 520),
+    title: 'Heimdallr',
+    titleBarStyle: TitleBarStyle.normal,
+  );
+  await windowManager.waitUntilReadyToShow(options, () async {
+    await windowManager.show();
+    await windowManager.focus();
+  });
 }
 
 Future<void> _setupTray() async {
@@ -34,12 +56,35 @@ class _TrayHandler with TrayListener {
   @override
   void onTrayMenuItemClick(MenuItem menuItem) {
     if (menuItem.key == 'quit') exit(0);
-    // 'show' — the window is already visible (Flutter macOS keeps it open)
+    if (menuItem.key == 'show') {
+      windowManager.show();
+      windowManager.focus();
+    }
   }
 }
 
+/// Send a macOS notification from the Flutter app (correct icon, clickable).
+/// [prId] is the store PR id to navigate to on click; null = just open the app.
+void sendPRNotification({
+  required String title,
+  required String body,
+  int? prId,
+}) {
+  final n = LocalNotification(title: title, body: body);
+  n.onShow = () {};
+  n.onClick = () {
+    windowManager.show();
+    windowManager.focus();
+    if (prId != null) {
+      _appRouter.go('/prs/$prId');
+    }
+  };
+  n.show();
+}
+
 class _BootstrapApp extends StatefulWidget {
-  const _BootstrapApp();
+  final GoRouter appRouter;
+  const _BootstrapApp({required this.appRouter});
   @override
   State<_BootstrapApp> createState() => _BootstrapAppState();
 }
@@ -134,7 +179,8 @@ class _BootstrapAppState extends State<_BootstrapApp> {
   @override
   Widget build(BuildContext context) {
     if (_destination != null) {
-      return HeimdallrApp(initialLocation: _destination!);
+      // Use the shared router (supports deep-link from notifications)
+      return HeimdallrApp(router: widget.appRouter, initialLocation: _destination!);
     }
 
     return _SplashApp(status: _status);
@@ -187,7 +233,8 @@ class _SplashApp extends StatelessWidget {
 
 class HeimdallrApp extends StatelessWidget {
   final String initialLocation;
-  const HeimdallrApp({super.key, this.initialLocation = '/'});
+  final GoRouter? router;
+  const HeimdallrApp({super.key, this.initialLocation = '/', this.router});
 
   @override
   Widget build(BuildContext context) {
@@ -205,7 +252,7 @@ class HeimdallrApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      routerConfig: createRouter(initialLocation: initialLocation),
+      routerConfig: router ?? createRouter(initialLocation: initialLocation),
     );
   }
 }

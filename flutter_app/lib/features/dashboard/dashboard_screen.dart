@@ -74,36 +74,55 @@ class _PRTable extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return SingleChildScrollView(
       child: DataTable(
+        columnSpacing: 16,
         columns: const [
-          DataColumn(label: Text('Repo')),
-          DataColumn(label: Text('PR')),
-          DataColumn(label: Text('Author')),
-          DataColumn(label: Text('Severity')),
-          DataColumn(label: Text('Status')),
-          DataColumn(label: Text('Actions')),
+          DataColumn(label: SizedBox(width: 200, child: Text('Repo'))),
+          DataColumn(label: Expanded(child: Text('PR'))),
+          DataColumn(label: SizedBox(width: 100, child: Text('Author'))),
+          DataColumn(label: SizedBox(width: 80, child: Text('Severity'))),
+          DataColumn(label: SizedBox(width: 80, child: Text('Status'))),
+          DataColumn(label: SizedBox(width: 110, child: Text('Actions'))),
         ],
         rows: prs.map((pr) => DataRow(
           cells: [
-            DataCell(Text(pr.repo)),
+            DataCell(SizedBox(
+              width: 200,
+              child: Text(pr.repo,
+                overflow: TextOverflow.ellipsis, maxLines: 1),
+            )),
             DataCell(
-              TextButton(
-                onPressed: () => context.go('/prs/${pr.id}'),
-                child: Text(pr.title),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  style: TextButton.styleFrom(alignment: Alignment.centerLeft),
+                  onPressed: () => context.push('/prs/${pr.id}'), // push = back button appears
+                  child: Text(
+                    '#${pr.number} ${pr.title}',
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
               ),
             ),
-            DataCell(Text(pr.author)),
+            DataCell(SizedBox(
+              width: 100,
+              child: Text(pr.author, overflow: TextOverflow.ellipsis, maxLines: 1),
+            )),
             DataCell(pr.latestReview != null
                 ? SeverityBadge(severity: pr.latestReview!.severity)
                 : const Text('—')),
             DataCell(Text(pr.latestReview != null ? 'Reviewed' : 'Pending')),
             DataCell(
-              ElevatedButton(
-                onPressed: () async {
-                  final api = ref.read(apiClientProvider);
-                  await api.triggerReview(pr.id);
-                  ref.invalidate(prsProvider);
-                },
-                child: const Text('Review Now'),
+              SizedBox(
+                width: 110,
+                child: ElevatedButton(
+                  onPressed: () async {
+                    final api = ref.read(apiClientProvider);
+                    await api.triggerReview(pr.id);
+                    ref.invalidate(prsProvider);
+                  },
+                  child: const Text('Review Now'),
+                ),
               ),
             ),
           ],

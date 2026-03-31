@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/models/pr.dart';
 import '../../core/models/review.dart';
 import '../../shared/widgets/severity_badge.dart';
@@ -18,6 +19,9 @@ class PRDetailScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('PR Review'),
+        leading: context.canPop()
+            ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => context.pop())
+            : null,
         actions: [
           ElevatedButton.icon(
             icon: const Icon(Icons.refresh),
