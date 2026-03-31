@@ -1,11 +1,15 @@
 package scheduler
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 type Scheduler struct {
 	interval time.Duration
 	fn       func()
 	quit     chan struct{}
+	once     sync.Once
 }
 
 func New(interval time.Duration, fn func()) *Scheduler {
@@ -28,5 +32,5 @@ func (s *Scheduler) Start() {
 }
 
 func (s *Scheduler) Stop() {
-	close(s.quit)
+	s.once.Do(func() { close(s.quit) })
 }

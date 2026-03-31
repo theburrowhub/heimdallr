@@ -59,7 +59,11 @@ func (b *Broker) Subscribe() chan Event {
 
 // Unsubscribe removes a subscriber and closes its channel.
 func (b *Broker) Unsubscribe(ch chan Event) {
-	b.unsubscribe <- ch
+	select {
+	case b.unsubscribe <- ch:
+	case <-b.quit:
+		// broker already stopped; channel was closed by run()
+	}
 }
 
 // Publish sends an event to all current subscribers (non-blocking; drops if
