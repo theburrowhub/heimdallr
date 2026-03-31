@@ -72,9 +72,6 @@ func (c *Config) applyDefaults() {
 
 // Validate checks that required fields are present and values are valid.
 func (c *Config) Validate() error {
-	if len(c.GitHub.Repositories) == 0 {
-		return fmt.Errorf("config: at least one repository is required")
-	}
 	if c.AI.Primary == "" {
 		return fmt.Errorf("config: ai.primary is required")
 	}

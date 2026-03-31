@@ -21,6 +21,9 @@ type Server struct {
 	pipeline   *pipeline.Pipeline
 	router     chi.Router
 	httpServer *http.Server
+	// reloadFn is called when POST /reload is received.
+	// main.go wires this to reload config from disk and restart the scheduler.
+	reloadFn func() error
 }
 
 // New creates a new Server. p may be nil if the pipeline is not yet configured.
@@ -28,6 +31,11 @@ func New(s *store.Store, broker *sse.Broker, p *pipeline.Pipeline) *Server {
 	srv := &Server{store: s, broker: broker, pipeline: p}
 	srv.router = srv.buildRouter()
 	return srv
+}
+
+// SetReloadFn wires the config-reload callback called by POST /reload.
+func (srv *Server) SetReloadFn(fn func() error) {
+	srv.reloadFn = fn
 }
 
 // Router returns the underlying http.Handler for use in tests or embedding.
@@ -61,6 +69,7 @@ func (srv *Server) buildRouter() chi.Router {
 	r.Post("/prs/{id}/review", srv.handleTriggerReview)
 	r.Get("/config", srv.handleGetConfig)
 	r.Put("/config", srv.handlePutConfig)
+	r.Post("/reload", srv.handleReload)
 	r.Get("/events", srv.handleSSE)
 	return r
 }
@@ -133,6 +142,20 @@ func (srv *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (srv *Server) handleReload(w http.ResponseWriter, r *http.Request) {
+	if srv.reloadFn == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	if err := srv.reloadFn(); err != nil {
+		slog.Error("reload failed", "err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	slog.Info("config reloaded via API")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
 func (srv *Server) handleSSE(w http.ResponseWriter, r *http.Request) {

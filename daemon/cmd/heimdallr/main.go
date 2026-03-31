@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -57,7 +58,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	dbPath := filepath.Join(dataDir(), "auto-pr.db")
+	dbPath := filepath.Join(dataDir(), "heimdallr.db")
 	s, err := store.Open(dbPath)
 	if err != nil {
 		slog.Error("store open failed", "err", err)
@@ -79,43 +80,83 @@ func main() {
 	p := pipeline.New(s, ghClient, exec, &notifyWithSSE{notifier: notifier})
 	srv := server.New(s, broker, p)
 
-	pollFn := func() {
-		prs, err := ghClient.FetchPRs(cfg.GitHub.Repositories)
-		if err != nil {
-			slog.Error("poll: fetch PRs", "err", err)
-			return
-		}
-		for _, pr := range prs {
-			if pr.Head.Repo.FullName != "" {
-				pr.Repo = pr.Head.Repo.FullName
+	// cfgMu protects cfg and sched so reload is safe from any goroutine.
+	var cfgMu sync.Mutex
+	var sched *scheduler.Scheduler
+
+	makePollFn := func(c *config.Config) func() {
+		return func() {
+			cfgMu.Lock()
+			repos := c.GitHub.Repositories
+			cfgMu.Unlock()
+			if len(repos) == 0 {
+				return // nothing to poll yet
 			}
-			aiCfg := cfg.AIForRepo(pr.Repo)
-			existing, _ := s.GetPRByGithubID(pr.ID)
-			if existing != nil {
-				if rev, err := s.LatestReviewForPR(existing.ID); err == nil && rev != nil {
-					interval := parsePollInterval(cfg.GitHub.PollInterval)
-					if time.Since(rev.CreatedAt) < interval {
-						continue
+			prs, err := ghClient.FetchPRs(repos)
+			if err != nil {
+				slog.Error("poll: fetch PRs", "err", err)
+				return
+			}
+			for _, pr := range prs {
+				if pr.Head.Repo.FullName != "" {
+					pr.Repo = pr.Head.Repo.FullName
+				}
+				cfgMu.Lock()
+				aiCfg := c.AIForRepo(pr.Repo)
+				cfgMu.Unlock()
+				existing, _ := s.GetPRByGithubID(pr.ID)
+				if existing != nil {
+					if rev, err := s.LatestReviewForPR(existing.ID); err == nil && rev != nil {
+						cfgMu.Lock()
+						interval := parsePollInterval(c.GitHub.PollInterval)
+						cfgMu.Unlock()
+						if time.Since(rev.CreatedAt) < interval {
+							continue
+						}
 					}
 				}
-			}
-			broker.Publish(sse.Event{Type: sse.EventPRDetected, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
-			broker.Publish(sse.Event{Type: sse.EventReviewStarted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
-			if _, err := p.Run(pr, aiCfg.Primary, aiCfg.Fallback); err != nil {
-				slog.Error("pipeline run failed", "pr", pr.Number, "err", err)
-				broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_number":%d,"error":%q}`, pr.Number, err.Error())})
-			} else {
-				broker.Publish(sse.Event{Type: sse.EventReviewCompleted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
+				broker.Publish(sse.Event{Type: sse.EventPRDetected, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
+				broker.Publish(sse.Event{Type: sse.EventReviewStarted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
+				if _, err := p.Run(pr, aiCfg.Primary, aiCfg.Fallback); err != nil {
+					slog.Error("pipeline run failed", "pr", pr.Number, "err", err)
+					broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_number":%d,"error":%q}`, pr.Number, err.Error())})
+				} else {
+					broker.Publish(sse.Event{Type: sse.EventReviewCompleted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
+				}
 			}
 		}
 	}
 
-	interval := parsePollInterval(cfg.GitHub.PollInterval)
-	sched := scheduler.New(interval, pollFn)
-	sched.Start()
+	startScheduler := func(c *config.Config) *scheduler.Scheduler {
+		sc := scheduler.New(parsePollInterval(c.GitHub.PollInterval), makePollFn(c))
+		sc.Start()
+		return sc
+	}
+
+	sched = startScheduler(cfg)
 	defer sched.Stop()
 
-	go pollFn()
+	// Wire the reload callback: re-read config from disk, restart scheduler.
+	srv.SetReloadFn(func() error {
+		newCfg, err := config.Load(cfgPath)
+		if err != nil {
+			return fmt.Errorf("reload: %w", err)
+		}
+		cfgMu.Lock()
+		cfg = newCfg
+		cfgMu.Unlock()
+
+		// Restart scheduler with new interval and repo list
+		sched.Stop()
+		sched = startScheduler(newCfg)
+
+		// Run first poll immediately with new config
+		go makePollFn(newCfg)()
+		return nil
+	})
+
+	// Initial poll
+	go makePollFn(cfg)()
 
 	go func() {
 		slog.Info("daemon started", "port", cfg.Server.Port)
@@ -142,7 +183,7 @@ func setupLogging() {
 
 func dataDir() string {
 	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".local", "share", "auto-pr")
+	dir := filepath.Join(home, ".local", "share", "heimdallr")
 	os.MkdirAll(dir, 0700)
 	return dir
 }

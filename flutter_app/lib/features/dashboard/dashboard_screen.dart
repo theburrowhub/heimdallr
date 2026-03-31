@@ -32,12 +32,28 @@ class DashboardScreen extends ConsumerWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.red),
-              const SizedBox(height: 8),
-              Text('Failed to load PRs: $e'),
-              TextButton(
-                onPressed: () => ref.invalidate(prsProvider),
-                child: const Text('Retry'),
+              const Icon(Icons.wifi_off, size: 48, color: Colors.grey),
+              const SizedBox(height: 12),
+              const Text('Could not reach the Heimdallr daemon.',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              const Text('Go to Settings to configure and start it.',
+                  style: TextStyle(color: Colors.grey)),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(
+                    onPressed: () => ref.invalidate(prsProvider),
+                    child: const Text('Retry'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    icon: const Icon(Icons.settings, size: 16),
+                    label: const Text('Settings'),
+                    onPressed: () => context.go('/config'),
+                  ),
+                ],
               ),
             ],
           ),

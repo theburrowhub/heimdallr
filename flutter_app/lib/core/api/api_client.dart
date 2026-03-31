@@ -53,6 +53,15 @@ class ApiClient {
     }
   }
 
+  /// Tells the daemon to reload its config from disk and restart the poll scheduler.
+  Future<void> reloadConfig() async {
+    try {
+      await _client.post(_uri('/reload'));
+    } catch (_) {
+      // Best-effort — daemon may not be running
+    }
+  }
+
   Future<Map<String, dynamic>> fetchConfig() async {
     final resp = await _client.get(_uri('/config'));
     if (resp.statusCode != 200) {
