@@ -87,3 +87,103 @@ func (s *Store) GetConfig(key string) (string, error) {
 	err := s.db.QueryRow("SELECT value FROM configs WHERE key = ?", key).Scan(&value)
 	return value, err
 }
+
+// Stats is the data returned by GET /stats.
+type Stats struct {
+	TotalReviews     int            `json:"total_reviews"`
+	BySeverity       map[string]int `json:"by_severity"`
+	ByCLI            map[string]int `json:"by_cli"`
+	TopRepos         []RepoCount    `json:"top_repos"`
+	ReviewsLast7Days []DayCount     `json:"reviews_last_7_days"`
+	AvgIssuesPerReview float64      `json:"avg_issues_per_review"`
+}
+
+type RepoCount struct {
+	Repo  string `json:"repo"`
+	Count int    `json:"count"`
+}
+
+type DayCount struct {
+	Day   string `json:"day"`
+	Count int    `json:"count"`
+}
+
+// ComputeStats aggregates statistics from the reviews and prs tables.
+func (s *Store) ComputeStats() (*Stats, error) {
+	stats := &Stats{
+		BySeverity: make(map[string]int),
+		ByCLI:      make(map[string]int),
+	}
+
+	// Total reviews
+	s.db.QueryRow("SELECT COUNT(*) FROM reviews").Scan(&stats.TotalReviews)
+
+	// By severity
+	rows, _ := s.db.Query("SELECT severity, COUNT(*) FROM reviews GROUP BY severity")
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var sev string
+			var cnt int
+			rows.Scan(&sev, &cnt)
+			stats.BySeverity[sev] = cnt
+		}
+	}
+
+	// By CLI
+	rows2, _ := s.db.Query("SELECT cli_used, COUNT(*) FROM reviews GROUP BY cli_used")
+	if rows2 != nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var cli string
+			var cnt int
+			rows2.Scan(&cli, &cnt)
+			stats.ByCLI[cli] = cnt
+		}
+	}
+
+	// Top repos by review count
+	rows3, _ := s.db.Query(`
+		SELECT p.repo, COUNT(r.id) as cnt
+		FROM reviews r JOIN prs p ON p.id = r.pr_id
+		WHERE p.repo != ''
+		GROUP BY p.repo ORDER BY cnt DESC LIMIT 8
+	`)
+	if rows3 != nil {
+		defer rows3.Close()
+		for rows3.Next() {
+			var rc RepoCount
+			rows3.Scan(&rc.Repo, &rc.Count)
+			stats.TopRepos = append(stats.TopRepos, rc)
+		}
+	}
+
+	// Reviews per day last 7 days
+	rows4, _ := s.db.Query(`
+		SELECT DATE(created_at) as day, COUNT(*) as cnt
+		FROM reviews
+		WHERE created_at >= datetime('now', '-7 days')
+		GROUP BY day ORDER BY day ASC
+	`)
+	if rows4 != nil {
+		defer rows4.Close()
+		for rows4.Next() {
+			var dc DayCount
+			rows4.Scan(&dc.Day, &dc.Count)
+			stats.ReviewsLast7Days = append(stats.ReviewsLast7Days, dc)
+		}
+	}
+
+	// Avg issues per review (issues is a JSON array stored as text)
+	var totalIssues, reviewsWithIssues int
+	s.db.QueryRow(`SELECT COUNT(*) FROM reviews WHERE issues != '[]' AND issues != 'null'`).Scan(&reviewsWithIssues)
+	if reviewsWithIssues > 0 {
+		// Approximate: count total issue objects via json_array_length
+		s.db.QueryRow(`SELECT COALESCE(SUM(json_array_length(issues)),0) FROM reviews WHERE issues IS NOT NULL`).Scan(&totalIssues)
+		if stats.TotalReviews > 0 {
+			stats.AvgIssuesPerReview = float64(totalIssues) / float64(stats.TotalReviews)
+		}
+	}
+
+	return stats, nil
+}

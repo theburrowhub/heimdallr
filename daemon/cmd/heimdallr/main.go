@@ -132,6 +132,19 @@ func main() {
 	sched = startScheduler(cfg)
 	defer sched.Stop()
 
+	// Cache authenticated username for GET /me
+	var cachedLogin string
+	srv.SetMeFn(func() (string, error) {
+		if cachedLogin != "" {
+			return cachedLogin, nil
+		}
+		login, err := ghClient.AuthenticatedUser()
+		if err == nil {
+			cachedLogin = login
+		}
+		return login, err
+	})
+
 	// Wire the reload callback: re-read config from disk, restart scheduler.
 	srv.SetReloadFn(func() error {
 		newCfg, err := config.Load(cfgPath)

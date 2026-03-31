@@ -70,6 +70,19 @@ class ApiClient {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
+  Future<String> fetchMe() async {
+    final resp = await _client.get(_uri('/me'));
+    if (resp.statusCode != 200) throw ApiException('GET /me failed: ${resp.statusCode}');
+    final body = jsonDecode(resp.body) as Map<String, dynamic>;
+    return body['login'] as String? ?? '';
+  }
+
+  Future<Map<String, dynamic>> fetchStats() async {
+    final resp = await _client.get(_uri('/stats'));
+    if (resp.statusCode != 200) throw ApiException('GET /stats failed: ${resp.statusCode}');
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
   Future<void> updateConfig(Map<String, dynamic> config) async {
     final resp = await _client.put(
       _uri('/config'),

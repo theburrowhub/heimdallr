@@ -21,11 +21,10 @@ type Server struct {
 	pipeline   *pipeline.Pipeline
 	router     chi.Router
 	httpServer *http.Server
-	// reloadFn is called when POST /reload is received.
-	reloadFn func() error
-	// triggerReviewFn is called when POST /prs/{id}/review is received.
-	// Receives the store PR id. Runs asynchronously.
+	reloadFn        func() error
 	triggerReviewFn func(prID int64) error
+	// meFn returns the authenticated GitHub username. Cached by main.go.
+	meFn func() (string, error)
 }
 
 // New creates a new Server. p may be nil if the pipeline is not yet configured.
@@ -40,6 +39,9 @@ func (srv *Server) SetReloadFn(fn func() error) { srv.reloadFn = fn }
 
 // SetTriggerReviewFn wires the review-trigger callback called by POST /prs/{id}/review.
 func (srv *Server) SetTriggerReviewFn(fn func(prID int64) error) { srv.triggerReviewFn = fn }
+
+// SetMeFn wires the authenticated-user callback called by GET /me.
+func (srv *Server) SetMeFn(fn func() (string, error)) { srv.meFn = fn }
 
 // Router returns the underlying http.Handler for use in tests or embedding.
 func (srv *Server) Router() http.Handler {
@@ -67,9 +69,11 @@ func (srv *Server) Shutdown(ctx context.Context) error {
 func (srv *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/health", srv.handleHealth)
+	r.Get("/me", srv.handleMe)
 	r.Get("/prs", srv.handleListPRs)
 	r.Get("/prs/{id}", srv.handleGetPR)
 	r.Post("/prs/{id}/review", srv.handleTriggerReview)
+	r.Get("/stats", srv.handleStats)
 	r.Get("/config", srv.handleGetConfig)
 	r.Put("/config", srv.handlePutConfig)
 	r.Post("/reload", srv.handleReload)
@@ -200,4 +204,26 @@ func (srv *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func (srv *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	if srv.meFn == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"login": ""})
+		return
+	}
+	login, err := srv.meFn()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"login": login})
+}
+
+func (srv *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := srv.store.ComputeStats()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
