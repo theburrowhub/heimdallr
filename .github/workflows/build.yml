@@ -138,6 +138,9 @@ jobs:
           codesign --verify --verbose "$APP"
 
       # ── Package ─────────────────────────────────────────────────────────────
+      - name: Install create-dmg
+        run: brew install create-dmg
+
       - name: Create DMG
         run: |
           APP="${APP}"
@@ -145,18 +148,22 @@ jobs:
           DMG="dist/Heimdallr-${VERSION}.dmg"
           mkdir -p dist
 
-          # Create a staging dir with app + Applications shortcut
-          STAGE=$(mktemp -d)
-          cp -R "$APP" "$STAGE/"
-          ln -s /Applications "$STAGE/Applications"
+          CREATE_DMG_ARGS=(
+            --volname "Heimdallr ${VERSION}"
+            --window-pos 200 120
+            --window-size 660 400
+            --icon-size 128
+            --icon "Heimdallr.app" 165 185
+            --hide-extension "Heimdallr.app"
+            --app-drop-link 495 185
+          )
 
-          hdiutil create \
-            -volname "Heimdallr ${VERSION}" \
-            -srcfolder "$STAGE" \
-            -ov -format UDZO \
-            "$DMG"
+          # Use custom background if it exists in the repo
+          if [ -f "assets/dmg-background.png" ]; then
+            CREATE_DMG_ARGS+=(--background "assets/dmg-background.png")
+          fi
 
-          rm -rf "$STAGE"
+          create-dmg "${CREATE_DMG_ARGS[@]}" "$DMG" "$APP"
 
           ls -lh "$DMG"
           echo "DMG_PATH=$DMG"   >> "$GITHUB_ENV"

@@ -103,14 +103,20 @@ release-local: _check-signing _check-gh build-daemon
 	spctl --assess --verbose "$(APP_BUNDLE)" 2>&1 || \
 	  echo "⚠  spctl warning (expected before notarization)"
 
-	# ── 5. Create DMG ─────────────────────────────────────────────────────────
+	# ── 5. Create DMG with create-dmg (nice installer UI) ────────────────────
 	@echo "▶  Creating DMG..."
+	@command -v create-dmg >/dev/null || (echo "Installing create-dmg..."; brew install create-dmg)
 	mkdir -p dist
-	hdiutil create \
-	  -volname "Heimdallr $(VERSION)" \
-	  -srcfolder "$(APP_BUNDLE)" \
-	  -ov -format UDZO \
-	  "dist/Heimdallr-$(VERSION).dmg"
+	$(eval DMG_ARGS := \
+	  --volname "Heimdallr $(VERSION)" \
+	  --window-pos 200 120 --window-size 660 400 \
+	  --icon-size 128 \
+	  --icon "Heimdallr.app" 165 185 \
+	  --hide-extension "Heimdallr.app" \
+	  --app-drop-link 495 185)
+	$(if $(wildcard assets/dmg-background.png), \
+	  $(eval DMG_ARGS := --background assets/dmg-background.png $(DMG_ARGS)))
+	create-dmg $(DMG_ARGS) "dist/Heimdallr-$(VERSION).dmg" "$(APP_BUNDLE)"
 
 	# ── 6. Notarize DMG ───────────────────────────────────────────────────────
 	@echo "▶  Submitting for notarization (this takes a few minutes)..."
