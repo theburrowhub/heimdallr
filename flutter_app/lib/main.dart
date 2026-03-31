@@ -1,28 +1,43 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/api/api_client.dart';
 import 'core/daemon/daemon_lifecycle.dart';
 import 'shared/router.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await _ensureDaemonRunning();
-  runApp(const ProviderScope(child: HeimdallrApp()));
+
+  // Intenta arrancar el daemon si no está corriendo.
+  // Los errores se capturan — si el daemon no puede arrancar
+  // (sin config aún), la app abrirá en la pantalla de configuración.
+  await _tryStartDaemon();
+
+  // Elige la pantalla inicial:
+  //   - Daemon sano    → Dashboard (/)
+  //   - Daemon no corre → Configuración (/config)
+  final healthy = await ApiClient().checkHealth();
+  final initialLocation = healthy ? '/' : '/config';
+
+  runApp(ProviderScope(
+    child: HeimdallrApp(initialLocation: initialLocation),
+  ));
 }
 
-Future<void> _ensureDaemonRunning() async {
+Future<void> _tryStartDaemon() async {
   try {
     final lifecycle = DaemonLifecycle(
       daemonBinaryPath: DaemonLifecycle.defaultBinaryPath(),
     );
     await lifecycle.ensureRunning();
-  } catch (e) {
-    // Log and continue — user will see error state in UI
-    debugPrint('Daemon start failed: $e');
+  } catch (_) {
+    // Sin config todavía — la app mostrará el setup
   }
 }
 
 class HeimdallrApp extends StatelessWidget {
-  const HeimdallrApp({super.key});
+  final String initialLocation;
+
+  const HeimdallrApp({super.key, this.initialLocation = '/'});
 
   @override
   Widget build(BuildContext context) {
@@ -39,7 +54,7 @@ class HeimdallrApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      routerConfig: appRouter,
+      routerConfig: createRouter(initialLocation: initialLocation),
     );
   }
 }

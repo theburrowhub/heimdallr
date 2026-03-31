@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/daemon/daemon_lifecycle.dart';
 import '../../core/models/config_model.dart';
 import '../../core/setup/first_run_setup.dart';
@@ -253,8 +254,8 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
           if (state.hasError) {
             showToast(context, 'Error: ${state.error}', isError: true);
           } else {
-            showToast(context, '¡Heimdallr iniciado correctamente!');
             ref.invalidate(daemonHealthProvider);
+            if (context.mounted) context.go('/');
           }
         }
       },

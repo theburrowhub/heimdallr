@@ -3,8 +3,8 @@ import '../features/dashboard/dashboard_screen.dart';
 import '../features/pr_detail/pr_detail_screen.dart';
 import '../features/config/config_screen.dart';
 
-final appRouter = GoRouter(
-  initialLocation: '/',
+GoRouter createRouter({String initialLocation = '/'}) => GoRouter(
+  initialLocation: initialLocation,
   routes: [
     GoRoute(
       path: '/',
@@ -23,3 +23,6 @@ final appRouter = GoRouter(
     ),
   ],
 );
+
+// Kept for backwards compat with tests that use appRouter directly
+final appRouter = createRouter();
