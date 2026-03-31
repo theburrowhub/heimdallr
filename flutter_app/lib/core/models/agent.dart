@@ -1,70 +1,118 @@
-class Agent {
+class ReviewPrompt {
   final String id;
   final String name;
-  final String cli; // claude | gemini | codex
-  final String prompt;
+  final String focus;        // 'general' | 'security' | 'performance' | 'architecture' | 'docs' | 'custom'
+  final String instructions; // plain-text focus instructions (simple mode)
+  final String prompt;       // full template with {placeholders} (advanced mode, overrides instructions)
+  final String cliFlags;     // extra CLI flags (e.g. --model claude-opus-4-6)
   final bool isDefault;
 
-  const Agent({
+  const ReviewPrompt({
     required this.id,
     required this.name,
-    this.cli = 'claude',
-    required this.prompt,
+    this.focus = 'general',
+    this.instructions = '',
+    this.prompt = '',
+    this.cliFlags = '',
     this.isDefault = false,
   });
 
-  Agent copyWith({
-    String? id,
-    String? name,
-    String? cli,
-    String? prompt,
-    bool? isDefault,
-  }) => Agent(
+  ReviewPrompt copyWith({
+    String? id, String? name, String? focus, String? instructions,
+    String? prompt, String? cliFlags, bool? isDefault,
+  }) => ReviewPrompt(
     id: id ?? this.id,
     name: name ?? this.name,
-    cli: cli ?? this.cli,
+    focus: focus ?? this.focus,
+    instructions: instructions ?? this.instructions,
     prompt: prompt ?? this.prompt,
+    cliFlags: cliFlags ?? this.cliFlags,
     isDefault: isDefault ?? this.isDefault,
   );
 
-  factory Agent.fromJson(Map<String, dynamic> json) => Agent(
+  factory ReviewPrompt.fromJson(Map<String, dynamic> json) => ReviewPrompt(
     id: json['id'] as String,
     name: json['name'] as String,
-    cli: (json['cli'] as String?) ?? 'claude',
+    focus: (json['focus'] as String?) ?? 'general',
+    instructions: (json['instructions'] as String?) ?? '',
     prompt: (json['prompt'] as String?) ?? '',
+    cliFlags: (json['cli_flags'] as String?) ?? '',
     isDefault: (json['is_default'] as bool?) ?? false,
   );
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
-    'cli': cli,
+    'cli': 'claude', // kept for daemon compatibility
+    'focus': focus,
+    'instructions': instructions,
     'prompt': prompt,
+    'cli_flags': cliFlags,
     'is_default': isDefault,
   };
 
-  static const defaultPrompt = '''You are a senior software engineer performing a pull request code review.
+  // ── Preset templates ────────────────────────────────────────────────────────
 
-PR: {title} (#{number})
-Repo: {repo}
-Author: {author}
-Link: {link}
+  static const presets = [
+    PresetDef(
+      id: 'preset-general',
+      name: 'General Review',
+      focus: 'general',
+      instructions: 'Perform a comprehensive code review covering correctness, '
+          'maintainability, error handling, edge cases, and code style. '
+          'Flag any bugs, anti-patterns, or opportunities for improvement.',
+    ),
+    PresetDef(
+      id: 'preset-security',
+      name: 'Security Audit',
+      focus: 'security',
+      instructions: 'Focus exclusively on security vulnerabilities: injection attacks '
+          '(SQL, command, XSS), authentication/authorization flaws, sensitive data exposure, '
+          'insecure dependencies, hardcoded secrets, and OWASP Top 10 issues. '
+          'Treat every potential attack vector as high severity.',
+    ),
+    PresetDef(
+      id: 'preset-performance',
+      name: 'Performance Review',
+      focus: 'performance',
+      instructions: 'Focus on performance bottlenecks: N+1 queries, missing indexes, '
+          'unnecessary allocations, blocking I/O in hot paths, inefficient algorithms (O(n²) or worse), '
+          'missing caching opportunities, and memory leaks.',
+    ),
+    PresetDef(
+      id: 'preset-architecture',
+      name: 'Architecture Review',
+      focus: 'architecture',
+      instructions: 'Evaluate architectural concerns: SOLID principles violations, '
+          'excessive coupling, missing abstractions, violation of separation of concerns, '
+          'incorrect layer dependencies, and scalability issues.',
+    ),
+    PresetDef(
+      id: 'preset-docs',
+      name: 'Docs & Style',
+      focus: 'docs',
+      instructions: 'Review documentation quality and code style: missing or misleading '
+          'docstrings, unclear variable/function names, magic numbers without explanation, '
+          'inconsistent naming conventions, and missing error messages.',
+    ),
+  ];
 
-Diff:
-{diff}
+  static ReviewPrompt fromPreset(PresetDef p) => ReviewPrompt(
+    id: p.id,
+    name: p.name,
+    focus: p.focus,
+    instructions: p.instructions,
+  );
 
-Review the diff and respond with ONLY valid JSON (no markdown, no explanation):
-{
-  "summary": "brief overall assessment",
-  "issues": [
-    {"file": "filename", "line": 0, "description": "issue description", "severity": "low|medium|high"}
-  ],
-  "suggestions": ["suggestion 1"],
-  "severity": "low|medium|high"
-}''';
-
-  /// Available placeholders for prompt templates.
   static const placeholders = [
     '{title}', '{number}', '{repo}', '{author}', '{link}', '{diff}',
   ];
 }
+
+class PresetDef {
+  final String id, name, focus, instructions;
+  const PresetDef({required this.id, required this.name, required this.focus, required this.instructions});
+}
+
+// Backwards compat alias
+typedef Agent = ReviewPrompt;

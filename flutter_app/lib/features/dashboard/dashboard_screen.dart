@@ -35,7 +35,7 @@ class DashboardScreen extends ConsumerWidget {
             tabs: [
               Tab(icon: Icon(Icons.rate_review), text: 'Reviews'),
               Tab(icon: Icon(Icons.folder_outlined), text: 'Repositories'),
-              Tab(icon: Icon(Icons.smart_toy_outlined), text: 'Agents'),
+              Tab(icon: Icon(Icons.auto_awesome), text: 'Prompts'),
               Tab(icon: Icon(Icons.bar_chart), text: 'Stats'),
             ],
           ),

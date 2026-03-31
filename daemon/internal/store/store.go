@@ -52,11 +52,13 @@ CREATE TABLE IF NOT EXISTS configs (
 );
 
 CREATE TABLE IF NOT EXISTS agents (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  cli        TEXT NOT NULL DEFAULT 'claude',
-  prompt     TEXT NOT NULL,
-  is_default INTEGER NOT NULL DEFAULT 0,
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  cli          TEXT NOT NULL DEFAULT 'claude',
+  prompt       TEXT NOT NULL DEFAULT '',
+  instructions TEXT NOT NULL DEFAULT '',
+  cli_flags    TEXT NOT NULL DEFAULT '',
+  is_default   INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL
 );
 `
@@ -73,6 +75,9 @@ func Open(dsn string) (*Store, error) {
 	}
 	// Migrate existing DBs (ALTER TABLE ignores "duplicate column" errors silently)
 	db.Exec("ALTER TABLE reviews ADD COLUMN github_review_id INTEGER NOT NULL DEFAULT 0")
+	db.Exec("ALTER TABLE agents ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE agents ADD COLUMN cli_flags TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE agents RENAME COLUMN prompt TO prompt") // no-op, ensures column exists
 	return &Store{db: db}, nil
 }
 

@@ -43,6 +43,36 @@ The top-level "severity" is the highest severity found. If no issues, return emp
 // DefaultTemplate returns the built-in prompt template.
 func DefaultTemplate() string { return defaultTemplate }
 
+// DefaultTemplateWithInstructions injects custom review instructions into the
+// default template. The instructions define what to focus on (e.g. security,
+// performance) while the output format stays consistent.
+func DefaultTemplateWithInstructions(instructions string) string {
+	return `You are a senior software engineer performing a pull request code review.
+
+PR: {title} (#{number})
+Repo: {repo}
+Author: {author}
+Link: {link}
+
+REVIEW FOCUS:
+` + instructions + `
+
+Diff:
+{diff}
+
+Review the diff according to the focus above and respond with ONLY valid JSON (no markdown, no explanation):
+{
+  "summary": "brief overall assessment",
+  "issues": [
+    {"file": "filename", "line": 0, "description": "issue description", "severity": "low|medium|high"}
+  ],
+  "suggestions": ["suggestion 1"],
+  "severity": "low|medium|high"
+}
+
+The top-level "severity" is the highest severity found. If no issues, return empty arrays and severity "low".`
+}
+
 // BuildPrompt builds a prompt from the default template.
 // Kept for backwards compatibility.
 func BuildPrompt(title, author, diff string) string {

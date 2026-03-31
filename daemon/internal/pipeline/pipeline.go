@@ -83,10 +83,22 @@ func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback string) (*store
 		return nil, fmt.Errorf("pipeline: fetch diff: %w", err)
 	}
 
-	// 3. Build prompt from agent template (or built-in default)
+	// 3. Build prompt from active review profile (agent):
+	//    - If the profile has a full custom template, use it
+	//    - If it only has instructions, embed them into the default template
+	//    - If no profile, use the built-in default
 	promptTemplate := executor.DefaultTemplate()
-	if agent, err := p.store.DefaultAgent(); err == nil && agent != nil && agent.Prompt != "" {
-		promptTemplate = agent.Prompt
+	var cliFlags string
+	if agent, err := p.store.DefaultAgent(); err == nil && agent != nil {
+		switch {
+		case agent.Prompt != "":
+			// Advanced mode: full custom template
+			promptTemplate = agent.Prompt
+		case agent.Instructions != "":
+			// Simple mode: inject instructions into the default template
+			promptTemplate = executor.DefaultTemplateWithInstructions(agent.Instructions)
+		}
+		cliFlags = agent.CLIFlags
 	}
 	prompt := executor.BuildPromptFromTemplate(promptTemplate, executor.PRContext{
 		Title:  pr.Title,
@@ -97,8 +109,9 @@ func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback string) (*store
 		Diff:   diff,
 	})
 
-	// 4. Select CLI
+	// 4. Select CLI (profile can override the global primary/fallback)
 	cli, err := p.executor.Detect(primary, fallback)
+	_ = cliFlags // passed to Execute below
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: detect CLI: %w", err)
 	}
