@@ -99,8 +99,11 @@ class _BootstrapApp extends StatefulWidget {
 }
 
 class _BootstrapAppState extends State<_BootstrapApp> {
-  String? _destination; // null = still booting
+  String? _destination;
   String _status = 'Starting…';
+  String? _errorTitle;   // non-null = show error screen instead of spinner
+  String? _errorDetails;
+  String? _errorHint;
 
   @override
   void initState() {
@@ -142,18 +145,17 @@ class _BootstrapAppState extends State<_BootstrapApp> {
       await FirstRunSetup.writeConfig(config);
     }
 
-    // ── 4. Locate daemon binary — fail fast with a clear message ──────────
+    // ── 4. Locate daemon binary ───────────────────────────────────────────
     final binaryPath = _daemonBinaryPath();
     if (binaryPath == null) {
-      // Binary not found: broken install (daemon not embedded) or dev env
-      // without HEIMDALLR_DAEMON_PATH. Show actionable message.
-      _setStatus(
-        'Daemon binary not found.\n'
-        'If installed from DMG, try:\n'
-        'xattr -cr /Applications/Heimdallr.app',
+      _setError(
+        title: 'Daemon binary not found',
+        details: 'Heimdallr could not locate its background service.\n'
+            'This usually means the installation is incomplete.',
+        hint: 'If you installed from a DMG, open Terminal and run:\n'
+            'xattr -cr /Applications/Heimdallr.app\n'
+            'then relaunch the app.',
       );
-      // Still wait — the user might fix it without restarting
-      await _waitForHealth(api, retryBinary: null);
       return;
     }
 
@@ -162,7 +164,13 @@ class _BootstrapAppState extends State<_BootstrapApp> {
     try {
       await Process.start(binaryPath, []);
     } catch (e) {
-      _setStatus('Could not start daemon: $e');
+      _setError(
+        title: 'Could not start daemon',
+        details: e.toString(),
+        hint: 'Check that Heimdallr has permission to run sub-processes.\n'
+            'Try: xattr -cr /Applications/Heimdallr.app',
+      );
+      return;
     }
 
     // ── 6. Wait for daemon to become healthy ──────────────────────────────
@@ -203,6 +211,14 @@ class _BootstrapAppState extends State<_BootstrapApp> {
     if (mounted) setState(() => _status = s);
   }
 
+  void _setError({required String title, required String details, String? hint}) {
+    if (mounted) setState(() {
+      _errorTitle   = title;
+      _errorDetails = details;
+      _errorHint    = hint;
+    });
+  }
+
   void _go(String location) {
     if (mounted) setState(() => _destination = location);
   }
@@ -210,10 +226,19 @@ class _BootstrapAppState extends State<_BootstrapApp> {
   @override
   Widget build(BuildContext context) {
     if (_destination != null) {
-      // Use the shared router (supports deep-link from notifications)
       return HeimdallrApp(router: widget.appRouter, initialLocation: _destination!);
     }
-
+    if (_errorTitle != null) {
+      return _ErrorApp(
+        title: _errorTitle!,
+        details: _errorDetails ?? '',
+        hint: _errorHint,
+        onRetry: () {
+          setState(() { _errorTitle = null; _errorDetails = null; _errorHint = null; });
+          _boot();
+        },
+      );
+    }
     return _SplashApp(status: _status);
   }
 }
@@ -255,6 +280,95 @@ class _SplashApp extends StatelessWidget {
               const SizedBox(height: 12),
               Text(status, style: const TextStyle(color: Colors.grey)),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorApp extends StatelessWidget {
+  final String title;
+  final String details;
+  final String? hint;
+  final VoidCallback onRetry;
+
+  const _ErrorApp({
+    required this.title,
+    required this.details,
+    this.hint,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0969DA)),
+        useMaterial3: true,
+      ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0969DA),
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+      ),
+      home: Scaffold(
+        body: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.error_outline, size: 56, color: Colors.red),
+                  const SizedBox(height: 20),
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 20, fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.center),
+                  const SizedBox(height: 12),
+                  Text(details,
+                      style: const TextStyle(color: Colors.grey, fontSize: 13),
+                      textAlign: TextAlign.center),
+                  if (hint != null) ...[
+                    const SizedBox(height: 20),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withValues(alpha: 0.1),
+                        border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(hint!,
+                          style: const TextStyle(
+                              fontSize: 12, fontFamily: 'monospace'),
+                          textAlign: TextAlign.left),
+                    ),
+                  ],
+                  const SizedBox(height: 28),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      OutlinedButton(
+                        onPressed: () => exit(0),
+                        child: const Text('Quit'),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton.icon(
+                        icon: const Icon(Icons.refresh, size: 16),
+                        label: const Text('Retry'),
+                        onPressed: onRetry,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
