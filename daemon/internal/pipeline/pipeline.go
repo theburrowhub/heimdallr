@@ -231,14 +231,11 @@ func buildGitHubBody(r *executor.ReviewResult) string {
 }
 
 // severityToEvent maps severity to a GitHub review event type.
-func severityToEvent(severity string, issueCount int) string {
-	if issueCount == 0 {
-		return "APPROVE"
-	}
-	switch severity {
-	case "high", "medium":
+// Only high-severity issues block a PR — Heimdallr must not be a blocker
+// for medium/low issues. Those are left as informational comments with an APPROVE.
+func severityToEvent(severity string, _ int) string {
+	if severity == "high" {
 		return "REQUEST_CHANGES"
-	default:
-		return "COMMENT"
 	}
+	return "APPROVE"
 }
