@@ -1,15 +1,41 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:tray_manager/tray_manager.dart';
 import 'core/api/api_client.dart';
 import 'core/setup/first_run_setup.dart';
 import 'core/setup/repo_discovery.dart';
 import 'core/models/config_model.dart';
 import 'shared/router.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await _setupTray();
   runApp(const ProviderScope(child: _BootstrapApp()));
+}
+
+Future<void> _setupTray() async {
+  await trayManager.setIcon('assets/tray_icon.png');
+  await trayManager.setContextMenu(Menu(items: [
+    MenuItem(key: 'show', label: 'Open Heimdallr'),
+    MenuItem.separator(),
+    MenuItem(key: 'quit', label: 'Quit'),
+  ]));
+  trayManager.addListener(_TrayHandler._instance);
+}
+
+class _TrayHandler with TrayListener {
+  static final _instance = _TrayHandler._();
+  _TrayHandler._();
+
+  @override
+  void onTrayIconMouseDown() => trayManager.popUpContextMenu();
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    if (menuItem.key == 'quit') exit(0);
+    // 'show' — the window is already visible (Flutter macOS keeps it open)
+  }
 }
 
 class _BootstrapApp extends StatefulWidget {

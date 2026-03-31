@@ -13,6 +13,7 @@ dependencies:
   go_router: ^14.0.0
   shared_preferences: ^2.2.0
   json_annotation: ^4.8.0
+  tray_manager: ^0.5.2
 
 dev_dependencies:
   flutter_test:
@@ -26,3 +27,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/icon.png
+    - assets/tray_icon.png
