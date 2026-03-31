@@ -23,8 +23,9 @@ type Server struct {
 	httpServer *http.Server
 	reloadFn        func() error
 	triggerReviewFn func(prID int64) error
-	// meFn returns the authenticated GitHub username. Cached by main.go.
-	meFn func() (string, error)
+	meFn            func() (string, error)
+	// configFn returns the current running config as a JSON-serializable map.
+	configFn func() map[string]any
 }
 
 // New creates a new Server. p may be nil if the pipeline is not yet configured.
@@ -42,6 +43,9 @@ func (srv *Server) SetTriggerReviewFn(fn func(prID int64) error) { srv.triggerRe
 
 // SetMeFn wires the authenticated-user callback called by GET /me.
 func (srv *Server) SetMeFn(fn func() (string, error)) { srv.meFn = fn }
+
+// SetConfigFn wires the callback that returns the live config for GET /config.
+func (srv *Server) SetConfigFn(fn func() map[string]any) { srv.configFn = fn }
 
 // Router returns the underlying http.Handler for use in tests or embedding.
 func (srv *Server) Router() http.Handler {
@@ -74,6 +78,9 @@ func (srv *Server) buildRouter() chi.Router {
 	r.Get("/prs/{id}", srv.handleGetPR)
 	r.Post("/prs/{id}/review", srv.handleTriggerReview)
 	r.Get("/stats", srv.handleStats)
+	r.Get("/agents", srv.handleListAgents)
+	r.Post("/agents", srv.handleUpsertAgent)
+	r.Delete("/agents/{id}", srv.handleDeleteAgent)
 	r.Get("/config", srv.handleGetConfig)
 	r.Put("/config", srv.handlePutConfig)
 	r.Post("/reload", srv.handleReload)
@@ -143,6 +150,10 @@ func (srv *Server) handleTriggerReview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if srv.configFn != nil {
+		writeJSON(w, http.StatusOK, srv.configFn())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
@@ -204,6 +215,44 @@ func (srv *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func (srv *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	agents, err := srv.store.ListAgents()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if agents == nil {
+		agents = []*store.Agent{}
+	}
+	writeJSON(w, http.StatusOK, agents)
+}
+
+func (srv *Server) handleUpsertAgent(w http.ResponseWriter, r *http.Request) {
+	var a store.Agent
+	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if a.ID == "" || a.Name == "" {
+		http.Error(w, "id and name are required", http.StatusBadRequest)
+		return
+	}
+	if err := srv.store.UpsertAgent(&a); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (srv *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := srv.store.DeleteAgent(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func (srv *Server) handleMe(w http.ResponseWriter, r *http.Request) {

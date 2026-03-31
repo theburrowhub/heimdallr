@@ -82,9 +82,23 @@ class AppConfig {
   };
 
   factory AppConfig.fromJson(Map<String, dynamic> json) {
-    // Reconstruct repoConfigs from repositories list (no override info from daemon API)
     final repos = (json['repositories'] as List<dynamic>?)?.cast<String>() ?? [];
-    final configs = {for (final r in repos) r: const RepoConfig(monitored: true)};
+    // Start with all monitored repos (no override)
+    final configs = <String, RepoConfig>{
+      for (final r in repos) r: const RepoConfig(monitored: true),
+    };
+    // Apply per-repo AI overrides from repo_overrides field
+    final overrides = json['repo_overrides'] as Map<String, dynamic>?;
+    if (overrides != null) {
+      for (final entry in overrides.entries) {
+        final ov = entry.value as Map<String, dynamic>;
+        configs[entry.key] = RepoConfig(
+          monitored: configs.containsKey(entry.key),
+          aiPrimary: ov['primary'] as String?,
+          aiFallback: ov['fallback'] as String?,
+        );
+      }
+    }
     return AppConfig(
       serverPort: (json['server_port'] as int?) ?? 7842,
       pollInterval: (json['poll_interval'] as String?) ?? '5m',

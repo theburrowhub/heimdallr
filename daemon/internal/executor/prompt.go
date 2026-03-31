@@ -1,21 +1,32 @@
 package executor
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 const maxDiffBytes = 32 * 1024 // 32KB ~ 8k tokens
 
-// BuildPrompt constructs the prompt sent to the AI CLI.
-func BuildPrompt(title, author, diff string) string {
-	if len(diff) > maxDiffBytes {
-		diff = diff[:maxDiffBytes] + "\n... (diff truncated)"
-	}
-	return fmt.Sprintf(`You are a senior software engineer performing a pull request code review.
+// PRContext holds all substitutable data for a prompt template.
+type PRContext struct {
+	Title  string
+	Number int
+	Repo   string
+	Author string
+	Link   string
+	Diff   string
+}
 
-PR Title: %s
-Author: %s
+// defaultTemplate is used when no custom agent template is configured.
+const defaultTemplate = `You are a senior software engineer performing a pull request code review.
+
+PR: {title} (#{number})
+Repo: {repo}
+Author: {author}
+Link: {link}
 
 Diff:
-%s
+{diff}
 
 Review the above diff and respond with ONLY valid JSON in this exact format (no markdown, no explanation):
 {
@@ -27,5 +38,35 @@ Review the above diff and respond with ONLY valid JSON in this exact format (no 
   "severity": "low|medium|high"
 }
 
-The top-level "severity" is the highest severity found. If no issues, return empty arrays and severity "low".`, title, author, diff)
+The top-level "severity" is the highest severity found. If no issues, return empty arrays and severity "low".`
+
+// DefaultTemplate returns the built-in prompt template.
+func DefaultTemplate() string { return defaultTemplate }
+
+// BuildPrompt builds a prompt from the default template.
+// Kept for backwards compatibility.
+func BuildPrompt(title, author, diff string) string {
+	return BuildPromptFromTemplate(defaultTemplate, PRContext{
+		Title:  title,
+		Author: author,
+		Diff:   diff,
+	})
+}
+
+// BuildPromptFromTemplate substitutes placeholders in a custom template.
+// Supported: {title} {number} {repo} {author} {link} {diff}
+func BuildPromptFromTemplate(template string, ctx PRContext) string {
+	if len(ctx.Diff) > maxDiffBytes {
+		ctx.Diff = ctx.Diff[:maxDiffBytes] + "\n... (diff truncated)"
+	}
+
+	r := strings.NewReplacer(
+		"{title}", ctx.Title,
+		"{number}", fmt.Sprintf("%d", ctx.Number),
+		"{repo}", ctx.Repo,
+		"{author}", ctx.Author,
+		"{link}", ctx.Link,
+		"{diff}", ctx.Diff,
+	)
+	return r.Replace(template)
 }

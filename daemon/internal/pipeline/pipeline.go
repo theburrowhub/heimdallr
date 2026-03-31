@@ -69,8 +69,19 @@ func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback string) (*store
 		return nil, fmt.Errorf("pipeline: fetch diff: %w", err)
 	}
 
-	// 3. Build prompt (diff is truncated inside BuildPrompt if needed)
-	prompt := executor.BuildPrompt(pr.Title, pr.User.Login, diff)
+	// 3. Build prompt — use default agent template if available, else built-in default
+	promptTemplate := executor.DefaultTemplate()
+	if agent, err := p.store.DefaultAgent(); err == nil && agent != nil && agent.Prompt != "" {
+		promptTemplate = agent.Prompt
+	}
+	prompt := executor.BuildPromptFromTemplate(promptTemplate, executor.PRContext{
+		Title:  pr.Title,
+		Number: pr.Number,
+		Repo:   pr.Repo,
+		Author: pr.User.Login,
+		Link:   pr.HTMLURL,
+		Diff:   diff,
+	})
 
 	// 4. Select CLI
 	cli, err := p.executor.Detect(primary, fallback)

@@ -132,6 +132,29 @@ func main() {
 	sched = startScheduler(cfg)
 	defer sched.Stop()
 
+	// Expose live config for GET /config
+	srv.SetConfigFn(func() map[string]any {
+		cfgMu.Lock()
+		c := cfg
+		cfgMu.Unlock()
+		repoOverrides := make(map[string]map[string]string)
+		for repo, ai := range c.AI.Repos {
+			repoOverrides[repo] = map[string]string{
+				"primary":  ai.Primary,
+				"fallback": ai.Fallback,
+			}
+		}
+		return map[string]any{
+			"server_port":    c.Server.Port,
+			"poll_interval":  c.GitHub.PollInterval,
+			"repositories":   c.GitHub.Repositories,
+			"ai_primary":     c.AI.Primary,
+			"ai_fallback":    c.AI.Fallback,
+			"retention_days": c.Retention.MaxDays,
+			"repo_overrides": repoOverrides,
+		}
+	})
+
 	// Cache authenticated username for GET /me
 	var cachedLogin string
 	srv.SetMeFn(func() (string, error) {

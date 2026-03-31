@@ -70,6 +70,27 @@ class ApiClient {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
+  // ── Agents ──────────────────────────────────────────────────────────────
+
+  Future<List<Map<String, dynamic>>> fetchAgents() async {
+    final resp = await _client.get(_uri('/agents'));
+    if (resp.statusCode != 200) throw ApiException('GET /agents failed: ${resp.statusCode}');
+    return (jsonDecode(resp.body) as List<dynamic>)
+        .cast<Map<String, dynamic>>();
+  }
+
+  Future<void> upsertAgent(Map<String, dynamic> agent) async {
+    final resp = await _client.post(_uri('/agents'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(agent));
+    if (resp.statusCode != 200) throw ApiException('POST /agents failed: ${resp.statusCode}');
+  }
+
+  Future<void> deleteAgent(String id) async {
+    final resp = await _client.delete(_uri('/agents/$id'));
+    if (resp.statusCode != 200) throw ApiException('DELETE /agents/$id failed: ${resp.statusCode}');
+  }
+
   Future<String> fetchMe() async {
     final resp = await _client.get(_uri('/me'));
     if (resp.statusCode != 200) throw ApiException('GET /me failed: ${resp.statusCode}');

@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS configs (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agents (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  cli        TEXT NOT NULL DEFAULT 'claude',
+  prompt     TEXT NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL
+);
 `
 
 // Open opens (or creates) a SQLite database at dsn and applies the schema.

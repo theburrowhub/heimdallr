@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/models/pr.dart';
 import '../../shared/widgets/severity_badge.dart';
+import '../agents/agents_screen.dart';
 import '../repositories/repos_screen.dart';
 import '../stats/stats_screen.dart';
 import 'dashboard_providers.dart';
@@ -13,7 +14,7 @@ class DashboardScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Heimdallr'),
@@ -34,6 +35,7 @@ class DashboardScreen extends ConsumerWidget {
             tabs: [
               Tab(icon: Icon(Icons.rate_review), text: 'Reviews'),
               Tab(icon: Icon(Icons.folder_outlined), text: 'Repositories'),
+              Tab(icon: Icon(Icons.smart_toy_outlined), text: 'Agents'),
               Tab(icon: Icon(Icons.bar_chart), text: 'Stats'),
             ],
           ),
@@ -42,6 +44,7 @@ class DashboardScreen extends ConsumerWidget {
           children: [
             _ReviewsTab(),
             ReposScreen(),
+            AgentsScreen(),
             StatsScreen(),
           ],
         ),
