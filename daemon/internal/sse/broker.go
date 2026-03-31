@@ -90,6 +90,9 @@ func (b *Broker) run() {
 				}
 			}
 		case <-b.quit:
+			for ch := range subscribers {
+				close(ch)
+			}
 			return
 		}
 	}
