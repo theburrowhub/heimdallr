@@ -114,23 +114,33 @@ xattr -l /Applications/Heimdallr.app | grep quarantine | wc -l
 
 ## Step 6: Re-sign with local entitlements
 
-The CI build uses ad-hoc signing. Re-signing locally ensures the entitlements (no sandbox, network access) are preserved and the local Gatekeeper trusts the binary:
+The CI build uses ad-hoc signing. Re-signing locally ensures the entitlements
+(no sandbox, network access) are preserved. Without them the app opens and
+closes immediately.
+
+Write the entitlements to a temp file — no repo clone needed:
 
 ```bash
-# Find the entitlements file (clone the repo first if needed)
-REPO_DIR=$(find ~/personal-workspace ~/workspace ~/dev ~/code -name "flutter_app" -type d 2>/dev/null | head -1 | sed 's|/flutter_app||')
+ENTITLEMENTS=$(mktemp /tmp/heimdallr-entitlements.XXXXXX.plist)
+cat > "$ENTITLEMENTS" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Sandbox disabled: Heimdallr spawns the daemon, runs gh/security/bash -->
+  <key>com.apple.security.app-sandbox</key>
+  <false/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>
+PLIST
 
-if [ -f "$REPO_DIR/flutter_app/macos/Runner/Release.entitlements" ]; then
-  codesign --force --deep --sign - \
-    --entitlements "$REPO_DIR/flutter_app/macos/Runner/Release.entitlements" \
-    /Applications/Heimdallr.app
-  echo "✓ Signed with entitlements"
-else
-  # Sign without entitlements as fallback
-  codesign --force --deep --sign - /Applications/Heimdallr.app
-  echo "⚠ Signed without custom entitlements (no repo found)"
-fi
+codesign --force --deep --sign - \
+  --entitlements "$ENTITLEMENTS" \
+  /Applications/Heimdallr.app
 
+rm -f "$ENTITLEMENTS"
 codesign --verify /Applications/Heimdallr.app && echo "✓ Signature valid"
 ```
 
@@ -196,9 +206,9 @@ If `heimdalld` is missing, the CI build was broken. Re-download from the release
 ## Cleanup
 
 ```bash
-# Unmount the DMG
-hdiutil detach "/Volumes/Heimdallr v${VERSION#v}" 2>/dev/null || \
-  hdiutil detach "/Volumes/Heimdallr ${VERSION}" 2>/dev/null
+# Unmount the DMG — find the actual device regardless of volume name
+HEIMDALLR_DEV=$(mount | grep -i "Heimdallr" | awk '{print $1}' | head -1)
+[ -n "$HEIMDALLR_DEV" ] && hdiutil detach "$HEIMDALLR_DEV" 2>/dev/null && echo "✓ DMG unmounted"
 
 # Remove downloaded DMG
 rm -f "/tmp/Heimdallr-${VERSION}.dmg"
