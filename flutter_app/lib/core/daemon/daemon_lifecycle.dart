@@ -37,20 +37,28 @@ class DaemonLifecycle {
     _process = null;
   }
 
-  /// Returns the daemon binary path.
+  /// Returns the daemon binary path, or null if not found.
+  ///
   /// Priority:
-  ///   1. HEIMDALLR_DAEMON_PATH env var (set by `make dev` for local dev)
-  ///   2. 'heimdalld' next to the Flutter binary (production .app bundle)
-  ///      NOTE: named 'heimdalld' — not 'heimdallr' — to avoid overwriting
-  ///      Flutter's 'Heimdallr' binary on case-insensitive APFS filesystems.
-  ///   3. 'heimdallr' fallback (legacy / dev builds)
-  static String defaultBinaryPath() {
+  ///   1. HEIMDALLR_DAEMON_PATH env var  (set by `make dev`)
+  ///   2. 'heimdalld' next to the Flutter binary  (production .app bundle)
+  ///
+  /// IMPORTANT: 'heimdallr' is NOT used as a fallback because on macOS APFS
+  /// (case-insensitive) 'heimdallr' resolves to 'Heimdallr' — the Flutter app
+  /// binary itself. Using it as a spawn target creates an infinite fork bomb.
+  static String? defaultBinaryPath() {
+    // 1. Explicit override (make dev)
     final envPath = Platform.environment['HEIMDALLR_DAEMON_PATH'];
-    if (envPath != null && envPath.isNotEmpty) return envPath;
+    if (envPath != null && envPath.isNotEmpty) {
+      return File(envPath).existsSync() ? envPath : null;
+    }
+
+    // 2. Bundle-embedded daemon (production)
     final dir = File(Platform.resolvedExecutable).parent.path;
-    final preferred = File('$dir/heimdalld');
-    if (preferred.existsSync()) return preferred.path;
-    return '$dir/heimdallr'; // fallback for make dev
+    final bundled = File('$dir/heimdalld');
+    if (bundled.existsSync()) return bundled.path;
+
+    return null; // not found — caller shows error, never spawns self
   }
 }
 

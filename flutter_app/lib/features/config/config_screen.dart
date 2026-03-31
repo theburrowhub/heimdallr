@@ -423,7 +423,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
           await ref.read(configNotifierProvider.notifier).saveAndStartDaemon(
             token: _tokenFromGh ? (_tokenController.text.trim()) : token,
             config: updated,
-            daemonBinaryPath: DaemonLifecycle.defaultBinaryPath(),
+            daemonBinaryPath: DaemonLifecycle.defaultBinaryPath() ?? '',
           );
           if (context.mounted) {
             final state = ref.read(configNotifierProvider);

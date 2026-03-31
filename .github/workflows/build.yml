@@ -145,11 +145,18 @@ jobs:
           DMG="dist/Heimdallr-${VERSION}.dmg"
           mkdir -p dist
 
+          # Create a staging dir with app + Applications shortcut
+          STAGE=$(mktemp -d)
+          cp -R "$APP" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+
           hdiutil create \
             -volname "Heimdallr ${VERSION}" \
-            -srcfolder "$APP" \
+            -srcfolder "$STAGE" \
             -ov -format UDZO \
             "$DMG"
+
+          rm -rf "$STAGE"
 
           ls -lh "$DMG"
           echo "DMG_PATH=$DMG"   >> "$GITHUB_ENV"
