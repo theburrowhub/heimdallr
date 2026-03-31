@@ -380,8 +380,9 @@ class _PromptEditorDialogState extends State<_PromptEditorDialog>
   Widget build(BuildContext context) {
     final isNew = widget.prompt == null;
     return Dialog(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 680),
+      child: SizedBox(
+        width: 720,
+        height: 660,
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
