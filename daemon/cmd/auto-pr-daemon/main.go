@@ -76,7 +76,7 @@ func main() {
 	ghClient := gh.NewClient(token)
 	exec := executor.New()
 
-	p := pipeline.New(s, ghClient, exec, &notifyWithSSE{notifier: notifier, broker: broker})
+	p := pipeline.New(s, ghClient, exec, &notifyWithSSE{notifier: notifier})
 	srv := server.New(s, broker, p)
 
 	pollFn := func() {
@@ -100,6 +100,7 @@ func main() {
 				}
 			}
 			broker.Publish(sse.Event{Type: sse.EventPRDetected, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
+			broker.Publish(sse.Event{Type: sse.EventReviewStarted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
 			if _, err := p.Run(pr, aiCfg.Primary, aiCfg.Fallback); err != nil {
 				slog.Error("pipeline run failed", "pr", pr.Number, "err", err)
 				broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_number":%d,"error":%q}`, pr.Number, err.Error())})
@@ -130,6 +131,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)
+	broker.Stop()
 }
 
 func setupLogging() {
@@ -146,19 +148,15 @@ func dataDir() string {
 }
 
 func parsePollInterval(s string) time.Duration {
-	m := map[string]time.Duration{
-		"1m": time.Minute, "5m": 5 * time.Minute,
-		"30m": 30 * time.Minute, "1h": time.Hour,
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 5 * time.Minute
 	}
-	if d, ok := m[s]; ok {
-		return d
-	}
-	return 5 * time.Minute
+	return d
 }
 
 type notifyWithSSE struct {
 	notifier *notify.Notifier
-	broker   *sse.Broker
 }
 
 func (n *notifyWithSSE) Notify(title, message string) {

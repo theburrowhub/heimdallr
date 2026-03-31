@@ -69,8 +69,10 @@ func Install(binaryPath string) error {
 		return fmt.Errorf("launchagent: render plist: %w", err)
 	}
 
-	if out, err := exec.Command("launchctl", "load", path).CombinedOutput(); err != nil {
-		return fmt.Errorf("launchagent: launchctl load: %w (%s)", err, out)
+	uid := fmt.Sprintf("%d", os.Getuid())
+	domain := "gui/" + uid
+	if out, err := exec.Command("launchctl", "bootstrap", domain, path).CombinedOutput(); err != nil {
+		return fmt.Errorf("launchagent: launchctl bootstrap: %w (%s)", err, out)
 	}
 	fmt.Printf("LaunchAgent installed: %s\n", path)
 	return nil
@@ -82,7 +84,9 @@ func Uninstall() error {
 	if err != nil {
 		return err
 	}
-	exec.Command("launchctl", "unload", path).Run()
+	uid := fmt.Sprintf("%d", os.Getuid())
+	domain := "gui/" + uid
+	exec.Command("launchctl", "bootout", domain, path).Run()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("launchagent: remove plist: %w", err)
 	}
