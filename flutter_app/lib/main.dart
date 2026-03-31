@@ -24,7 +24,7 @@ class _BootstrapApp extends StatefulWidget {
 
 class _BootstrapAppState extends State<_BootstrapApp> {
   String? _initialLocation;
-  String _status = 'Iniciando…';
+  String _status = 'Starting…';
 
   @override
   void initState() {
@@ -43,7 +43,7 @@ class _BootstrapAppState extends State<_BootstrapApp> {
 
     // 2. ¿Hay config en disco? → intenta arrancar con ella
     if (await FirstRunSetup.configExists()) {
-      _setStatus('Arrancando Heimdallr…');
+      _setStatus('Starting Heimdallr…');
       if (await _startDaemon()) {
         _go('/');
         return;
@@ -54,13 +54,13 @@ class _BootstrapAppState extends State<_BootstrapApp> {
     }
 
     // 3. ¿Hay token disponible? → auto-setup completo
-    _setStatus('Detectando credenciales…');
+    _setStatus('Detecting credentials…');
     final token = await FirstRunSetup.detectToken();
     if (token != null) {
-      _setStatus('Descubriendo repositorios…');
+      _setStatus('Discovering repositories…');
       final repos = await RepoDiscovery.discoverFromPRs(token);
 
-      _setStatus('Guardando configuración…');
+      _setStatus('Saving configuration…');
       final config = AppConfig(
         repoConfigs: {
           for (final r in repos) r: const RepoConfig(monitored: true),
@@ -69,7 +69,7 @@ class _BootstrapAppState extends State<_BootstrapApp> {
       await FirstRunSetup.storeToken(token);
       await FirstRunSetup.writeConfig(config);
 
-      _setStatus('Arrancando Heimdallr…');
+      _setStatus('Starting Heimdallr…');
       if (await _startDaemon()) {
         _go('/');
         return;

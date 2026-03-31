@@ -109,7 +109,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
       if (!mounted) return;
       setState(() {
         _discovering = false;
-        _discoverError = 'No se pudieron descubrir repos: $e';
+        _discoverError = 'Could not discover repos: $e';
       });
     }
   }
@@ -120,7 +120,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     final daemonRunning = ref.watch(daemonHealthProvider).valueOrNull ?? false;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Configuración')),
+      appBar: AppBar(title: const Text('Settings')),
       body: configAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, __) => _buildForm(context, const AppConfig(), daemonRunning),
@@ -162,11 +162,11 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionHeader('Token de GitHub'),
+        _sectionHeader('GitHub Token'),
         if (_tokenFromGh)
           _infoChip(
             Icons.check_circle,
-            'Detectado automáticamente desde gh CLI',
+            'Auto-detected from gh CLI',
             Colors.green,
           )
         else
@@ -176,7 +176,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
             decoration: InputDecoration(
               labelText: 'Personal Access Token',
               hintText: 'ghp_...',
-              helperText: 'Permisos necesarios: repo, read:org',
+              helperText: 'Required scopes: repo, read:org',
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
                 icon: Icon(_obscureToken ? Icons.visibility : Icons.visibility_off),
@@ -187,7 +187,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
         if (_tokenFromGh)
           TextButton.icon(
             icon: const Icon(Icons.edit, size: 14),
-            label: const Text('Usar token diferente'),
+            label: const Text('Use a different token'),
             onPressed: () => setState(() {
               _tokenFromGh = false;
               _tokenController.clear();
@@ -205,7 +205,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
       children: [
         Row(
           children: [
-            _sectionHeaderInline('Repositorios con PRs activas'),
+            _sectionHeaderInline('Repos with active PRs'),
             if (_discovering) ...[
               const SizedBox(width: 10),
               const SizedBox(
@@ -224,7 +224,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 8),
             child: Text(
-              'No se encontraron PRs activas asignadas a ti.',
+              'No active PRs found assigned to you.',
               style: TextStyle(color: Colors.grey),
             ),
           )
@@ -258,20 +258,20 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
               fontWeight: rc.monitored ? FontWeight.w600 : FontWeight.normal,
             )),
         subtitle: rc.hasAiOverride
-            ? Text('IA: ${rc.aiPrimary ?? "global"}', style: const TextStyle(fontSize: 12))
+            ? Text('AI: ${rc.aiPrimary ?? "global"}', style: const TextStyle(fontSize: 12))
             : null,
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         children: [
           const Divider(height: 1),
           const SizedBox(height: 10),
-          const Text('Overrides de IA para este repo',
+          const Text('AI overrides for this repo',
               style: TextStyle(fontSize: 12, color: Colors.grey)),
           const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
                 child: _overrideDropdown(
-                  label: 'Agente principal',
+                  label: 'Primary agent',
                   value: rc.aiPrimary,
                   onChanged: (v) => setState(() {
                     _repoConfigs[repo] = rc.copyWith(aiPrimary: v);
@@ -308,7 +308,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
         isDense: true,
       ),
       items: [
-        const DropdownMenuItem<String?>(value: null, child: Text('Global (sin override)')),
+        const DropdownMenuItem<String?>(value: null, child: Text('Global (no override)')),
         ..._aiOptions.map((v) => DropdownMenuItem<String?>(value: v, child: Text(v))),
       ],
       onChanged: onChanged,
@@ -321,11 +321,11 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionHeader('Configuración global'),
+        _sectionHeader('Global defaults'),
         DropdownButtonFormField<String>(
           value: _pollInterval,
           decoration: const InputDecoration(
-            labelText: 'Intervalo de sondeo',
+            labelText: 'Poll interval',
             border: OutlineInputBorder(),
           ),
           items: ['1m', '5m', '30m', '1h']
@@ -337,8 +337,8 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
         DropdownButtonFormField<String>(
           value: _aiPrimary,
           decoration: const InputDecoration(
-            labelText: 'Agente IA principal',
-            helperText: 'Puede sobreescribirse por repo',
+            labelText: 'Primary AI agent',
+            helperText: 'Can be overridden per repo',
             border: OutlineInputBorder(),
           ),
           items: _aiOptions.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
@@ -348,11 +348,11 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
         DropdownButtonFormField<String?>(
           value: _aiFallback.isEmpty ? null : _aiFallback,
           decoration: const InputDecoration(
-            labelText: 'Agente IA fallback (opcional)',
+            labelText: 'Fallback AI agent (optional)',
             border: OutlineInputBorder(),
           ),
           items: [
-            const DropdownMenuItem<String?>(value: null, child: Text('Ninguno')),
+            const DropdownMenuItem<String?>(value: null, child: Text('None')),
             ..._aiOptions.map((v) => DropdownMenuItem<String?>(value: v, child: Text(v))),
           ],
           onChanged: (v) => setState(() => _aiFallback = v ?? ''),
@@ -367,11 +367,11 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionHeader('Retención'),
+        _sectionHeader('Retention'),
         TextFormField(
           initialValue: _retentionDays.toString(),
           decoration: const InputDecoration(
-            labelText: 'Guardar reviews durante (días, 0 = siempre)',
+            labelText: 'Keep reviews for (days, 0 = forever)',
             border: OutlineInputBorder(),
           ),
           keyboardType: TextInputType.number,
@@ -398,12 +398,12 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
                 await FirstRunSetup.storeToken(token);
               }
               await ref.read(configNotifierProvider.notifier).save(updated);
-              if (context.mounted) showToast(context, 'Configuración guardada');
+              if (context.mounted) showToast(context, 'Settings saved');
             } catch (e) {
               if (context.mounted) showToast(context, 'Error: $e', isError: true);
             }
           },
-          child: const Text('Guardar'),
+          child: const Text('Save'),
         ),
       );
     }
@@ -415,15 +415,15 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
             ? const SizedBox(width: 16, height: 16,
                 child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
             : const Icon(Icons.rocket_launch),
-        label: Text(isLoading ? 'Iniciando...' : 'Guardar e iniciar Heimdallr'),
+        label: Text(isLoading ? 'Starting…' : 'Save and start Heimdallr'),
         onPressed: isLoading ? null : () async {
           final token = _tokenController.text.trim();
           if (!_tokenFromGh && token.isEmpty) {
-            showToast(context, 'El token de GitHub es obligatorio', isError: true);
+            showToast(context, 'GitHub token is required', isError: true);
             return;
           }
           if (updated.repositories.isEmpty) {
-            showToast(context, 'Activa al menos un repositorio', isError: true);
+            showToast(context, 'Enable at least one repository', isError: true);
             return;
           }
           await ref.read(configNotifierProvider.notifier).saveAndStartDaemon(
@@ -469,7 +469,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
         Icon(Icons.info_outline, color: Colors.orange.shade700),
         const SizedBox(width: 8),
         const Expanded(
-          child: Text('Heimdallr no está corriendo. Configura y pulsa "Guardar e iniciar".'),
+          child: Text('Heimdallr is not running. Configure and tap "Save and start".'),
         ),
       ]),
     ),

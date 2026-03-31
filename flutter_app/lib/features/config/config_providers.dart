@@ -67,7 +67,7 @@ class ConfigNotifier extends AsyncNotifier<AppConfig> {
 
       if (!await api.checkHealth()) {
         throw Exception(
-          'El daemon no arrancó. Verifica que el binario existe en:\n$daemonBinaryPath',
+          'Heimdallr did not start. Check that the binary exists at:\n$daemonBinaryPath',
         );
       }
 
