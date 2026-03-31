@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/auto-pr/daemon/internal/config"
@@ -18,7 +19,9 @@ repositories = ["org/repo1"]
 [ai]
 primary = "claude"
 `
-	os.WriteFile(path, []byte(content), 0600)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write test config: %v", err)
+	}
 
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -49,7 +52,9 @@ fallback = "gemini"
 [ai.repos."org/repo1"]
 primary = "codex"
 `
-	os.WriteFile(path, []byte(content), 0600)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write test config: %v", err)
+	}
 
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -66,6 +71,9 @@ func TestValidate_MissingRepos(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil {
 		t.Error("expected error for empty repositories")
+	}
+	if !strings.Contains(err.Error(), "repository") {
+		t.Errorf("expected repository error, got: %v", err)
 	}
 }
 
