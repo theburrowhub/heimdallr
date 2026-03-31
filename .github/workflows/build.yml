@@ -10,6 +10,9 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: false   # never cancel a release build mid-flight
 
+permissions:
+  contents: write   # required to create GitHub releases and upload assets
+
 jobs:
   build:
     name: Build Heimdallr.dmg
