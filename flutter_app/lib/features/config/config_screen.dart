@@ -38,7 +38,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
   @override
   void initState() {
     super.initState();
-    _detectToken();
+    _detectToken().then((_) => _autoDiscoverRepos());
   }
 
   @override
@@ -89,33 +89,27 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     _repoConfigs = Map.from(config.repoConfigs);
   }
 
-  Future<void> _discoverRepos() async {
-    setState(() {
-      _discovering = true;
-      _discoverError = null;
-    });
+  /// Auto-discovers repos from the user's PRs. Runs silently on init.
+  Future<void> _autoDiscoverRepos() async {
+    final token = _tokenController.text.trim();
+    if (token.isEmpty) return;
+    if (!mounted) return;
+    setState(() { _discovering = true; _discoverError = null; });
     try {
-      final token = _tokenController.text.trim();
-      final discovered = await RepoDiscovery.discover(
-        token: token.isEmpty ? null : token,
-      );
+      final discovered = await RepoDiscovery.discoverFromPRs(token);
       if (!mounted) return;
       setState(() {
-        // Add newly discovered repos (keep existing settings for known ones)
         for (final repo in discovered) {
-          _repoConfigs.putIfAbsent(repo, () => const RepoConfig(monitored: false));
+          // Keep existing toggle state; default new ones to monitored
+          _repoConfigs.putIfAbsent(repo, () => const RepoConfig(monitored: true));
         }
         _discovering = false;
-        if (discovered.isEmpty) {
-          _discoverError =
-              'No se encontraron repos. Asegúrate de tener gh CLI autenticado o introduce un token válido.';
-        }
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _discovering = false;
-        _discoverError = 'Error al descubrir repos: $e';
+        _discoverError = 'No se pudieron descubrir repos: $e';
       });
     }
   }
@@ -211,15 +205,14 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
       children: [
         Row(
           children: [
-            _sectionHeaderInline('Repositorios'),
-            const Spacer(),
-            FilledButton.tonalIcon(
-              icon: _discovering
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.search, size: 16),
-              label: Text(_discovering ? 'Buscando...' : 'Descubrir repos'),
-              onPressed: _discovering ? null : _discoverRepos,
-            ),
+            _sectionHeaderInline('Repositorios con PRs activas'),
+            if (_discovering) ...[
+              const SizedBox(width: 10),
+              const SizedBox(
+                width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ],
           ],
         ),
         if (_discoverError != null) ...[
@@ -227,11 +220,11 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
           _infoChip(Icons.warning_amber, _discoverError!, Colors.orange),
         ],
         const SizedBox(height: 8),
-        if (_repoConfigs.isEmpty)
+        if (_repoConfigs.isEmpty && !_discovering)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 8),
             child: Text(
-              'Pulsa "Descubrir repos" para cargar tus repositorios de GitHub.',
+              'No se encontraron PRs activas asignadas a ti.',
               style: TextStyle(color: Colors.grey),
             ),
           )
