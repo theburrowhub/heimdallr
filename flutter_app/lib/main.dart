@@ -49,13 +49,25 @@ void main() async {
 
 Future<void> _setupWindow() async {
   await windowManager.ensureInitialized();
+
   const options = WindowOptions(
     size: Size(1200, 720),
     minimumSize: Size(900, 520),
     title: 'Heimdallr',
     titleBarStyle: TitleBarStyle.normal,
   );
-  await windowManager.waitUntilReadyToShow(options, () async {
+
+  // waitUntilReadyToShow may not fire in production bundles launched
+  // outside of 'flutter run'. We call show() directly and also hook
+  // the callback as a belt-and-suspenders measure.
+  await windowManager.setSize(const Size(1200, 720));
+  await windowManager.setMinimumSize(const Size(900, 520));
+  await windowManager.setTitle('Heimdallr');
+  await windowManager.show();
+  await windowManager.focus();
+
+  // Also register the callback in case the above calls happen too early
+  windowManager.waitUntilReadyToShow(options, () async {
     await windowManager.show();
     await windowManager.focus();
   });
