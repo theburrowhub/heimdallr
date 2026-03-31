@@ -17,7 +17,11 @@ void main() {
   });
 
   testWidgets('ConfigScreen shows current poll interval', (tester) async {
-    final config = AppConfig(pollInterval: '5m', aiPrimary: 'claude', repositories: ['org/repo']);
+    final config = AppConfig(
+      pollInterval: '5m',
+      aiPrimary: 'claude',
+      repoConfigs: {'org/repo': const RepoConfig(monitored: true)},
+    );
 
     final mockApi = MockApiClient();
     when(() => mockApi.fetchConfig()).thenAnswer((_) async => config.toJson());
