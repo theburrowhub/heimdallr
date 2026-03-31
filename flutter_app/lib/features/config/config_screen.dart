@@ -48,24 +48,33 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
   }
 
   Future<void> _detectToken() async {
-    final token = await FirstRunSetup.detectToken();
+    // 1. Try gh CLI first — if it works, show the chip (no manual entry needed)
+    final ghToken = await _getGhCliToken();
     if (!mounted) return;
-    if (token != null) {
+    if (ghToken != null) {
       setState(() {
-        _tokenController.text = token;
-        _tokenFromGh = token.isNotEmpty && _tokenController.text == token;
+        _tokenController.text = ghToken;
+        _tokenFromGh = true;
       });
-      // Check if it came from gh CLI specifically
-      final ghToken = await _ghToken();
-      if (!mounted) return;
-      setState(() => _tokenFromGh = ghToken == token);
+      return;
     }
+
+    // 2. Fall back to Keychain / GITHUB_TOKEN env var
+    final stored = await FirstRunSetup.getToken()
+        ?? Platform.environment['GITHUB_TOKEN'];
+    if (!mounted || stored == null || stored.isEmpty) return;
+    setState(() => _tokenController.text = stored);
   }
 
-  Future<String?> _ghToken() async {
+  Future<String?> _getGhCliToken() async {
     try {
-      final r = await Process.run('gh', ['auth', 'token']);
-      if (r.exitCode == 0) return (r.stdout as String).trim();
+      final which = await Process.run('which', ['gh']);
+      if (which.exitCode != 0) return null;
+      final result = await Process.run('gh', ['auth', 'token']);
+      if (result.exitCode == 0) {
+        final t = (result.stdout as String).trim();
+        return t.isEmpty ? null : t;
+      }
     } catch (_) {}
     return null;
   }
