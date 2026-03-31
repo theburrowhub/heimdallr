@@ -44,8 +44,9 @@ func TestDetect_Fallback(t *testing.T) {
 }
 
 func TestDetect_NoneAvailable(t *testing.T) {
+	oldPath := os.Getenv("PATH")
 	os.Setenv("PATH", "")
-	defer os.Setenv("PATH", "/usr/bin:/bin")
+	defer os.Setenv("PATH", oldPath)
 
 	e := executor.New()
 	_, err := e.Detect("nonexistent", "also_nonexistent")

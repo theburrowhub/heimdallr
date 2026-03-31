@@ -56,7 +56,15 @@ func (e *Executor) Execute(cli, prompt string) (*ReviewResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), executionTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, cli, "-p", "-")
+	var cmd *exec.Cmd
+	switch cli {
+	case "codex":
+		// codex reads prompt from stdin without extra flags
+		cmd = exec.CommandContext(ctx, cli)
+	default:
+		// claude and gemini both support -p - (stdin mode)
+		cmd = exec.CommandContext(ctx, cli, "-p", "-")
+	}
 	cmd.Stdin = strings.NewReader(prompt)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

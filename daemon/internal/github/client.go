@@ -51,8 +51,13 @@ func (c *Client) do(method, path string, accept string) (*http.Response, error) 
 // review-requested, or has authored PRs in the given repositories.
 func (c *Client) FetchPRs(repos []string) ([]*PullRequest, error) {
 	repoQuery := "repo:" + strings.Join(repos, " repo:")
-	q := url.QueryEscape(fmt.Sprintf("is:pr is:open (%s) (review-requested:@me OR assignee:@me OR author:@me)", repoQuery))
-	resp, err := c.do("GET", "/search/issues?q="+q+"&per_page=100", "application/vnd.github+json")
+	query := fmt.Sprintf("is:pr is:open (%s) (review-requested:@me OR assignee:@me OR author:@me)", repoQuery)
+
+	params := url.Values{}
+	params.Set("q", query)
+	params.Set("per_page", "100")
+
+	resp, err := c.do("GET", "/search/issues?"+params.Encode(), "application/vnd.github+json")
 	if err != nil {
 		return nil, fmt.Errorf("github: search PRs: %w", err)
 	}
