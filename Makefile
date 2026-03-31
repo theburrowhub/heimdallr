@@ -19,24 +19,15 @@ test:
 
 # ── Local development ────────────────────────────────────────────────────────
 #
-# make dev        — flujo completo: compila daemon, lo arranca en background
-#                   e inicia la app Flutter lista para probar.
+# make dev  — compila el daemon y lanza la app Flutter.
+#             La app detecta las credenciales (gh auth token / Keychain),
+#             escribe la config y arranca el daemon sola.
+#             Solo muestra Settings si no hay ningún token disponible.
 #
-#                   Si es la primera vez: la app mostrará la pantalla de
-#                   configuración donde introduces el token y los repos.
-#                   Al pulsar "Guardar e iniciar Heimdallr" el daemon arrancará
-#                   con la config generada.
-#
-#                   Si ya tienes config en ~/.config/heimdallr/config.toml:
-#                   el daemon arranca solo y la app abre directamente el dashboard.
-#
-# make dev-daemon — arranca solo el daemon (sin la app Flutter)
+# make dev-daemon — arranca solo el daemon (para debugging de la API)
 # make dev-stop   — para el daemon
 
 dev: build-daemon dev-stop
-	@echo "▶  Arrancando daemon en background..."
-	@GITHUB_TOKEN="$${GITHUB_TOKEN}" $(DAEMON_BIN) &
-	@sleep 0.5
 	@echo "▶  Lanzando Heimdallr..."
 	cd flutter_app && HEIMDALLR_DAEMON_PATH=$(DAEMON_BIN) flutter run -d macos
 
