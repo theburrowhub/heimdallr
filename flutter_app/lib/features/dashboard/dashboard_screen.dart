@@ -60,74 +60,124 @@ class DashboardScreen extends ConsumerWidget {
         ),
         data: (prs) => prs.isEmpty
             ? const Center(child: Text('No open PRs found'))
-            : _PRTable(prs: prs),
+            : _PRList(prs: prs),
       ),
     );
   }
 }
 
-class _PRTable extends ConsumerWidget {
+class _PRList extends ConsumerWidget {
   final List<PR> prs;
-  const _PRTable({required this.prs});
+  const _PRList({required this.prs});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return SingleChildScrollView(
-      child: DataTable(
-        columnSpacing: 16,
-        columns: const [
-          DataColumn(label: SizedBox(width: 200, child: Text('Repo'))),
-          DataColumn(label: Expanded(child: Text('PR'))),
-          DataColumn(label: SizedBox(width: 100, child: Text('Author'))),
-          DataColumn(label: SizedBox(width: 80, child: Text('Severity'))),
-          DataColumn(label: SizedBox(width: 80, child: Text('Status'))),
-          DataColumn(label: SizedBox(width: 110, child: Text('Actions'))),
-        ],
-        rows: prs.map((pr) => DataRow(
-          cells: [
-            DataCell(SizedBox(
-              width: 200,
-              child: Text(pr.repo,
-                overflow: TextOverflow.ellipsis, maxLines: 1),
-            )),
-            DataCell(
-              SizedBox(
-                width: double.infinity,
-                child: TextButton(
-                  style: TextButton.styleFrom(alignment: Alignment.centerLeft),
-                  onPressed: () => context.push('/prs/${pr.id}'), // push = back button appears
-                  child: Text(
-                    '#${pr.number} ${pr.title}',
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      itemCount: prs.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 4),
+      itemBuilder: (_, i) => _PRTile(pr: prs[i], ref: ref),
+    );
+  }
+}
+
+class _PRTile extends StatelessWidget {
+  final PR pr;
+  final WidgetRef ref;
+  const _PRTile({required this.pr, required this.ref});
+
+  @override
+  Widget build(BuildContext context) {
+    final reviewed = pr.latestReview != null;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => context.push('/prs/${pr.id}'),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              // Severity strip
+              Container(
+                width: 4, height: 48,
+                margin: const EdgeInsets.only(right: 12),
+                decoration: BoxDecoration(
+                  color: reviewed
+                      ? _severityColor(pr.latestReview!.severity)
+                      : Colors.grey.shade600,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+
+              // Title + meta
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      pr.title,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${pr.repo} · #${pr.number} · ${pr.author}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+
+              // Right: badge + button
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (reviewed)
+                    SeverityBadge(severity: pr.latestReview!.severity)
+                  else
+                    _chip('PENDING', Colors.grey.shade700),
+                  const SizedBox(height: 6),
+                  SizedBox(
+                    height: 28,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        textStyle: const TextStyle(fontSize: 12),
+                      ),
+                      onPressed: () async {
+                        final api = ref.read(apiClientProvider);
+                        await api.triggerReview(pr.id);
+                      },
+                      child: const Text('Review'),
+                    ),
                   ),
-                ),
+                ],
               ),
-            ),
-            DataCell(SizedBox(
-              width: 100,
-              child: Text(pr.author, overflow: TextOverflow.ellipsis, maxLines: 1),
-            )),
-            DataCell(pr.latestReview != null
-                ? SeverityBadge(severity: pr.latestReview!.severity)
-                : const Text('—')),
-            DataCell(Text(pr.latestReview != null ? 'Reviewed' : 'Pending')),
-            DataCell(
-              SizedBox(
-                width: 110,
-                child: ElevatedButton(
-                  onPressed: () async {
-                    final api = ref.read(apiClientProvider);
-                    await api.triggerReview(pr.id);
-                    ref.invalidate(prsProvider);
-                  },
-                  child: const Text('Review Now'),
-                ),
-              ),
-            ),
-          ],
-        )).toList(),
+            ],
+          ),
+        ),
       ),
     );
+  }
+
+  Widget _chip(String label, Color color) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
+    child: Text(label, style: const TextStyle(
+        color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+  );
+
+  Color _severityColor(String s) {
+    switch (s.toLowerCase()) {
+      case 'high': return Colors.red.shade700;
+      case 'medium': return Colors.orange.shade700;
+      default: return Colors.green.shade700;
+    }
   }
 }

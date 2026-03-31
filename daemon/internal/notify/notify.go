@@ -1,22 +1,14 @@
 package notify
 
-import (
-	"fmt"
-	"log/slog"
-	"os/exec"
-)
+import "log/slog"
 
 type Notifier struct{}
 
-func New() *Notifier {
-	return &Notifier{}
-}
+func New() *Notifier { return &Notifier{} }
 
-// Notify displays a macOS notification using osascript.
-// Silently logs errors — notifications are best-effort.
+// Notify logs the notification. OS-level notifications are handled by the
+// Flutter app via SSE events so the daemon never calls osascript directly
+// (osascript associates notifications with Script Editor, not Heimdallr).
 func (n *Notifier) Notify(title, message string) {
-	script := fmt.Sprintf(`display notification %q with title %q`, message, title)
-	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
-		slog.Debug("notify: osascript failed", "err", err)
-	}
+	slog.Info("notify", "title", title, "message", message)
 }

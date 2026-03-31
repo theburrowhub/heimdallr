@@ -151,6 +151,39 @@ func main() {
 		return nil
 	})
 
+	// Wire the trigger-review callback: re-run pipeline on a single stored PR.
+	srv.SetTriggerReviewFn(func(prID int64) error {
+		pr, err := s.GetPR(prID)
+		if err != nil {
+			return fmt.Errorf("trigger review: get pr %d: %w", prID, err)
+		}
+		cfgMu.Lock()
+		aiCfg := cfg.AIForRepo(pr.Repo)
+		cfgMu.Unlock()
+
+		// Construct a minimal github.PullRequest from the stored data
+		ghPR := &gh.PullRequest{
+			ID:      pr.GithubID,
+			Number:  pr.Number,
+			Title:   pr.Title,
+			HTMLURL: pr.URL,
+			State:   pr.State,
+			Repo:    pr.Repo,
+		}
+		ghPR.User.Login = pr.Author
+
+		rev, err := p.Run(ghPR, aiCfg.Primary, aiCfg.Fallback)
+		if err != nil {
+			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_id":%d,"error":%q}`, prID, err.Error())})
+			return err
+		}
+		broker.Publish(sse.Event{Type: sse.EventReviewCompleted, Data: fmt.Sprintf(
+			`{"pr_number":%d,"repo":%q,"pr_id":%d,"severity":%q}`,
+			pr.Number, pr.Repo, prID, rev.Severity,
+		)})
+		return nil
+	})
+
 	// Initial poll
 	go makePollFn(cfg)()
 

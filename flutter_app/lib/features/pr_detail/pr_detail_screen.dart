@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/models/pr.dart';
 import '../../core/models/review.dart';
 import '../../shared/widgets/severity_badge.dart';
@@ -173,7 +174,7 @@ class _PRMetaPanel extends StatelessWidget {
           OutlinedButton.icon(
             icon: const Icon(Icons.open_in_browser),
             label: const Text('Open on GitHub'),
-            onPressed: () {},
+            onPressed: () => launchUrl(Uri.parse(pr.url)),
           ),
         ],
       ),

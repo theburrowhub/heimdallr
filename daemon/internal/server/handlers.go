@@ -22,8 +22,10 @@ type Server struct {
 	router     chi.Router
 	httpServer *http.Server
 	// reloadFn is called when POST /reload is received.
-	// main.go wires this to reload config from disk and restart the scheduler.
 	reloadFn func() error
+	// triggerReviewFn is called when POST /prs/{id}/review is received.
+	// Receives the store PR id. Runs asynchronously.
+	triggerReviewFn func(prID int64) error
 }
 
 // New creates a new Server. p may be nil if the pipeline is not yet configured.
@@ -34,9 +36,10 @@ func New(s *store.Store, broker *sse.Broker, p *pipeline.Pipeline) *Server {
 }
 
 // SetReloadFn wires the config-reload callback called by POST /reload.
-func (srv *Server) SetReloadFn(fn func() error) {
-	srv.reloadFn = fn
-}
+func (srv *Server) SetReloadFn(fn func() error) { srv.reloadFn = fn }
+
+// SetTriggerReviewFn wires the review-trigger callback called by POST /prs/{id}/review.
+func (srv *Server) SetTriggerReviewFn(fn func(prID int64) error) { srv.triggerReviewFn = fn }
 
 // Router returns the underlying http.Handler for use in tests or embedding.
 func (srv *Server) Router() http.Handler {
@@ -118,10 +121,20 @@ func (srv *Server) handleGetPR(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleTriggerReview(w http.ResponseWriter, r *http.Request) {
-	if srv.pipeline == nil {
-		http.Error(w, "pipeline not configured", http.StatusServiceUnavailable)
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
+	if srv.triggerReviewFn == nil {
+		http.Error(w, "review trigger not configured", http.StatusServiceUnavailable)
+		return
+	}
+	go func() {
+		if err := srv.triggerReviewFn(id); err != nil {
+			slog.Error("trigger review failed", "pr_id", id, "err", err)
+		}
+	}()
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "review queued"})
 }
 
