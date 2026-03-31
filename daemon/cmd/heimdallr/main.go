@@ -112,11 +112,12 @@ func main() {
 				}
 				broker.Publish(sse.Event{Type: sse.EventPRDetected, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
 				broker.Publish(sse.Event{Type: sse.EventReviewStarted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
-				if _, err := p.Run(pr, aiCfg.Primary, aiCfg.Fallback); err != nil {
+				if rev, err := p.Run(pr, aiCfg.Primary, aiCfg.Fallback); err != nil {
 					slog.Error("pipeline run failed", "pr", pr.Number, "err", err)
 					broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_number":%d,"error":%q}`, pr.Number, err.Error())})
 				} else {
-					broker.Publish(sse.Event{Type: sse.EventReviewCompleted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
+					// Include pr_id (store ID) so the Flutter app can deep-link to the PR detail
+					broker.Publish(sse.Event{Type: sse.EventReviewCompleted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q,"pr_id":%d,"severity":%q}`, pr.Number, pr.Repo, rev.PRID, rev.Severity)})
 				}
 			}
 		}

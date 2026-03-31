@@ -18,7 +18,7 @@ class DashboardScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () => context.go('/config'),
+            onPressed: () => context.push('/config'),
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -51,7 +51,7 @@ class DashboardScreen extends ConsumerWidget {
                   FilledButton.icon(
                     icon: const Icon(Icons.settings, size: 16),
                     label: const Text('Settings'),
-                    onPressed: () => context.go('/config'),
+                    onPressed: () => context.push('/config'),
                   ),
                 ],
               ),

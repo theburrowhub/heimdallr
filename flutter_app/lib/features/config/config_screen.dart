@@ -110,7 +110,12 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     final daemonRunning = ref.watch(daemonHealthProvider).valueOrNull ?? false;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+        title: const Text('Settings'),
+        leading: context.canPop()
+            ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => context.pop())
+            : null,
+      ),
       body: configAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, __) => _buildForm(context, const AppConfig(), daemonRunning),
@@ -423,7 +428,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
               showToast(context, '${state.error}', isError: true);
             } else {
               ref.invalidate(daemonHealthProvider);
-              context.go('/');
+              context.canPop() ? context.pop() : context.go('/');
             }
           }
         },
