@@ -64,6 +64,7 @@ Future<void> _setupWindow() async {
   await windowManager.setSize(const Size(1200, 720));
   await windowManager.setMinimumSize(const Size(900, 520));
   await windowManager.setTitle('Heimdallr');
+  await windowManager.setPreventClose(true); // hide to tray on ✕, quit via tray menu
   await windowManager.show();
   await windowManager.focus();
 
@@ -111,7 +112,7 @@ class _BootstrapApp extends StatefulWidget {
   State<_BootstrapApp> createState() => _BootstrapAppState();
 }
 
-class _BootstrapAppState extends State<_BootstrapApp> {
+class _BootstrapAppState extends State<_BootstrapApp> with WindowListener {
   String? _destination;
   String _status = 'Starting…';
   String? _errorTitle;   // non-null = show error screen instead of spinner
@@ -121,7 +122,21 @@ class _BootstrapAppState extends State<_BootstrapApp> {
   @override
   void initState() {
     super.initState();
+    windowManager.addListener(this);
     _boot();
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  /// When the user clicks the window's close (✕) button, hide to tray instead
+  /// of quitting. The daemon keeps running. Use "Quit" in the tray menu to exit.
+  @override
+  void onWindowClose() async {
+    await windowManager.hide();
   }
 
   Future<void> _boot() async {

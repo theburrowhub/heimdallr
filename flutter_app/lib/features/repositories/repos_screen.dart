@@ -316,7 +316,12 @@ class _RepoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final subtitle = _buildSubtitle();
+    final overrides = _buildOverrides();
+    final hasDirMapping = config.localDir != null && config.localDir!.isNotEmpty;
+    final dirLabel = hasDirMapping
+        ? config.localDir!.split('/').last
+        : null;
+
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
       child: ExpansionTile(
@@ -329,9 +334,31 @@ class _RepoTile extends StatelessWidget {
               fontWeight: config.monitored ? FontWeight.w600 : FontWeight.normal,
               color: config.monitored ? null : Colors.grey,
             )),
-        subtitle: subtitle != null
-            ? Text(subtitle, style: const TextStyle(fontSize: 12))
-            : null,
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (overrides != null)
+              Text(overrides, style: const TextStyle(fontSize: 12)),
+            const SizedBox(height: 2),
+            // Directory mapping — always visible
+            Row(children: [
+              Icon(
+                hasDirMapping ? Icons.folder : Icons.folder_off_outlined,
+                size: 13,
+                color: hasDirMapping ? Colors.green.shade500 : Colors.grey.shade600,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                hasDirMapping ? dirLabel! : 'No local dir',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: hasDirMapping ? Colors.green.shade500 : Colors.grey.shade600,
+                  fontStyle: hasDirMapping ? FontStyle.normal : FontStyle.italic,
+                ),
+              ),
+            ]),
+          ],
+        ),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
         children: [
           const Divider(height: 1),
@@ -390,7 +417,7 @@ class _RepoTile extends StatelessWidget {
     );
   }
 
-  String? _buildSubtitle() {
+  String? _buildOverrides() {
     final parts = <String>[];
     if (config.aiPrimary != null) parts.add('AI: ${config.aiPrimary}');
     if (config.promptId != null) {
