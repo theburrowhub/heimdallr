@@ -49,9 +49,12 @@ class _PRDetailScreenState extends ConsumerState<PRDetailScreen> {
       await api.dismissPR(widget.prId);
       ref.invalidate(prsProvider);
       if (context.mounted) {
+        // Capture messenger BEFORE navigating away — after pop the context is invalid
+        final messenger = ScaffoldMessenger.of(context);
         context.canPop() ? context.pop() : context.go('/');
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger.showSnackBar(
           SnackBar(
+            duration: const Duration(seconds: 4),
             content: const Text('PR dismissed'),
             action: SnackBarAction(
               label: 'Undo',

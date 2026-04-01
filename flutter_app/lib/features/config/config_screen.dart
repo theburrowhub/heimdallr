@@ -400,13 +400,16 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
 
   Widget _saveButton(BuildContext context, AppConfig base, bool daemonRunning) {
     final isLoading = ref.watch(configNotifierProvider).isLoading;
-    final updated = _buildConfig(base);
+    // NOTE: _buildConfig is called inside onPressed (not here at build time) so it
+    // always reads the current state at the moment the user taps Save, avoiding
+    // stale closure captures when setState and Save happen in the same frame.
 
     if (daemonRunning) {
       return SizedBox(
         width: double.infinity,
         child: ElevatedButton(
           onPressed: () async {
+            final updated = _buildConfig(base);
             try {
               final token = _tokenController.text.trim();
               if (token.isNotEmpty && !_tokenFromGh) {
@@ -432,6 +435,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
             : const Icon(Icons.rocket_launch),
         label: Text(isLoading ? 'Starting…' : 'Save and start Heimdallr'),
         onPressed: isLoading ? null : () async {
+          final updated = _buildConfig(base);
           final token = _tokenController.text.trim();
           if (!_tokenFromGh && token.isEmpty) {
             showToast(context, 'GitHub token is required', isError: true);
