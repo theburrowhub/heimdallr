@@ -69,19 +69,22 @@ func (c *Client) do(method, path string, accept string) (*http.Response, error) 
 	return c.http.Do(req)
 }
 
-// FetchPRsToReview returns only PRs where the authenticated user is explicitly
-// requested as reviewer. ONLY these should be auto-reviewed by the AI pipeline.
-// This prevents posting reviews on the user's own PRs or PRs they're just assigned to.
-func (c *Client) FetchPRsToReview(repos []string) ([]*PullRequest, error) {
+// FetchPRsToReview returns all open PRs where the authenticated user is explicitly
+// requested as reviewer, across ALL repos (no repo filter in the query).
+//
+// The repo filter is intentionally omitted: adding many `repo:` terms to the
+// GitHub Search API query can exceed its length limit and silently return zero
+// results. Filtering by monitored repos is done in the caller instead.
+func (c *Client) FetchPRsToReview() ([]*PullRequest, error) {
 	username, err := c.AuthenticatedUser()
 	if err != nil {
 		return nil, fmt.Errorf("github: resolve user: %w", err)
 	}
-	prs, err := c.fetchByQualifier(username, "review-requested", repos)
+	prs, err := c.fetchByQualifier(username, "review-requested", nil) // no repo filter
 	if err != nil {
 		return nil, err
 	}
-	slog.Info("github: PRs to review", "count", len(prs))
+	slog.Info("github: PRs to review (all repos)", "count", len(prs))
 	return prs, nil
 }
 

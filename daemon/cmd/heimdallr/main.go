@@ -161,17 +161,27 @@ func main() {
 			repos := c.GitHub.Repositories
 			cfgMu.Unlock()
 
-			// IMPORTANT: only fetch PRs where the user is explicitly requested as reviewer.
-			// Do NOT auto-review author or assignee PRs — that posts reviews to wrong PRs.
-			prs, err := ghClient.FetchPRsToReview(repos)
+			// Fetch all review-requested PRs without a repo filter — adding many
+			// repo: terms to the Search API query can exceed its length limit and
+			// silently return zero results. We filter to monitored repos below.
+			prs, err := ghClient.FetchPRsToReview()
 			if err != nil {
 				slog.Error("poll: fetch PRs to review", "err", err)
 				return
+			}
+			// Build a quick lookup set for monitored repos.
+			monitoredSet := make(map[string]struct{}, len(repos))
+			for _, r := range repos {
+				monitoredSet[r] = struct{}{}
 			}
 			for _, pr := range prs {
 				pr.ResolveRepo()
 				if pr.Repo == "" {
 					slog.Warn("poll: skipping PR with empty repo", "pr_number", pr.Number)
+					continue
+				}
+				// Only auto-review PRs from repos the user has opted in to monitor.
+				if _, monitored := monitoredSet[pr.Repo]; !monitored {
 					continue
 				}
 				cfgMu.Lock()
