@@ -25,6 +25,10 @@ type ServerConfig struct {
 type GitHubConfig struct {
 	PollInterval string   `toml:"poll_interval"`
 	Repositories []string `toml:"repositories"`
+	// NonMonitored tracks repos the user knows about but has disabled auto-review for.
+	// The daemon never polls these; they are stored here only so the Flutter UI can
+	// remember and display them after a restart.
+	NonMonitored []string `toml:"non_monitored"`
 }
 
 type AIConfig struct {

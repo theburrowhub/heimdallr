@@ -168,6 +168,15 @@ class FirstRunSetup {
     buf.writeln('poll_interval = "${config.pollInterval}"');
     final repos = config.repositories.map((r) => '"$r"').join(', ');
     buf.writeln('repositories = [$repos]');
+    // Persist non-monitored repos so the UI can display and re-enable them after restart.
+    final nonMonitored = config.repoConfigs.entries
+        .where((e) => !e.value.monitored)
+        .map((e) => e.key)
+        .toList()..sort();
+    if (nonMonitored.isNotEmpty) {
+      final nonMon = nonMonitored.map((r) => '"$r"').join(', ');
+      buf.writeln('non_monitored = [$nonMon]');
+    }
     buf.writeln();
 
     buf.writeln('[ai]');

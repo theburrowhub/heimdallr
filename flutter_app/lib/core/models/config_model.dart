@@ -108,6 +108,11 @@ class AppConfig {
     final configs = <String, RepoConfig>{
       for (final r in repos) r: const RepoConfig(monitored: true),
     };
+    // Restore non-monitored repos so the UI can display and re-enable them.
+    final nonMonitored = (json['non_monitored'] as List<dynamic>?)?.cast<String>() ?? [];
+    for (final r in nonMonitored) {
+      configs.putIfAbsent(r, () => const RepoConfig(monitored: false));
+    }
     // Apply per-repo overrides from repo_overrides field.
     // Normalize empty strings to null — Go zero-value strings arrive as ""
     // and would break DropdownButtonFormField (value not in items list).
@@ -115,8 +120,9 @@ class AppConfig {
     if (overrides != null) {
       for (final entry in overrides.entries) {
         final ov = entry.value as Map<String, dynamic>;
+        final existing = configs[entry.key];
         configs[entry.key] = RepoConfig(
-          monitored: configs.containsKey(entry.key),
+          monitored: existing?.monitored ?? configs.containsKey(entry.key),
           aiPrimary:   _nonEmpty(ov['primary']),
           aiFallback:  _nonEmpty(ov['fallback']),
           reviewMode:  _nonEmpty(ov['review_mode']),

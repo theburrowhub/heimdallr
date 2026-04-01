@@ -195,6 +195,7 @@ func main() {
 			"server_port":    c.Server.Port,
 			"poll_interval":  c.GitHub.PollInterval,
 			"repositories":   c.GitHub.Repositories,
+			"non_monitored":  c.GitHub.NonMonitored,
 			"ai_primary":     c.AI.Primary,
 			"ai_fallback":    c.AI.Fallback,
 			"review_mode":    c.AI.ReviewMode,

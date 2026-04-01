@@ -138,9 +138,9 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
   }
 }
 
-// ── List with section headers ──────────────────────────────────────────────
+// ── List with section headers + org grouping ───────────────────────────────
 
-class _RepoListWithSections extends ConsumerWidget {
+class _RepoListWithSections extends ConsumerStatefulWidget {
   final List<String> repos;
   final Map<String, RepoConfig> configs;
   final void Function(String repo, RepoConfig rc) onChanged;
@@ -152,50 +152,148 @@ class _RepoListWithSections extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_RepoListWithSections> createState() =>
+      _RepoListWithSectionsState();
+}
+
+class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
+  // Collapse state per "section:org" key — default expanded
+  final _expanded = <String, bool>{};
+
+  bool _isExpanded(String key) => _expanded[key] ?? true;
+
+  void _toggle(String key) =>
+      setState(() => _expanded[key] = !_isExpanded(key));
+
+  /// Groups repos by the org part ("org" in "org/repo") and sorts within each org.
+  Map<String, List<String>> _groupByOrg(List<String> repos) {
+    final groups = <String, List<String>>{};
+    for (final r in repos) {
+      final org = r.contains('/') ? r.split('/').first : r;
+      groups.putIfAbsent(org, () => []).add(r);
+    }
+    // Sort repos within each org alphabetically
+    for (final list in groups.values) {
+      list.sort();
+    }
+    // Return sorted by org name
+    return Map.fromEntries(
+        groups.entries.toList()..sort((a, b) => a.key.compareTo(b.key)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final prompts = ref.watch(agentsProvider).valueOrNull ?? [];
-    final monitored = repos.where((r) => configs[r]!.monitored).toList();
-    final disabled  = repos.where((r) => !configs[r]!.monitored).toList();
+    final monitored =
+        widget.repos.where((r) => widget.configs[r]!.monitored).toList();
+    final disabled =
+        widget.repos.where((r) => !widget.configs[r]!.monitored).toList();
 
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 4),
       children: [
         if (monitored.isNotEmpty) ...[
-          _header(context, 'Monitored — auto-review enabled', monitored.length,
-              Colors.green.shade700),
-          ...monitored.map((r) => _RepoTile(
-            repo: r,
-            config: configs[r]!,
-            prompts: prompts,
-            onChanged: (rc) => onChanged(r, rc),
-          )),
+          _sectionHeader(
+            context,
+            'Monitored — auto-review enabled',
+            monitored.length,
+            Colors.green.shade700,
+          ),
+          ..._buildOrgGroups('monitored', monitored, prompts),
         ],
-        if (disabled.isNotEmpty) ...[
-          _header(context, 'Watching — PRs visible, no auto-review', disabled.length,
-              Colors.grey.shade600),
-          ...disabled.map((r) => _RepoTile(
-            repo: r,
-            config: configs[r]!,
-            prompts: prompts,
-            onChanged: (rc) => onChanged(r, rc),
-          )),
-        ],
+        _sectionHeader(
+          context,
+          'Not monitored — PRs visible, no auto-review',
+          disabled.length,
+          Colors.grey.shade600,
+        ),
+        if (disabled.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: Text(
+              'No repos disabled. Toggle the switch on any repo above to stop auto-reviewing it.',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+            ),
+          )
+        else
+          ..._buildOrgGroups('disabled', disabled, prompts),
       ],
     );
   }
 
-  Widget _header(BuildContext ctx, String label, int count, Color color) {
+  List<Widget> _buildOrgGroups(
+    String section,
+    List<String> repos,
+    List<ReviewPrompt> prompts,
+  ) {
+    final groups = _groupByOrg(repos);
+    final items = <Widget>[];
+    for (final entry in groups.entries) {
+      final org = entry.key;
+      final orgRepos = entry.value;
+      final key = '$section:$org';
+      final expanded = _isExpanded(key);
+
+      items.add(_orgHeader(org, orgRepos.length, expanded, () => _toggle(key)));
+      if (expanded) {
+        for (final r in orgRepos) {
+          items.add(_RepoTile(
+            repo: r,
+            config: widget.configs[r]!,
+            prompts: prompts,
+            onChanged: (rc) => widget.onChanged(r, rc),
+          ));
+        }
+      }
+    }
+    return items;
+  }
+
+  Widget _sectionHeader(
+      BuildContext ctx, String label, int count, Color color) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
       child: Row(children: [
-        Container(width: 8, height: 8,
+        Container(
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
         const SizedBox(width: 6),
-        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade400,
-            fontWeight: FontWeight.w500)),
+        Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade400,
+                fontWeight: FontWeight.w600)),
         const SizedBox(width: 6),
-        Text('$count', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+        Text('$count',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
       ]),
+    );
+  }
+
+  Widget _orgHeader(
+      String org, int count, bool expanded, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 6, 16, 2),
+        child: Row(children: [
+          Icon(
+            expanded ? Icons.expand_less : Icons.expand_more,
+            size: 16,
+            color: Colors.grey.shade500,
+          ),
+          const SizedBox(width: 4),
+          Text(org,
+              style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey.shade400,
+                  fontWeight: FontWeight.w500)),
+          const SizedBox(width: 6),
+          Text('$count',
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+        ]),
+      ),
     );
   }
 }
