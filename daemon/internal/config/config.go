@@ -28,17 +28,19 @@ type GitHubConfig struct {
 }
 
 type AIConfig struct {
-	Primary  string            `toml:"primary"`
-	Fallback string            `toml:"fallback"`
-	Repos    map[string]RepoAI `toml:"repos"`
+	Primary    string            `toml:"primary"`
+	Fallback   string            `toml:"fallback"`
+	ReviewMode string            `toml:"review_mode"` // "single" | "multi"
+	Repos      map[string]RepoAI `toml:"repos"`
 }
 
 type RepoAI struct {
 	Primary  string `toml:"primary"`
 	// Prompt is the ID of a review prompt profile to use for this repo.
 	// Overrides the globally active default prompt.
-	Prompt   string `toml:"prompt"`
-	Fallback string `toml:"fallback"`
+	Prompt     string `toml:"prompt"`
+	Fallback   string `toml:"fallback"`
+	ReviewMode string `toml:"review_mode"` // "" = inherit global
 }
 
 type RetentionConfig struct {
@@ -55,10 +57,13 @@ func (c *Config) AIForRepo(repo string) RepoAI {
 			if r.Fallback == "" {
 				r.Fallback = c.AI.Fallback
 			}
+			if r.ReviewMode == "" {
+				r.ReviewMode = c.AI.ReviewMode
+			}
 			return r
 		}
 	}
-	return RepoAI{Primary: c.AI.Primary, Fallback: c.AI.Fallback}
+	return RepoAI{Primary: c.AI.Primary, Fallback: c.AI.Fallback, ReviewMode: c.AI.ReviewMode}
 }
 
 func (c *Config) applyDefaults() {
@@ -70,6 +75,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Retention.MaxDays == 0 {
 		c.Retention.MaxDays = 90
+	}
+	if c.AI.ReviewMode == "" {
+		c.AI.ReviewMode = "single"
 	}
 }
 

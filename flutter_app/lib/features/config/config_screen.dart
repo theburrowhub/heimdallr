@@ -27,6 +27,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
   String _pollInterval = '5m';
   String _aiPrimary = 'claude';
   String _aiFallback = '';
+  String _reviewMode = 'single';
   int _retentionDays = 90;
 
   // All known repos. Key = "org/repo", Value = per-repo settings.
@@ -75,6 +76,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     _pollInterval = config.pollInterval;
     _aiPrimary = config.aiPrimary;
     _aiFallback = config.aiFallback;
+    _reviewMode = config.reviewMode;
     _retentionDays = config.retentionDays;
     _repoConfigs = Map.from(config.repoConfigs);
   }
@@ -355,6 +357,21 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
           ],
           onChanged: (v) => setState(() => _aiFallback = v ?? ''),
         ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          // ignore: deprecated_member_use
+          value: _reviewMode,
+          decoration: const InputDecoration(
+            labelText: 'Review feedback mode',
+            helperText: 'Single: one review · Multi: one comment per issue + summary',
+            border: OutlineInputBorder(),
+          ),
+          items: const [
+            DropdownMenuItem(value: 'single', child: Text('Single (consolidated review)')),
+            DropdownMenuItem(value: 'multi',  child: Text('Multi (one comment per issue)')),
+          ],
+          onChanged: (v) => setState(() => _reviewMode = v!),
+        ),
       ],
     );
   }
@@ -443,6 +460,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     pollInterval: _pollInterval,
     aiPrimary: _aiPrimary,
     aiFallback: _aiFallback,
+    reviewMode: _reviewMode,
     retentionDays: _retentionDays,
     repoConfigs: Map.from(_repoConfigs),
   );

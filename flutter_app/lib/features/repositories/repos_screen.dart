@@ -254,6 +254,24 @@ class _RepoTile extends StatelessWidget {
               style: TextStyle(fontSize: 12, color: Colors.grey)),
           const SizedBox(height: 8),
           _promptDropdown(),
+          const SizedBox(height: 12),
+          // Review mode override
+          const Text('Feedback mode',
+              style: TextStyle(fontSize: 12, color: Colors.grey)),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String?>(
+            // ignore: deprecated_member_use
+            value: config.reviewMode,
+            decoration: const InputDecoration(
+                labelText: 'Override mode',
+                border: OutlineInputBorder(), isDense: true),
+            items: const [
+              DropdownMenuItem<String?>(value: null,       child: Text('Global')),
+              DropdownMenuItem<String?>(value: 'single',   child: Text('Single (consolidated review)')),
+              DropdownMenuItem<String?>(value: 'multi',    child: Text('Multi (one comment per issue)')),
+            ],
+            onChanged: (v) => onChanged(config.copyWith(reviewMode: v)),
+          ),
         ],
       ),
     );
@@ -266,6 +284,7 @@ class _RepoTile extends StatelessWidget {
       final p = prompts.where((p) => p.id == config.promptId).firstOrNull;
       parts.add('Prompt: ${p?.name ?? config.promptId}');
     }
+    if (config.reviewMode != null) parts.add('Mode: ${config.reviewMode}');
     return parts.isEmpty ? null : parts.join(' · ');
   }
 

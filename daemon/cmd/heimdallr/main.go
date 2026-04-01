@@ -111,7 +111,7 @@ func main() {
 
 		broker.Publish(sse.Event{Type: sse.EventPRDetected, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
 		broker.Publish(sse.Event{Type: sse.EventReviewStarted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
-		rev, err := p.Run(pr, aiCfg.Primary, aiCfg.Fallback, aiCfg.Prompt)
+		rev, err := p.Run(pr, aiCfg.Primary, aiCfg.Fallback, aiCfg.Prompt, aiCfg.ReviewMode)
 		if err != nil {
 			slog.Error("pipeline run failed", "repo", pr.Repo, "pr", pr.Number, "err", err)
 			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q,"error":%q}`, pr.Number, pr.Repo, err.Error())})
@@ -182,8 +182,9 @@ func main() {
 		repoOverrides := make(map[string]map[string]string)
 		for repo, ai := range c.AI.Repos {
 			repoOverrides[repo] = map[string]string{
-				"primary":  ai.Primary,
-				"fallback": ai.Fallback,
+				"primary":     ai.Primary,
+				"fallback":    ai.Fallback,
+				"review_mode": ai.ReviewMode,
 			}
 		}
 		return map[string]any{
@@ -192,6 +193,7 @@ func main() {
 			"repositories":   c.GitHub.Repositories,
 			"ai_primary":     c.AI.Primary,
 			"ai_fallback":    c.AI.Fallback,
+			"review_mode":    c.AI.ReviewMode,
 			"retention_days": c.Retention.MaxDays,
 			"repo_overrides": repoOverrides,
 		}
@@ -270,7 +272,7 @@ func main() {
 			reviewMu.Unlock()
 		}()
 
-		rev, err := p.Run(ghPR, aiCfg.Primary, aiCfg.Fallback, aiCfg.Prompt)
+		rev, err := p.Run(ghPR, aiCfg.Primary, aiCfg.Fallback, aiCfg.Prompt, aiCfg.ReviewMode)
 		if err != nil {
 			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_id":%d,"error":%q}`, prID, err.Error())})
 			return err

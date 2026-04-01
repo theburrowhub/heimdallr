@@ -23,6 +23,10 @@ func (f *fakeGH) SubmitReview(repo string, number int, body, event string) (int6
 	return 12345, nil // fake GitHub review ID
 }
 
+func (f *fakeGH) PostComment(repo string, number int, body string) error {
+	return nil
+}
+
 type fakeExec struct{}
 
 func (f *fakeExec) Detect(primary, fallback string) (string, error) {
@@ -62,7 +66,7 @@ func TestPipeline_Run(t *testing.T) {
 		UpdatedAt: time.Now(), HTMLURL: "https://github.com/org/repo/pull/1",
 	}
 
-	rev, err := p.Run(pr, "claude", "gemini", "")
+	rev, err := p.Run(pr, "claude", "gemini", "", "single")
 	if err != nil {
 		t.Fatalf("pipeline run: %v", err)
 	}

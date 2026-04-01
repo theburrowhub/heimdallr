@@ -1,30 +1,35 @@
 /// Per-repo AI override. null fields mean "use global default".
 class RepoConfig {
   final bool monitored;
-  final String? aiPrimary;  // null = use global
-  final String? aiFallback; // null = use global
-  final String? promptId;   // null = use globally active prompt
+  final String? aiPrimary;   // null = use global
+  final String? aiFallback;  // null = use global
+  final String? promptId;    // null = use globally active prompt
+  final String? reviewMode;  // null = use global ("single" | "multi")
 
   const RepoConfig({
     this.monitored = true,
     this.aiPrimary,
     this.aiFallback,
     this.promptId,
+    this.reviewMode,
   });
 
-  bool get hasAiOverride => aiPrimary != null || aiFallback != null || promptId != null;
+  bool get hasAiOverride =>
+      aiPrimary != null || aiFallback != null || promptId != null || reviewMode != null;
 
   RepoConfig copyWith({
     bool? monitored,
     Object? aiPrimary = _sentinel,
     Object? aiFallback = _sentinel,
     Object? promptId = _sentinel,
+    Object? reviewMode = _sentinel,
   }) {
     return RepoConfig(
       monitored: monitored ?? this.monitored,
       aiPrimary: aiPrimary == _sentinel ? this.aiPrimary : aiPrimary as String?,
       aiFallback: aiFallback == _sentinel ? this.aiFallback : aiFallback as String?,
       promptId: promptId == _sentinel ? this.promptId : promptId as String?,
+      reviewMode: reviewMode == _sentinel ? this.reviewMode : reviewMode as String?,
     );
   }
 }
@@ -36,6 +41,7 @@ class AppConfig {
   final String pollInterval;
   final String aiPrimary;
   final String aiFallback;
+  final String reviewMode; // "single" | "multi"
   final int retentionDays;
 
   /// All known repos and their per-repo settings.
@@ -47,6 +53,7 @@ class AppConfig {
     this.pollInterval = '5m',
     this.aiPrimary = 'claude',
     this.aiFallback = '',
+    this.reviewMode = 'single',
     this.retentionDays = 90,
     this.repoConfigs = const {},
   });
@@ -63,6 +70,7 @@ class AppConfig {
     String? pollInterval,
     String? aiPrimary,
     String? aiFallback,
+    String? reviewMode,
     int? retentionDays,
     Map<String, RepoConfig>? repoConfigs,
   }) {
@@ -71,6 +79,7 @@ class AppConfig {
       pollInterval: pollInterval ?? this.pollInterval,
       aiPrimary: aiPrimary ?? this.aiPrimary,
       aiFallback: aiFallback ?? this.aiFallback,
+      reviewMode: reviewMode ?? this.reviewMode,
       retentionDays: retentionDays ?? this.retentionDays,
       repoConfigs: repoConfigs ?? this.repoConfigs,
     );
@@ -82,6 +91,7 @@ class AppConfig {
     'repositories': repositories,
     'ai_primary': aiPrimary,
     'ai_fallback': aiFallback,
+    'review_mode': reviewMode,
     'retention_days': retentionDays,
   };
 
@@ -91,7 +101,7 @@ class AppConfig {
     final configs = <String, RepoConfig>{
       for (final r in repos) r: const RepoConfig(monitored: true),
     };
-    // Apply per-repo AI overrides from repo_overrides field
+    // Apply per-repo overrides from repo_overrides field
     final overrides = json['repo_overrides'] as Map<String, dynamic>?;
     if (overrides != null) {
       for (final entry in overrides.entries) {
@@ -100,6 +110,7 @@ class AppConfig {
           monitored: configs.containsKey(entry.key),
           aiPrimary: ov['primary'] as String?,
           aiFallback: ov['fallback'] as String?,
+          reviewMode: ov['review_mode'] as String?,
         );
       }
     }
@@ -108,6 +119,7 @@ class AppConfig {
       pollInterval: (json['poll_interval'] as String?) ?? '5m',
       aiPrimary: (json['ai_primary'] as String?) ?? 'claude',
       aiFallback: (json['ai_fallback'] as String?) ?? '',
+      reviewMode: (json['review_mode'] as String?) ?? 'single',
       retentionDays: (json['retention_days'] as int?) ?? 90,
       repoConfigs: configs,
     );

@@ -182,6 +182,32 @@ func (c *Client) SubmitReview(repo string, number int, body, event string) (int6
 	return result.ID, nil
 }
 
+// PostComment posts a general comment on a PR (issue comment).
+// Used in multi-feedback mode to post one comment per issue before the formal review.
+func (c *Client) PostComment(repo string, number int, body string) error {
+	path := fmt.Sprintf("/repos/%s/issues/%d/comments", repo, number)
+	payload := map[string]any{"body": body}
+	data, _ := json.Marshal(payload)
+	req, err := http.NewRequest("POST", c.baseURL+path, strings.NewReader(string(data)))
+	if err != nil {
+		return fmt.Errorf("github: post comment: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("github: post comment: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("github: post comment: status %d: %s", resp.StatusCode, respBody)
+	}
+	return nil
+}
+
 // FetchDiff returns the unified diff for a PR.
 func (c *Client) FetchDiff(repo string, number int) (string, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)

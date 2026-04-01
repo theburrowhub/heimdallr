@@ -28,9 +28,11 @@ type Notifier interface {
 	Notify(title, message string)
 }
 
-// GitHubReviewer can submit a review to GitHub.
+// GitHubReviewer can submit a review and post issue comments to GitHub.
 type GitHubReviewer interface {
 	SubmitReview(repo string, number int, body, event string) (int64, error)
+	// PostComment posts a general PR comment (used in multi-feedback mode).
+	PostComment(repo string, number int, body string) error
 }
 
 // Pipeline orchestrates the full PR review flow.
@@ -89,9 +91,11 @@ func (p *Pipeline) applyPrompt(promptID string, tmpl *string, flags *string) {
 
 // Run executes the full review pipeline for one PR and publishes the review to GitHub.
 // promptOverride selects a specific review prompt profile (empty = use global default).
+// reviewMode controls feedback style: "multi" posts one comment per issue + a summary review;
+// any other value (including "single" or "") posts a single consolidated review.
 // SQLite is the source of truth: review is stored first, then published.
 // If publishing fails, it is retried on the next call (when GitHubReviewID == 0).
-func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback, promptOverride string) (*store.Review, error) {
+func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback, promptOverride, reviewMode string) (*store.Review, error) {
 	slog.Info("pipeline: starting review", "repo", pr.Repo, "pr", pr.Number)
 
 	// 1. Upsert PR record
@@ -175,9 +179,22 @@ func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback, promptOverride
 	slog.Info("pipeline: review stored locally", "review_id", rev.ID)
 
 	// 8. Publish review to GitHub
+	var reviewBody string
+	if reviewMode == "multi" && len(result.Issues) > 0 {
+		// Post one comment per issue (best-effort — failures are logged but don't abort)
+		for _, issue := range result.Issues {
+			if err := p.gh.PostComment(pr.Repo, pr.Number, buildIssueComment(issue)); err != nil {
+				slog.Warn("pipeline: failed to post issue comment", "pr", pr.Number, "err", err)
+			}
+		}
+		reviewBody = buildMultiSummaryBody(result)
+	} else {
+		reviewBody = buildGitHubBody(result)
+	}
+
 	ghReviewID, publishErr := p.gh.SubmitReview(
 		pr.Repo, pr.Number,
-		buildGitHubBody(result),
+		reviewBody,
 		severityToEvent(result.Severity, len(result.Issues)),
 	)
 	if publishErr != nil {
@@ -230,6 +247,55 @@ func (p *Pipeline) PublishPending() {
 		_ = p.store.UpdateGitHubReviewID(rev.ID, ghID)
 		slog.Info("pipeline: pending review published", "review_id", rev.ID, "github_review_id", ghID)
 	}
+}
+
+// buildIssueComment formats a single issue as a standalone PR comment (multi-feedback mode).
+func buildIssueComment(issue executor.Issue) string {
+	icon := "⚠️"
+	sev := "MEDIUM"
+	switch issue.Severity {
+	case "high":
+		icon = "🔴"
+		sev = "HIGH"
+	case "low":
+		icon = "🟡"
+		sev = "LOW"
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("## %s %s Issue\n\n", icon, sev))
+	sb.WriteString(issue.Description)
+	if issue.File != "" {
+		sb.WriteString("\n\n**Location:** `")
+		sb.WriteString(issue.File)
+		sb.WriteString("`")
+		if issue.Line > 0 {
+			sb.WriteString(fmt.Sprintf(" line %d", issue.Line))
+		}
+	}
+	sb.WriteString("\n\n---\n*Posted by Heimdallr AI Review*")
+	return sb.String()
+}
+
+// buildMultiSummaryBody formats the final summary review body used in multi-feedback mode.
+// Individual issues are already posted as separate comments; this is the formal review summary.
+func buildMultiSummaryBody(r *executor.ReviewResult) string {
+	var sb strings.Builder
+	sb.WriteString("## 🤖 Heimdallr AI Review — Summary\n\n")
+	sb.WriteString(r.Summary)
+	sb.WriteString("\n\n")
+	if len(r.Issues) > 0 {
+		sb.WriteString(fmt.Sprintf("**%d issue(s) found** — see individual comments above for details.\n\n", len(r.Issues)))
+	}
+	if len(r.Suggestions) > 0 {
+		sb.WriteString("### Suggestions\n\n")
+		for _, s := range r.Suggestions {
+			sb.WriteString("- " + s + "\n")
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(fmt.Sprintf("---\n*Severity: **%s** · Reviewed by Heimdallr*",
+		strings.ToUpper(r.Severity)))
+	return sb.String()
 }
 
 // buildGitHubBody formats the AI review as a GitHub-flavored markdown review body.

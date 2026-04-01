@@ -93,9 +93,10 @@ class FirstRunSetup {
     if (config.aiFallback.isNotEmpty) {
       buf.writeln('fallback = "${config.aiFallback}"');
     }
+    buf.writeln('review_mode = "${config.reviewMode}"');
     buf.writeln();
 
-    // Per-repo overrides (AI + prompt)
+    // Per-repo overrides (AI + prompt + review mode)
     for (final entry in config.repoConfigs.entries) {
       final repo = entry.key;
       final rc = entry.value;
@@ -104,6 +105,7 @@ class FirstRunSetup {
         if (rc.aiPrimary != null) buf.writeln('primary = "${rc.aiPrimary}"');
         if (rc.aiFallback != null) buf.writeln('fallback = "${rc.aiFallback}"');
         if (rc.promptId != null) buf.writeln('prompt = "${rc.promptId}"');
+        if (rc.reviewMode != null) buf.writeln('review_mode = "${rc.reviewMode}"');
         buf.writeln();
       }
     }
