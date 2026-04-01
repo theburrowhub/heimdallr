@@ -64,7 +64,6 @@ Future<void> _setupWindow() async {
   await windowManager.setSize(const Size(1200, 720));
   await windowManager.setMinimumSize(const Size(900, 520));
   await windowManager.setTitle('Heimdallr');
-  await windowManager.setPreventClose(true); // hide to tray on ✕, quit via tray menu
   await windowManager.show();
   await windowManager.focus();
 
@@ -123,6 +122,10 @@ class _BootstrapAppState extends State<_BootstrapApp> with WindowListener {
   void initState() {
     super.initState();
     windowManager.addListener(this);
+    // setPreventClose must be called after the first frame so the window is ready.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      windowManager.setPreventClose(true);
+    });
     _boot();
   }
 
@@ -136,7 +139,9 @@ class _BootstrapAppState extends State<_BootstrapApp> with WindowListener {
   /// of quitting. The daemon keeps running. Use "Quit" in the tray menu to exit.
   @override
   void onWindowClose() async {
-    await windowManager.hide();
+    if (await windowManager.isPreventClose()) {
+      await windowManager.hide();
+    }
   }
 
   Future<void> _boot() async {
