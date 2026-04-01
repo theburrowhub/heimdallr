@@ -70,7 +70,12 @@ int _prSortKey(PR p) {
 }
 
 List<PR> _sortedPRs(List<PR> prs) =>
-    [...prs]..sort((a, b) => _prSortKey(a).compareTo(_prSortKey(b)));
+    [...prs]..sort((a, b) {
+      final sev = _prSortKey(a).compareTo(_prSortKey(b));
+      if (sev != 0) return sev;
+      // Within same severity: most recent first
+      return b.updatedAt.compareTo(a.updatedAt);
+    });
 
 class _ReviewsTab extends ConsumerStatefulWidget {
   const _ReviewsTab();
