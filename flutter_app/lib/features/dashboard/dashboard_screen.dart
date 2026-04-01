@@ -59,12 +59,14 @@ class DashboardScreen extends ConsumerWidget {
 
 // ── Reviews tab ──────────────────────────────────────────────────────────────
 
-/// Sort order within a PR section: pending → has issues → resolved
+/// Sort order: pending → high → medium → low
 int _prSortKey(PR p) {
   if (p.latestReview == null) return 0;
-  final s = p.latestReview!.severity.toLowerCase();
-  if (s == 'high' || s == 'medium') return 1;
-  return 2;
+  switch (p.latestReview!.severity.toLowerCase()) {
+    case 'high':   return 1;
+    case 'medium': return 2;
+    default:       return 3;
+  }
 }
 
 List<PR> _sortedPRs(List<PR> prs) =>
@@ -110,7 +112,7 @@ class _ReviewsTabState extends ConsumerState<_ReviewsTab> {
                 onToggle: () => setState(() => _reviewsExpanded = !_reviewsExpanded),
               ),
               if (_reviewsExpanded)
-                ...myReviews.map((pr) => _PRTile(pr: pr, ref: ref)),
+                ...myReviews.map((pr) => _PRTile(pr: pr)),
             ],
             if (myPRs.isNotEmpty) ...[
               _CollapseHeader(
@@ -120,7 +122,7 @@ class _ReviewsTabState extends ConsumerState<_ReviewsTab> {
                 onToggle: () => setState(() => _prsExpanded = !_prsExpanded),
               ),
               if (_prsExpanded)
-                ...myPRs.map((pr) => _PRTile(pr: pr, ref: ref)),
+                ...myPRs.map((pr) => _PRTile(pr: pr)),
             ],
           ],
         );
@@ -206,14 +208,57 @@ class _CollapseHeader extends StatelessWidget {
 
 // ── PR Tile ───────────────────────────────────────────────────────────────────
 
-class _PRTile extends StatelessWidget {
+class _PRTile extends ConsumerStatefulWidget {
   final PR pr;
-  final WidgetRef ref;
-  const _PRTile({required this.pr, required this.ref});
+  const _PRTile({required this.pr});
+
+  @override
+  ConsumerState<_PRTile> createState() => _PRTileState();
+}
+
+class _PRTileState extends ConsumerState<_PRTile> {
+  String get _reviewKey => '${widget.pr.repo}:${widget.pr.number}';
+
+  Future<void> _triggerReview() async {
+    // Optimistically mark as reviewing before the SSE event arrives
+    ref.read(reviewingPRsProvider.notifier).update((s) => {...s, _reviewKey});
+    try {
+      await ref.read(apiClientProvider).triggerReview(widget.pr.id);
+    } catch (e) {
+      ref.read(reviewingPRsProvider.notifier).update((s) => s.difference({_reviewKey}));
+      if (mounted) showToast(context, 'Error: $e', isError: true);
+    }
+  }
+
+  Future<void> _dismiss() async {
+    final api = ref.read(apiClientProvider);
+    try {
+      await api.dismissPR(widget.pr.id);
+      ref.invalidate(prsProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          duration: const Duration(seconds: 5),
+          showCloseIcon: true,
+          content: Text('PR #${widget.pr.number} dismissed'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () async {
+              await api.undismissPR(widget.pr.id);
+              ref.invalidate(prsProvider);
+            },
+          ),
+        ));
+      }
+    } catch (e) {
+      if (mounted) showToast(context, 'Error: $e', isError: true);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final pr = widget.pr;
     final reviewed = pr.latestReview != null;
+    final isReviewing = ref.watch(reviewingPRsProvider).contains(_reviewKey);
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
@@ -224,95 +269,80 @@ class _PRTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Row(
             children: [
+              // Severity bar on the left
               Container(
                 width: 4, height: 48,
                 margin: const EdgeInsets.only(right: 12),
                 decoration: BoxDecoration(
-                  color: reviewed
-                      ? _severityColor(pr.latestReview!.severity)
-                      : Colors.grey.shade600,
+                  color: isReviewing
+                      ? Theme.of(context).colorScheme.primary
+                      : reviewed
+                          ? _severityColor(pr.latestReview!.severity)
+                          : Colors.grey.shade600,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
+              // Title + subtitle
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(pr.title,
                         style: const TextStyle(fontWeight: FontWeight.w600),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
                     const SizedBox(height: 4),
                     Text('${pr.repo} · #${pr.number} · ${pr.author}',
                         style: Theme.of(context).textTheme.bodySmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
                   ],
                 ),
               ),
               const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
+              // Trailing: badge/spinner + Review + dismiss — all in one row
+              Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (reviewed)
+                  // Status indicator
+                  if (isReviewing)
+                    SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    )
+                  else if (reviewed)
                     SeverityBadge(severity: pr.latestReview!.severity)
                   else
                     _chip('PENDING', Colors.grey.shade700),
-                  const SizedBox(height: 6),
-                  SizedBox(
-                    height: 28,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          textStyle: const TextStyle(fontSize: 12)),
-                      onPressed: () async {
-                        final api = ref.read(apiClientProvider);
-                        await api.triggerReview(pr.id);
-                      },
-                      child: const Text('Review'),
+                  const SizedBox(width: 8),
+                  // Review button (hidden while reviewing)
+                  if (!isReviewing)
+                    SizedBox(
+                      height: 28,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            textStyle: const TextStyle(fontSize: 12)),
+                        onPressed: _triggerReview,
+                        child: const Text('Review'),
+                      ),
                     ),
+                  // Dismiss
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 14),
+                    tooltip: 'Dismiss PR',
+                    color: Colors.grey.shade600,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _dismiss,
                   ),
                 ],
-              ),
-              const SizedBox(width: 4),
-              IconButton(
-                icon: const Icon(Icons.close, size: 16),
-                tooltip: 'Dismiss PR',
-                color: Colors.grey.shade600,
-                visualDensity: VisualDensity.compact,
-                onPressed: () => _dismiss(context),
               ),
             ],
           ),
         ),
       ),
     );
-  }
-
-  Future<void> _dismiss(BuildContext context) async {
-    final api = ref.read(apiClientProvider);
-    try {
-      await api.dismissPR(pr.id);
-      ref.invalidate(prsProvider);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            showCloseIcon: true,
-            content: Text('PR #${pr.number} dismissed'),
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: () async {
-                await api.undismissPR(pr.id);
-                ref.invalidate(prsProvider);
-              },
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) showToast(context, 'Error: $e', isError: true);
-    }
   }
 
   Widget _chip(String label, Color color) => Container(

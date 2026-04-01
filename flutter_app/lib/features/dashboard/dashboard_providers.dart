@@ -18,6 +18,10 @@ final sseStreamProvider = StreamProvider<SseEvent>((ref) {
   return client.connect();
 });
 
+/// Tracks PRs currently being reviewed, keyed by "repo:prNumber".
+/// Used to show spinners in the tile list and detail view.
+final reviewingPRsProvider = StateProvider<Set<String>>((ref) => const {});
+
 /// Increments only on review_completed — avoids flickering on every SSE event.
 final prListRefreshProvider = StateProvider<int>((ref) {
   ref.listen(sseStreamProvider, (_, next) {
@@ -32,22 +36,37 @@ void _handleSseEvent(Ref ref, SseEvent event) {
     final repo = data['repo'] as String? ?? '';
     final prNumber = (data['pr_number'] as num?)?.toInt();
     final prId = (data['pr_id'] as num?)?.toInt();
+    final key = (repo.isNotEmpty && prNumber != null) ? '$repo:$prNumber' : null;
 
     switch (event.type) {
-      case 'review_completed':
-        final severity = data['severity'] as String? ?? '';
-        sendPRNotification(
-          title: 'Review Complete — $severity',
-          body: '$repo #$prNumber',
-          prId: prId,
-        );
-        ref.read(prListRefreshProvider.notifier).update((s) => s + 1);
       case 'review_started':
-        sendPRNotification(
-          title: 'Review Started',
-          body: '$repo #$prNumber',
-          prId: prId,
-        );
+        if (key != null) {
+          ref.read(reviewingPRsProvider.notifier).update((s) => {...s, key});
+        }
+        sendPRNotification(title: 'Review Started', body: '$repo #$prNumber', prId: prId);
+
+      case 'review_completed':
+        // Remove from in-progress
+        if (key != null) {
+          ref.read(reviewingPRsProvider.notifier).update((s) => s.difference({key}));
+        }
+        final severity = data['severity'] as String? ?? '';
+        sendPRNotification(title: 'Review Complete — $severity', body: '$repo #$prNumber', prId: prId);
+        ref.read(prListRefreshProvider.notifier).update((s) => s + 1);
+
+      case 'review_error':
+        // key may be null for trigger early-fail events (only have pr_id)
+        if (key != null) {
+          ref.read(reviewingPRsProvider.notifier).update((s) => s.difference({key}));
+        } else if (prId != null) {
+          // Look up by store ID from cached PR list
+          final prs = ref.read(prsProvider).valueOrNull ?? [];
+          final pr = prs.where((p) => p.id == prId).firstOrNull;
+          if (pr != null) {
+            final k = '${pr.repo}:${pr.number}';
+            ref.read(reviewingPRsProvider.notifier).update((s) => s.difference({k}));
+          }
+        }
     }
   } catch (_) {}
 }

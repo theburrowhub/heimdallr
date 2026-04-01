@@ -127,6 +127,13 @@ class _PRDetailScreenState extends ConsumerState<PRDetailScreen> {
     final pr = detailData?['pr'] as PR?;
     final repoMissing = pr != null && pr.repo.isEmpty;
 
+    // Derive review key from loaded PR for shared in-progress state
+    final reviewKey = pr != null ? '${pr.repo}:${pr.number}' : null;
+    final isReviewingShared = reviewKey != null &&
+        ref.watch(reviewingPRsProvider).contains(reviewKey);
+    // Combine local trigger state with shared provider
+    final reviewing = _reviewing || isReviewingShared;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('PR Review'),
@@ -134,7 +141,7 @@ class _PRDetailScreenState extends ConsumerState<PRDetailScreen> {
             icon: const Icon(Icons.arrow_back),
             onPressed: () => context.canPop() ? context.pop() : context.go('/')),
         actions: [
-          if (_reviewing)
+          if (reviewing)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
               child: SizedBox(
@@ -164,7 +171,15 @@ class _PRDetailScreenState extends ConsumerState<PRDetailScreen> {
           const SizedBox(width: 12),
         ],
       ),
-      body: detailAsync.when(
+      body: Column(
+        children: [
+          // In-progress banner
+          if (reviewing)
+            LinearProgressIndicator(
+              minHeight: 3,
+              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+            ),
+          Expanded(child: detailAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: $e')),
         data: (data) {
@@ -184,6 +199,8 @@ class _PRDetailScreenState extends ConsumerState<PRDetailScreen> {
             ],
           );
         },
+          )),
+        ],
       ),
     );
   }
