@@ -386,7 +386,7 @@ class _PromptEditorDialogState extends State<_PromptEditorDialog>
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               // Header
               Row(children: [
@@ -406,20 +406,23 @@ class _PromptEditorDialogState extends State<_PromptEditorDialog>
                       labelText: 'Name', border: OutlineInputBorder()),
                 )),
                 const SizedBox(width: 12),
-                DropdownButtonFormField<String>(
-                  // ignore: deprecated_member_use
-                  value: _focus,
-                  decoration: const InputDecoration(
-                      labelText: 'Focus', border: OutlineInputBorder()),
-                  items: const [
-                    DropdownMenuItem(value: 'general',      child: Text('🔍  General')),
-                    DropdownMenuItem(value: 'security',     child: Text('🔒  Security')),
-                    DropdownMenuItem(value: 'performance',  child: Text('⚡  Performance')),
-                    DropdownMenuItem(value: 'architecture', child: Text('🏛️  Architecture')),
-                    DropdownMenuItem(value: 'docs',         child: Text('📝  Docs & Style')),
-                    DropdownMenuItem(value: 'custom',       child: Text('✨  Custom')),
-                  ],
-                  onChanged: (v) => setState(() => _focus = v!),
+                SizedBox(
+                  width: 200,
+                  child: DropdownButtonFormField<String>(
+                    // ignore: deprecated_member_use
+                    value: _focus,
+                    decoration: const InputDecoration(
+                        labelText: 'Focus', border: OutlineInputBorder()),
+                    items: const [
+                      DropdownMenuItem(value: 'general',      child: Text('🔍  General')),
+                      DropdownMenuItem(value: 'security',     child: Text('🔒  Security')),
+                      DropdownMenuItem(value: 'performance',  child: Text('⚡  Performance')),
+                      DropdownMenuItem(value: 'architecture', child: Text('🏛️  Architecture')),
+                      DropdownMenuItem(value: 'docs',         child: Text('📝  Docs & Style')),
+                      DropdownMenuItem(value: 'custom',       child: Text('✨  Custom')),
+                    ],
+                    onChanged: (v) => setState(() => _focus = v!),
+                  ),
                 ),
               ]),
               const SizedBox(height: 12),

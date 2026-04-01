@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/config_model.dart';
@@ -364,11 +365,25 @@ class _RepoTile extends StatelessWidget {
                 labelText: 'Override mode',
                 border: OutlineInputBorder(), isDense: true),
             items: const [
-              DropdownMenuItem<String?>(value: null,       child: Text('Global')),
-              DropdownMenuItem<String?>(value: 'single',   child: Text('Single (consolidated review)')),
-              DropdownMenuItem<String?>(value: 'multi',    child: Text('Multi (one comment per issue)')),
+              DropdownMenuItem<String?>(value: null,     child: Text('Global')),
+              DropdownMenuItem<String?>(value: 'single', child: Text('Single (consolidated review)')),
+              DropdownMenuItem<String?>(value: 'multi',  child: Text('Multi (one comment per issue)')),
             ],
             onChanged: (v) => onChanged(config.copyWith(reviewMode: v)),
+          ),
+          const SizedBox(height: 12),
+          // Local directory for full-repo analysis
+          const Text('Local directory',
+              style: TextStyle(fontSize: 12, color: Colors.grey)),
+          const SizedBox(height: 4),
+          Text(
+            'When set, the AI agent runs inside this directory and can read all project files.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 8),
+          _LocalDirField(
+            value: config.localDir ?? '',
+            onChanged: (dir) => onChanged(config.copyWith(localDir: dir.isEmpty ? null : dir)),
           ),
         ],
       ),
@@ -421,13 +436,90 @@ class _RepoTile extends StatelessWidget {
     );
   }
 
-  String _focusEmoji(String f) {
-    switch (f) {
-      case 'security':     return '🔒';
-      case 'performance':  return '⚡';
-      case 'architecture': return '🏛️';
-      case 'docs':         return '📝';
-      default:             return '🔍';
-    }
+}
+
+// ── Local directory picker ─────────────────────────────────────────────────
+
+class _LocalDirField extends StatefulWidget {
+  final String value;
+  final ValueChanged<String> onChanged;
+  const _LocalDirField({required this.value, required this.onChanged});
+
+  @override
+  State<_LocalDirField> createState() => _LocalDirFieldState();
+}
+
+class _LocalDirFieldState extends State<_LocalDirField> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.value);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pick() async {
+    final dir = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: 'Select local repository directory',
+      lockParentWindow: true,
+    );
+    if (dir == null) return;
+    setState(() => _ctrl.text = dir);
+    widget.onChanged(dir);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Expanded(
+        child: TextFormField(
+          controller: _ctrl,
+          decoration: const InputDecoration(
+            hintText: '/path/to/local/repo',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          onChanged: widget.onChanged,
+        ),
+      ),
+      const SizedBox(width: 8),
+      OutlinedButton.icon(
+        icon: const Icon(Icons.folder_open, size: 16),
+        label: const Text('Browse'),
+        onPressed: _pick,
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        ),
+      ),
+      if (_ctrl.text.isNotEmpty) ...[
+        const SizedBox(width: 4),
+        IconButton(
+          icon: const Icon(Icons.clear, size: 16),
+          tooltip: 'Clear',
+          onPressed: () {
+            setState(() => _ctrl.clear());
+            widget.onChanged('');
+          },
+        ),
+      ],
+    ]);
+  }
+}
+
+// ── (end of _LocalDirField) ────────────────────────────────────────────────
+
+String _focusEmoji(String f) {
+  switch (f) {
+    case 'security':     return '🔒';
+    case 'performance':  return '⚡';
+    case 'architecture': return '🏛️';
+    case 'docs':         return '📝';
+    default:             return '🔍';
   }
 }

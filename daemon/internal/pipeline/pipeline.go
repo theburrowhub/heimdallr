@@ -20,7 +20,7 @@ type DiffFetcher interface {
 // CLIExecutor detects and runs an AI CLI tool.
 type CLIExecutor interface {
 	Detect(primary, fallback string) (string, error)
-	Execute(cli, prompt string) (*executor.ReviewResult, error)
+	Execute(cli, prompt string, opts executor.ExecOptions) (*executor.ReviewResult, error)
 }
 
 // Notifier sends desktop or system notifications.
@@ -54,21 +54,30 @@ func New(s *store.Store, gh interface {
 	return &Pipeline{store: s, gh: gh, executor: exec, notify: n}
 }
 
-// applyPrompt resolves a prompt by ID (or the default if ID is empty) and
-// sets the template and CLI flags accordingly.
-func (p *Pipeline) applyPrompt(promptID string, tmpl *string, flags *string) {
+// applyPrompt resolves a prompt with priority: repoPromptID > agentPromptID > global default.
+func (p *Pipeline) applyPrompt(repoPromptID, agentPromptID string, tmpl *string, flags *string) {
 	agents, err := p.store.ListAgents()
 	if err != nil || len(agents) == 0 {
 		return
 	}
 	var a *store.Agent
-	// Look for specific prompt first, then fall back to default
+	// 1. Repo-level override
 	for _, ag := range agents {
-		if promptID != "" && ag.ID == promptID {
+		if repoPromptID != "" && ag.ID == repoPromptID {
 			a = ag
 			break
 		}
 	}
+	// 2. Agent-level override
+	if a == nil {
+		for _, ag := range agents {
+			if agentPromptID != "" && ag.ID == agentPromptID {
+				a = ag
+				break
+			}
+		}
+	}
+	// 3. Global default
 	if a == nil {
 		for _, ag := range agents {
 			if ag.IsDefault {
@@ -89,13 +98,25 @@ func (p *Pipeline) applyPrompt(promptID string, tmpl *string, flags *string) {
 	*flags = a.CLIFlags
 }
 
+// RunOptions carries per-execution settings derived from global + repo + agent config.
+type RunOptions struct {
+	Primary       string
+	Fallback      string
+	PromptOverride string // repo-level prompt (highest priority)
+	AgentPromptID string  // agent-level prompt (used if no repo-level override)
+	ReviewMode    string
+	ExecOpts      executor.ExecOptions // model, flags, workdir
+}
+
 // Run executes the full review pipeline for one PR and publishes the review to GitHub.
-// promptOverride selects a specific review prompt profile (empty = use global default).
-// reviewMode controls feedback style: "multi" posts one comment per issue + a summary review;
-// any other value (including "single" or "") posts a single consolidated review.
+// Config priority: repo-level > agent-level > global default.
 // SQLite is the source of truth: review is stored first, then published.
 // If publishing fails, it is retried on the next call (when GitHubReviewID == 0).
-func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback, promptOverride, reviewMode string) (*store.Review, error) {
+func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, error) {
+	primary := opts.Primary
+	fallback := opts.Fallback
+	promptOverride := opts.PromptOverride
+	reviewMode := opts.ReviewMode
 	slog.Info("pipeline: starting review", "repo", pr.Repo, "pr", pr.Number)
 
 	// 1. Upsert PR record
@@ -124,10 +145,10 @@ func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback, promptOverride
 	}
 
 	// 3. Build prompt:
-	//    Priority: per-repo prompt override > globally active prompt > built-in default
+	//    Priority: repo override > agent-level prompt > globally active default > built-in default
 	promptTemplate := executor.DefaultTemplate()
 	var cliFlags string
-	p.applyPrompt(promptOverride, &promptTemplate, &cliFlags)
+	p.applyPrompt(promptOverride, opts.AgentPromptID, &promptTemplate, &cliFlags)
 	prompt := executor.BuildPromptFromTemplate(promptTemplate, executor.PRContext{
 		Title:  pr.Title,
 		Number: pr.Number,
@@ -145,8 +166,12 @@ func (p *Pipeline) Run(pr *github.PullRequest, primary, fallback, promptOverride
 	}
 	slog.Info("pipeline: using CLI", "cli", cli)
 
-	// 5. Execute review
-	result, err := p.executor.Execute(cli, prompt)
+	// 5. Execute review (merge cliFlags from prompt into ExecOptions.ExtraFlags)
+	execOpts := opts.ExecOpts
+	if cliFlags != "" && execOpts.ExtraFlags == "" {
+		execOpts.ExtraFlags = cliFlags
+	}
+	result, err := p.executor.Execute(cli, prompt, execOpts)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: execute %s: %w", cli, err)
 	}
@@ -235,6 +260,8 @@ func (p *Pipeline) PublishPending() {
 			Issues:   issues,
 			Severity: rev.Severity,
 		}
+		// PublishPending always uses single-mode body (individual comments were
+		// already posted when the review first ran; we only retry the formal review).
 		ghID, err := p.gh.SubmitReview(
 			pr.Repo, pr.Number,
 			buildGitHubBody(result),

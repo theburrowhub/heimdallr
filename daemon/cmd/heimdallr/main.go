@@ -89,6 +89,30 @@ func main() {
 	var reviewMu sync.Mutex
 	inFlight := make(map[int64]bool)
 
+	buildRunOpts := func(pr *gh.PullRequest, aiCfg config.RepoAI) pipeline.RunOptions {
+		cli := aiCfg.Primary
+		if cli == "" {
+			cli = cfg.AI.Primary
+		}
+		cfgMu.Lock()
+		agentCfg := cfg.AgentConfigFor(cli)
+		cfgMu.Unlock()
+		return pipeline.RunOptions{
+			Primary:        aiCfg.Primary,
+			Fallback:       aiCfg.Fallback,
+			PromptOverride: aiCfg.Prompt,
+			AgentPromptID:  agentCfg.PromptID,
+			ReviewMode:     aiCfg.ReviewMode,
+			ExecOpts: executor.ExecOptions{
+				Model:        agentCfg.Model,
+				MaxTurns:     agentCfg.MaxTurns,
+				ApprovalMode: agentCfg.ApprovalMode,
+				ExtraFlags:   agentCfg.ExtraFlags,
+				WorkDir:      aiCfg.LocalDir,
+			},
+		}
+	}
+
 	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) {
 		// Guard: skip if already being reviewed
 		reviewMu.Lock()
@@ -111,7 +135,7 @@ func main() {
 
 		broker.Publish(sse.Event{Type: sse.EventPRDetected, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
 		broker.Publish(sse.Event{Type: sse.EventReviewStarted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
-		rev, err := p.Run(pr, aiCfg.Primary, aiCfg.Fallback, aiCfg.Prompt, aiCfg.ReviewMode)
+		rev, err := p.Run(pr, buildRunOpts(pr, aiCfg))
 		if err != nil {
 			slog.Error("pipeline run failed", "repo", pr.Repo, "pr", pr.Number, "err", err)
 			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q,"error":%q}`, pr.Number, pr.Repo, err.Error())})
@@ -189,6 +213,17 @@ func main() {
 				"primary":     ai.Primary,
 				"fallback":    ai.Fallback,
 				"review_mode": ai.ReviewMode,
+				"local_dir":   ai.LocalDir,
+			}
+		}
+		agentConfigs := make(map[string]map[string]any)
+		for name, ac := range c.AI.Agents {
+			agentConfigs[name] = map[string]any{
+				"model":         ac.Model,
+				"max_turns":     ac.MaxTurns,
+				"approval_mode": ac.ApprovalMode,
+				"extra_flags":   ac.ExtraFlags,
+				"prompt":        ac.PromptID,
 			}
 		}
 		return map[string]any{
@@ -201,6 +236,7 @@ func main() {
 			"review_mode":    c.AI.ReviewMode,
 			"retention_days": c.Retention.MaxDays,
 			"repo_overrides": repoOverrides,
+			"agent_configs":  agentConfigs,
 		}
 	})
 
@@ -288,7 +324,7 @@ func main() {
 			reviewMu.Unlock()
 		}()
 
-		rev, err := p.Run(ghPR, aiCfg.Primary, aiCfg.Fallback, aiCfg.Prompt, aiCfg.ReviewMode)
+		rev, err := p.Run(ghPR, buildRunOpts(ghPR, aiCfg))
 		if err != nil {
 			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_id":%d,"error":%q}`, prID, err.Error())})
 			return err

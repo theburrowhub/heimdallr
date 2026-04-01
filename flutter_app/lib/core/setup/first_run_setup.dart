@@ -187,7 +187,22 @@ class FirstRunSetup {
     buf.writeln('review_mode = "${config.reviewMode}"');
     buf.writeln();
 
-    // Per-repo overrides (AI + prompt + review mode)
+    // Per-agent CLI configs
+    for (final entry in config.agentConfigs.entries) {
+      final name = entry.key;
+      final ac = entry.value;
+      if (ac.hasConfig) {
+        buf.writeln('[ai.agents.$name]');
+        if (ac.model.isNotEmpty) buf.writeln('model = "${ac.model}"');
+        if (ac.maxTurns > 0) buf.writeln('max_turns = ${ac.maxTurns}');
+        if (ac.approvalMode.isNotEmpty) buf.writeln('approval_mode = "${ac.approvalMode}"');
+        if (ac.extraFlags.isNotEmpty) buf.writeln('extra_flags = "${ac.extraFlags}"');
+        if (ac.promptId != null) buf.writeln('prompt = "${ac.promptId}"');
+        buf.writeln();
+      }
+    }
+
+    // Per-repo overrides (AI + prompt + review mode + local dir)
     for (final entry in config.repoConfigs.entries) {
       final repo = entry.key;
       final rc = entry.value;
@@ -197,6 +212,9 @@ class FirstRunSetup {
         if (rc.aiFallback != null) buf.writeln('fallback = "${rc.aiFallback}"');
         if (rc.promptId != null) buf.writeln('prompt = "${rc.promptId}"');
         if (rc.reviewMode != null) buf.writeln('review_mode = "${rc.reviewMode}"');
+        if (rc.localDir != null && rc.localDir!.isNotEmpty) {
+          buf.writeln('local_dir = "${rc.localDir}"');
+        }
         buf.writeln();
       }
     }

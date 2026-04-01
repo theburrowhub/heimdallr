@@ -5,6 +5,7 @@ import '../../core/models/pr.dart';
 import '../../shared/widgets/severity_badge.dart';
 import '../../shared/widgets/toast.dart';
 import '../agents/agents_screen.dart';
+import '../cli_agents/cli_agents_screen.dart';
 import '../repositories/repos_screen.dart';
 import '../stats/stats_screen.dart';
 import 'dashboard_providers.dart';
@@ -15,7 +16,7 @@ class DashboardScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Heimdallr'),
@@ -34,10 +35,11 @@ class DashboardScreen extends ConsumerWidget {
           ],
           bottom: const TabBar(
             tabs: [
-              Tab(icon: Icon(Icons.rate_review), text: 'Reviews'),
+              Tab(icon: Icon(Icons.rate_review),     text: 'Reviews'),
               Tab(icon: Icon(Icons.folder_outlined), text: 'Repositories'),
-              Tab(icon: Icon(Icons.auto_awesome), text: 'Prompts'),
-              Tab(icon: Icon(Icons.bar_chart), text: 'Stats'),
+              Tab(icon: Icon(Icons.auto_awesome),    text: 'Prompts'),
+              Tab(icon: Icon(Icons.smart_toy),       text: 'Agents'),
+              Tab(icon: Icon(Icons.bar_chart),       text: 'Stats'),
             ],
           ),
         ),
@@ -46,6 +48,7 @@ class DashboardScreen extends ConsumerWidget {
             _ReviewsTab(),
             ReposScreen(),
             AgentsScreen(),
+            CLIAgentsScreen(),
             StatsScreen(),
           ],
         ),

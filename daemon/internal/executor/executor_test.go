@@ -63,7 +63,7 @@ func TestExecute(t *testing.T) {
 	defer os.Setenv("PATH", oldPath)
 
 	e := executor.New()
-	result, err := e.Execute("fake_claude", "Review this diff")
+	result, err := e.Execute("fake_claude", "Review this diff", executor.ExecOptions{})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}

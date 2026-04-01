@@ -33,7 +33,7 @@ func (f *fakeExec) Detect(primary, fallback string) (string, error) {
 	return "fake_claude", nil
 }
 
-func (f *fakeExec) Execute(cli, prompt string) (*executor.ReviewResult, error) {
+func (f *fakeExec) Execute(cli, prompt string, _ executor.ExecOptions) (*executor.ReviewResult, error) {
 	return &executor.ReviewResult{
 		Summary:     "Looks good",
 		Issues:      []executor.Issue{{File: "main.go", Line: 1, Description: "test", Severity: "low"}},
@@ -66,7 +66,7 @@ func TestPipeline_Run(t *testing.T) {
 		UpdatedAt: time.Now(), HTMLURL: "https://github.com/org/repo/pull/1",
 	}
 
-	rev, err := p.Run(pr, "claude", "gemini", "", "single")
+	rev, err := p.Run(pr, pipeline.RunOptions{Primary: "claude", Fallback: "gemini", ReviewMode: "single"})
 	if err != nil {
 		t.Fatalf("pipeline run: %v", err)
 	}

@@ -1,3 +1,56 @@
+/// Per-agent CLI execution settings.
+/// Stored under ai.agents.<name> in config.toml.
+class CLIAgentConfig {
+  final String model;         // --model value ('' = use CLI default)
+  final int maxTurns;         // claude: --max-turns (0 = not set)
+  final String approvalMode;  // codex: --approval-mode ('' = not set)
+  final String extraFlags;    // free-form additional CLI flags
+  final String? promptId;     // agent-level prompt override (null = use global default)
+
+  const CLIAgentConfig({
+    this.model = '',
+    this.maxTurns = 0,
+    this.approvalMode = '',
+    this.extraFlags = '',
+    this.promptId,
+  });
+
+  bool get hasConfig =>
+      model.isNotEmpty || maxTurns > 0 || approvalMode.isNotEmpty ||
+      extraFlags.isNotEmpty || promptId != null;
+
+  CLIAgentConfig copyWith({
+    String? model,
+    int? maxTurns,
+    String? approvalMode,
+    String? extraFlags,
+    Object? promptId = _sentinel,
+  }) => CLIAgentConfig(
+    model:        model        ?? this.model,
+    maxTurns:     maxTurns     ?? this.maxTurns,
+    approvalMode: approvalMode ?? this.approvalMode,
+    extraFlags:   extraFlags   ?? this.extraFlags,
+    promptId:     promptId == _sentinel ? this.promptId : promptId as String?,
+  );
+
+  factory CLIAgentConfig.fromJson(Map<String, dynamic> json) => CLIAgentConfig(
+    model:        (json['model']         as String?) ?? '',
+    maxTurns:     (json['max_turns']     as int?)    ?? 0,
+    approvalMode: (json['approval_mode'] as String?) ?? '',
+    extraFlags:   (json['extra_flags']   as String?) ?? '',
+    promptId:     _nonEmpty(json['prompt']),
+  );
+
+  /// Available models per CLI name.
+  static const modelOptions = <String, List<String>>{
+    'claude': ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    'gemini': ['gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-pro'],
+    'codex':  ['o4-mini', 'o3', 'gpt-4o'],
+  };
+
+  static const approvalModeOptions = ['full-auto', 'auto-edit', 'suggest'];
+}
+
 /// Per-repo AI override. null fields mean "use global default".
 class RepoConfig {
   final bool monitored;
@@ -5,6 +58,7 @@ class RepoConfig {
   final String? aiFallback;  // null = use global
   final String? promptId;    // null = use globally active prompt
   final String? reviewMode;  // null = use global ("single" | "multi")
+  final String? localDir;    // local repo directory for full-repo analysis
 
   const RepoConfig({
     this.monitored = true,
@@ -12,24 +66,28 @@ class RepoConfig {
     this.aiFallback,
     this.promptId,
     this.reviewMode,
+    this.localDir,
   });
 
   bool get hasAiOverride =>
-      aiPrimary != null || aiFallback != null || promptId != null || reviewMode != null;
+      aiPrimary != null || aiFallback != null || promptId != null ||
+      reviewMode != null || (localDir != null && localDir!.isNotEmpty);
 
   RepoConfig copyWith({
     bool? monitored,
-    Object? aiPrimary = _sentinel,
+    Object? aiPrimary  = _sentinel,
     Object? aiFallback = _sentinel,
-    Object? promptId = _sentinel,
+    Object? promptId   = _sentinel,
     Object? reviewMode = _sentinel,
+    Object? localDir   = _sentinel,
   }) {
     return RepoConfig(
-      monitored: monitored ?? this.monitored,
-      aiPrimary: aiPrimary == _sentinel ? this.aiPrimary : aiPrimary as String?,
+      monitored:  monitored  ?? this.monitored,
+      aiPrimary:  aiPrimary  == _sentinel ? this.aiPrimary  : aiPrimary  as String?,
       aiFallback: aiFallback == _sentinel ? this.aiFallback : aiFallback as String?,
-      promptId: promptId == _sentinel ? this.promptId : promptId as String?,
+      promptId:   promptId   == _sentinel ? this.promptId   : promptId   as String?,
       reviewMode: reviewMode == _sentinel ? this.reviewMode : reviewMode as String?,
+      localDir:   localDir   == _sentinel ? this.localDir   : localDir   as String?,
     );
   }
 }
@@ -50,10 +108,8 @@ class AppConfig {
   final String aiFallback;
   final String reviewMode; // "single" | "multi"
   final int retentionDays;
-
-  /// All known repos and their per-repo settings.
-  /// Key: "org/repo". Monitored repos are sent to the daemon.
-  final Map<String, RepoConfig> repoConfigs;
+  final Map<String, CLIAgentConfig> agentConfigs; // keyed by CLI name
+  final Map<String, RepoConfig> repoConfigs;      // keyed by "org/repo"
 
   const AppConfig({
     this.serverPort = 7842,
@@ -62,6 +118,7 @@ class AppConfig {
     this.aiFallback = '',
     this.reviewMode = 'single',
     this.retentionDays = 90,
+    this.agentConfigs = const {},
     this.repoConfigs = const {},
   });
 
@@ -79,64 +136,74 @@ class AppConfig {
     String? aiFallback,
     String? reviewMode,
     int? retentionDays,
+    Map<String, CLIAgentConfig>? agentConfigs,
     Map<String, RepoConfig>? repoConfigs,
   }) {
     return AppConfig(
-      serverPort: serverPort ?? this.serverPort,
+      serverPort:   serverPort   ?? this.serverPort,
       pollInterval: pollInterval ?? this.pollInterval,
-      aiPrimary: aiPrimary ?? this.aiPrimary,
-      aiFallback: aiFallback ?? this.aiFallback,
-      reviewMode: reviewMode ?? this.reviewMode,
+      aiPrimary:    aiPrimary    ?? this.aiPrimary,
+      aiFallback:   aiFallback   ?? this.aiFallback,
+      reviewMode:   reviewMode   ?? this.reviewMode,
       retentionDays: retentionDays ?? this.retentionDays,
-      repoConfigs: repoConfigs ?? this.repoConfigs,
+      agentConfigs: agentConfigs ?? this.agentConfigs,
+      repoConfigs:  repoConfigs  ?? this.repoConfigs,
     );
   }
 
   Map<String, dynamic> toJson() => {
-    'server_port': serverPort,
+    'server_port':   serverPort,
     'poll_interval': pollInterval,
-    'repositories': repositories,
-    'ai_primary': aiPrimary,
-    'ai_fallback': aiFallback,
-    'review_mode': reviewMode,
+    'repositories':  repositories,
+    'ai_primary':    aiPrimary,
+    'ai_fallback':   aiFallback,
+    'review_mode':   reviewMode,
     'retention_days': retentionDays,
   };
 
   factory AppConfig.fromJson(Map<String, dynamic> json) {
     final repos = (json['repositories'] as List<dynamic>?)?.cast<String>() ?? [];
-    // Start with all monitored repos (no override)
     final configs = <String, RepoConfig>{
       for (final r in repos) r: const RepoConfig(monitored: true),
     };
-    // Restore non-monitored repos so the UI can display and re-enable them.
+    // Restore non-monitored repos
     final nonMonitored = (json['non_monitored'] as List<dynamic>?)?.cast<String>() ?? [];
     for (final r in nonMonitored) {
       configs.putIfAbsent(r, () => const RepoConfig(monitored: false));
     }
-    // Apply per-repo overrides from repo_overrides field.
-    // Normalize empty strings to null — Go zero-value strings arrive as ""
-    // and would break DropdownButtonFormField (value not in items list).
+    // Per-repo overrides (normalize empty strings to null)
     final overrides = json['repo_overrides'] as Map<String, dynamic>?;
     if (overrides != null) {
       for (final entry in overrides.entries) {
         final ov = entry.value as Map<String, dynamic>;
         final existing = configs[entry.key];
         configs[entry.key] = RepoConfig(
-          monitored: existing?.monitored ?? configs.containsKey(entry.key),
-          aiPrimary:   _nonEmpty(ov['primary']),
-          aiFallback:  _nonEmpty(ov['fallback']),
-          reviewMode:  _nonEmpty(ov['review_mode']),
+          monitored:  existing?.monitored ?? configs.containsKey(entry.key),
+          aiPrimary:  _nonEmpty(ov['primary']),
+          aiFallback: _nonEmpty(ov['fallback']),
+          reviewMode: _nonEmpty(ov['review_mode']),
+          localDir:   _nonEmpty(ov['local_dir']),
         );
       }
     }
+    // Agent configs
+    final agentsRaw = json['agent_configs'] as Map<String, dynamic>?;
+    final agentConfigs = <String, CLIAgentConfig>{};
+    if (agentsRaw != null) {
+      for (final entry in agentsRaw.entries) {
+        agentConfigs[entry.key] =
+            CLIAgentConfig.fromJson(entry.value as Map<String, dynamic>);
+      }
+    }
     return AppConfig(
-      serverPort: (json['server_port'] as int?) ?? 7842,
+      serverPort:   (json['server_port']   as int?)    ?? 7842,
       pollInterval: (json['poll_interval'] as String?) ?? '5m',
-      aiPrimary: (json['ai_primary'] as String?) ?? 'claude',
-      aiFallback: (json['ai_fallback'] as String?) ?? '',
-      reviewMode: (json['review_mode'] as String?) ?? 'single',
-      retentionDays: (json['retention_days'] as int?) ?? 90,
-      repoConfigs: configs,
+      aiPrimary:    (json['ai_primary']    as String?) ?? 'claude',
+      aiFallback:   (json['ai_fallback']   as String?) ?? '',
+      reviewMode:   (json['review_mode']   as String?) ?? 'single',
+      retentionDays: (json['retention_days'] as int?)  ?? 90,
+      agentConfigs: agentConfigs,
+      repoConfigs:  configs,
     );
   }
 }

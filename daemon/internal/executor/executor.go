@@ -28,6 +28,22 @@ type Issue struct {
 	Severity    string `json:"severity"`
 }
 
+// ExecOptions controls how the AI CLI is invoked.
+type ExecOptions struct {
+	// Model sets --model <value> for CLIs that support it.
+	Model string
+	// MaxTurns sets --max-turns <n> for Claude (0 = not set).
+	MaxTurns int
+	// ApprovalMode sets --approval-mode <value> for Codex.
+	ApprovalMode string
+	// ExtraFlags is a free-form string of additional CLI flags (split on spaces).
+	ExtraFlags string
+	// WorkDir is the working directory for the CLI process.
+	// When set, the CLI runs inside the local repo directory, giving it
+	// access to all project files for deeper analysis (missing tests, side effects, etc.).
+	WorkDir string
+}
+
 // Executor runs AI CLI tools for code review.
 type Executor struct{}
 
@@ -51,21 +67,18 @@ func (e *Executor) Detect(primary, fallback string) (string, error) {
 	return "", fmt.Errorf("executor: no AI CLI available (tried %q, %q)", primary, fallback)
 }
 
-// Execute runs the AI CLI with the prompt via stdin and returns the parsed result.
-func (e *Executor) Execute(cli, prompt string) (*ReviewResult, error) {
+// Execute runs the AI CLI with the given prompt and options, returning the parsed result.
+func (e *Executor) Execute(cli, prompt string, opts ExecOptions) (*ReviewResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), executionTimeout)
 	defer cancel()
 
-	var cmd *exec.Cmd
-	switch cli {
-	case "codex":
-		// codex reads prompt from stdin without extra flags
-		cmd = exec.CommandContext(ctx, cli)
-	default:
-		// claude and gemini both support -p - (stdin mode)
-		cmd = exec.CommandContext(ctx, cli, "-p", "-")
-	}
+	args := buildArgs(cli, opts)
+	cmd := exec.CommandContext(ctx, cli, args...)
 	cmd.Stdin = strings.NewReader(prompt)
+	if opts.WorkDir != "" {
+		cmd.Dir = opts.WorkDir
+	}
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -75,6 +88,37 @@ func (e *Executor) Execute(cli, prompt string) (*ReviewResult, error) {
 	}
 
 	return parseResult(stdout.Bytes())
+}
+
+// buildArgs constructs the CLI argument list based on the CLI name and options.
+func buildArgs(cli string, opts ExecOptions) []string {
+	var args []string
+
+	switch cli {
+	case "codex":
+		if opts.Model != "" {
+			args = append(args, "--model", opts.Model)
+		}
+		if opts.ApprovalMode != "" {
+			args = append(args, "--approval-mode", opts.ApprovalMode)
+		}
+	default:
+		// claude, gemini: stdin mode
+		args = append(args, "-p", "-")
+		if opts.Model != "" {
+			args = append(args, "--model", opts.Model)
+		}
+		if cli == "claude" && opts.MaxTurns > 0 {
+			args = append(args, "--max-turns", fmt.Sprintf("%d", opts.MaxTurns))
+		}
+	}
+
+	// Append free-form extra flags (split on whitespace)
+	if opts.ExtraFlags != "" {
+		args = append(args, strings.Fields(opts.ExtraFlags)...)
+	}
+
+	return args
 }
 
 func parseResult(data []byte) (*ReviewResult, error) {

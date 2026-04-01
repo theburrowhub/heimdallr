@@ -31,20 +31,32 @@ type GitHubConfig struct {
 	NonMonitored []string `toml:"non_monitored"`
 }
 
+// CLIAgentConfig holds per-CLI execution settings (model, flags, prompt override).
+// Stored under [ai.agents.<cli-name>] in config.toml.
+type CLIAgentConfig struct {
+	Model        string `toml:"model"`         // e.g. "claude-opus-4-6"
+	MaxTurns     int    `toml:"max_turns"`      // claude: --max-turns (0 = not set)
+	ApprovalMode string `toml:"approval_mode"` // codex: --approval-mode
+	ExtraFlags   string `toml:"extra_flags"`    // free-form additional CLI flags
+	PromptID     string `toml:"prompt"`         // agent-level prompt override
+}
+
 type AIConfig struct {
-	Primary    string            `toml:"primary"`
-	Fallback   string            `toml:"fallback"`
-	ReviewMode string            `toml:"review_mode"` // "single" | "multi"
-	Repos      map[string]RepoAI `toml:"repos"`
+	Primary    string                      `toml:"primary"`
+	Fallback   string                      `toml:"fallback"`
+	ReviewMode string                      `toml:"review_mode"` // "single" | "multi"
+	Agents     map[string]CLIAgentConfig   `toml:"agents"`      // keyed by CLI name
+	Repos      map[string]RepoAI           `toml:"repos"`
 }
 
 type RepoAI struct {
-	Primary  string `toml:"primary"`
+	Primary    string `toml:"primary"`
 	// Prompt is the ID of a review prompt profile to use for this repo.
-	// Overrides the globally active default prompt.
+	// Overrides agent-level and global default prompts.
 	Prompt     string `toml:"prompt"`
 	Fallback   string `toml:"fallback"`
 	ReviewMode string `toml:"review_mode"` // "" = inherit global
+	LocalDir   string `toml:"local_dir"`   // local repo path for full-repo analysis
 }
 
 type RetentionConfig struct {
@@ -68,6 +80,16 @@ func (c *Config) AIForRepo(repo string) RepoAI {
 		}
 	}
 	return RepoAI{Primary: c.AI.Primary, Fallback: c.AI.Fallback, ReviewMode: c.AI.ReviewMode}
+}
+
+// AgentConfigFor returns the CLIAgentConfig for a given CLI name, or an empty struct.
+func (c *Config) AgentConfigFor(cli string) CLIAgentConfig {
+	if c.AI.Agents != nil {
+		if a, ok := c.AI.Agents[cli]; ok {
+			return a
+		}
+	}
+	return CLIAgentConfig{}
 }
 
 func (c *Config) applyDefaults() {

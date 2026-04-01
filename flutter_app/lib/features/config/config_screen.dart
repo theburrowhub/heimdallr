@@ -25,9 +25,6 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
   bool _tokenFromGh = false; // true = auto-detected from gh CLI
 
   String _pollInterval = '5m';
-  String _aiPrimary = 'claude';
-  String _aiFallback = '';
-  String _reviewMode = 'single';
   int _retentionDays = 90;
 
   // All known repos. Key = "org/repo", Value = per-repo settings.
@@ -74,9 +71,6 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     if (_initialized) return;
     _initialized = true;
     _pollInterval = config.pollInterval;
-    _aiPrimary = config.aiPrimary;
-    _aiFallback = config.aiFallback;
-    _reviewMode = config.reviewMode;
     _retentionDays = config.retentionDays;
     _repoConfigs = Map.from(config.repoConfigs);
   }
@@ -141,7 +135,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
             _tokenSection(),
             const SizedBox(height: 20),
             if (!daemonRunning) ...[_repoSection(), const SizedBox(height: 20)],
-            _globalSection(),
+            _pollSection(),
             const SizedBox(height: 20),
             _retentionSection(),
             const SizedBox(height: 28),
@@ -312,65 +306,25 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     );
   }
 
-  // ── Global AI & Polling ──────────────────────────────────────────────────
+  // ── Poll interval ─────────────────────────────────────────────────────────
 
-  Widget _globalSection() {
+  Widget _pollSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionHeader('Global defaults'),
+        _sectionHeader('Polling'),
         DropdownButtonFormField<String>(
           // ignore: deprecated_member_use
           value: _pollInterval,
           decoration: const InputDecoration(
             labelText: 'Poll interval',
+            helperText: 'How often to check GitHub for new review requests',
             border: OutlineInputBorder(),
           ),
           items: ['1m', '5m', '30m', '1h']
               .map((v) => DropdownMenuItem(value: v, child: Text(v)))
               .toList(),
           onChanged: (v) => setState(() => _pollInterval = v!),
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(
-          // ignore: deprecated_member_use
-          value: _aiPrimary,
-          decoration: const InputDecoration(
-            labelText: 'Primary AI agent',
-            helperText: 'Can be overridden per repo',
-            border: OutlineInputBorder(),
-          ),
-          items: _aiOptions.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
-          onChanged: (v) => setState(() => _aiPrimary = v!),
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String?>(
-          // ignore: deprecated_member_use
-          value: _aiFallback.isEmpty ? null : _aiFallback,
-          decoration: const InputDecoration(
-            labelText: 'Fallback AI agent (optional)',
-            border: OutlineInputBorder(),
-          ),
-          items: [
-            const DropdownMenuItem<String?>(value: null, child: Text('None')),
-            ..._aiOptions.map((v) => DropdownMenuItem<String?>(value: v, child: Text(v))),
-          ],
-          onChanged: (v) => setState(() => _aiFallback = v ?? ''),
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(
-          // ignore: deprecated_member_use
-          value: _reviewMode,
-          decoration: const InputDecoration(
-            labelText: 'Review feedback mode',
-            helperText: 'Single: one review · Multi: one comment per issue + summary',
-            border: OutlineInputBorder(),
-          ),
-          items: const [
-            DropdownMenuItem(value: 'single', child: Text('Single (consolidated review)')),
-            DropdownMenuItem(value: 'multi',  child: Text('Multi (one comment per issue)')),
-          ],
-          onChanged: (v) => setState(() => _reviewMode = v!),
         ),
       ],
     );
@@ -462,11 +416,9 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
 
   AppConfig _buildConfig(AppConfig base) => base.copyWith(
     pollInterval: _pollInterval,
-    aiPrimary: _aiPrimary,
-    aiFallback: _aiFallback,
-    reviewMode: _reviewMode,
     retentionDays: _retentionDays,
     repoConfigs: Map.from(_repoConfigs),
+    // aiPrimary, aiFallback, reviewMode, agentConfigs managed in Agents tab
   );
 
   // ── Helpers ──────────────────────────────────────────────────────────────
