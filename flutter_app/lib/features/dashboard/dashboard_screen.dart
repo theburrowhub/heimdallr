@@ -92,10 +92,11 @@ class _ReviewsTabState extends ConsumerState<_ReviewsTab> {
       error: (e, _) => _errorView(context, e),
       data: (prs) {
         final me = meAsync.valueOrNull ?? '';
-        final myReviews = _sortedPRs(
-            prs.where((p) => p.author.toLowerCase() != me.toLowerCase()).toList());
-        final myPRs = _sortedPRs(
-            prs.where((p) => p.author.toLowerCase() == me.toLowerCase()).toList());
+        // Exclude PRs with no repo — orphaned records from before repo detection was fixed.
+        final myReviews = _sortedPRs(prs.where((p) =>
+            p.repo.isNotEmpty && p.author.toLowerCase() != me.toLowerCase()).toList());
+        final myPRs = _sortedPRs(prs.where((p) =>
+            p.repo.isNotEmpty && p.author.toLowerCase() == me.toLowerCase()).toList());
 
         if (prs.isEmpty) {
           return const Center(child: Text('No open PRs found'));
