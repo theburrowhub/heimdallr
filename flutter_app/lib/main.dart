@@ -17,8 +17,41 @@ import 'shared/router.dart';
 final _appRouter = createRouter(initialLocation: '/');
 GoRouter get appRouter => _appRouter;
 
+/// Checks for a running instance using a PID file.
+/// Returns true if this is the only instance; returns false if another
+/// instance is already running (this process should exit).
+Future<bool> _ensureSingleInstance() async {
+  final home = Platform.environment['HOME'] ?? '';
+  final dir  = Directory('$home/.local/share/heimdallr');
+  await dir.create(recursive: true);
+  final pidFile = File('${dir.path}/ui.pid');
+
+  if (await pidFile.exists()) {
+    final existing = int.tryParse((await pidFile.readAsString()).trim());
+    if (existing != null && existing != pid) {
+      // Check if that process is still alive (kill -0 = existence check)
+      final check = await Process.run('kill', ['-0', '$existing']);
+      if (check.exitCode == 0) {
+        // Another instance is running — focus it and exit this one
+        debugPrint('Another Heimdallr instance is running (PID $existing), activating it.');
+        Process.run('open', ['-a', 'Heimdallr']).ignore();
+        return false;
+      }
+      // Stale PID — process no longer exists, continue
+    }
+  }
+
+  await pidFile.writeAsString('$pid');
+  return true;
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Single-instance guard: works even outside the .app bundle (debug / direct binary).
+  if (!await _ensureSingleInstance()) {
+    exit(0);
+  }
 
   // Catch all init errors so a crash shows a window rather than silently dying.
   FlutterError.onError = (details) {
