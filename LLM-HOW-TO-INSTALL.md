@@ -1,6 +1,9 @@
 # LLM How-To: Install or Update Heimdallr
 
-Step-by-step guide for Claude Code or any AI agent to install Heimdallr on macOS.
+Step-by-step guide for Claude Code or any AI agent to install Heimdallr on macOS or Linux.
+
+- **macOS**: steps 1–5 below (DMG installer)
+- **Linux**: jump to [Linux installation](#linux-installation)
 
 ---
 
@@ -93,7 +96,83 @@ rm -f /tmp/Heimdallr.dmg
 
 ---
 
-## Troubleshooting
+## Linux installation
+
+### 1. Get the latest version
+
+```bash
+VERSION=$(gh release view --repo theburrowhub/heimdallr --json tagName -q '.tagName')
+echo "Installing Heimdallr $VERSION"
+```
+
+### 2. Download and install for your distro
+
+**Ubuntu / Debian / Mint / Pop!_OS (.deb):**
+```bash
+curl -L "$(gh release view --repo theburrowhub/heimdallr --json assets \
+  -q '.assets[] | select(.name | endswith(".deb")) | .browserDownloadUrl')" \
+  -o /tmp/heimdallr.deb
+sudo dpkg -i /tmp/heimdallr.deb
+sudo apt-get install -f -y   # install any missing dependencies
+```
+
+**Fedora / RHEL / openSUSE (.rpm):**
+```bash
+curl -L "$(gh release view --repo theburrowhub/heimdallr --json assets \
+  -q '.assets[] | select(.name | endswith(".rpm")) | .browserDownloadUrl')" \
+  -o /tmp/heimdallr.rpm
+sudo rpm -i /tmp/heimdallr.rpm
+```
+
+**Any distro (AppImage):**
+```bash
+APPIMAGE_URL=$(gh release view --repo theburrowhub/heimdallr --json assets \
+  -q '.assets[] | select(.name | endswith(".AppImage")) | .browserDownloadUrl')
+curl -L "$APPIMAGE_URL" -o ~/bin/Heimdallr.AppImage
+chmod +x ~/bin/Heimdallr.AppImage
+```
+
+### 3. Launch
+
+```bash
+# .deb/.rpm — binary is in PATH
+heimdallr &
+sleep 5
+
+# AppImage
+~/bin/Heimdallr.AppImage &
+sleep 5
+
+# Confirm daemon is responding
+curl -s http://localhost:7842/health
+# Expected: {"status":"ok"}
+```
+
+### 4. Cleanup
+
+```bash
+rm -f /tmp/heimdallr.deb /tmp/heimdallr.rpm
+```
+
+### Troubleshooting (Linux)
+
+**Missing dependencies after dpkg install**
+```bash
+sudo apt-get install -f -y
+```
+Installs `libgtk-3-0`, `libayatana-appindicator3-1`, `libnotify4`, `libsecret-1-0`.
+
+**Token not detected**
+Heimdallr detects credentials in this order: `gh auth token` → GNOME/KDE Keyring (`secret-tool`) → `~/.config/heimdallr/.token` → `GITHUB_TOKEN` env var. Run `gh auth login` if none are configured.
+
+**AppImage won't run**
+```bash
+sudo apt-get install -y libfuse2   # Ubuntu 22.04+
+```
+
+---
+
+## Troubleshooting (macOS)
 
 **Hundreds of instances spawn immediately**
 ```bash

@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Heimdallr — AI-powered GitHub PR Reviews for macOS</title>
-  <meta name="description" content="Heimdallr watches your GitHub pull requests and automatically runs AI code reviews using Claude, Gemini or Codex — then posts the review directly to GitHub.">
+  <title>Heimdallr — AI-powered GitHub PR Reviews for macOS &amp; Linux</title>
+  <meta name="description" content="Heimdallr watches your GitHub pull requests and automatically runs AI code reviews using Claude, Gemini or Codex — then posts the review directly to GitHub. Available for macOS and Linux.">
   <meta property="og:title" content="Heimdallr">
-  <meta property="og:description" content="AI-powered GitHub PR reviews for macOS. Runs in your menu bar. Reviews automatically. Posts to GitHub.">
+  <meta property="og:description" content="AI-powered GitHub PR reviews for macOS and Linux. Runs in your menu bar. Reviews automatically. Posts to GitHub.">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -320,7 +320,7 @@
 
 <!-- Hero -->
 <section class="hero">
-  <div class="hero-badge">⚡ macOS · Free · Open Source</div>
+  <div class="hero-badge">⚡ macOS &amp; Linux · Free · Open Source</div>
   <h1>Your PRs, <em>reviewed automatically</em>.<br>Posted to GitHub.</h1>
   <p>
     Heimdallr runs silently in your menu bar, watches your GitHub review requests,
@@ -328,7 +328,7 @@
   </p>
   <div class="hero-actions">
     <a href="https://github.com/theburrowhub/heimdallr/releases/latest" class="btn btn-primary">
-      ⬇️ Download for macOS
+      ⬇️ Download
     </a>
     <a href="https://github.com/theburrowhub/heimdallr" class="btn btn-secondary">
       View on GitHub
@@ -380,9 +380,14 @@
         <p>Track reviews over time: severity distribution, top repos, reviews per day, average issues per review.</p>
       </div>
       <div class="card">
-        <div class="card-icon">🍎</div>
-        <h3>Native macOS</h3>
-        <p>Lives in your menu bar. Dark mode, system notifications, no Electron, no browser. Just a Go daemon and a Flutter UI.</p>
+        <div class="card-icon">💬</div>
+        <h3>Feedback modes</h3>
+        <p><em>Single</em>: one consolidated review comment. <em>Multi</em>: one comment per issue + summary. Configurable globally or per repo.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🖥️</div>
+        <h3>macOS &amp; Linux</h3>
+        <p>Menu bar on macOS. Native desktop on Linux (.deb, .rpm, AppImage). No Electron, no browser — just a Go daemon and a Flutter UI.</p>
       </div>
     </div>
   </div>
@@ -441,38 +446,157 @@
 <section class="section install-section" id="install">
   <div class="section-inner">
     <div class="section-label">Installation</div>
-    <h2>Up and running in 3 steps</h2>
-    <div class="install-steps">
-      <div class="install-step">
-        <div class="step-num">1</div>
-        <div>
-          <h4>Download</h4>
-          <p>Grab the latest DMG from GitHub Releases.</p>
-          <a href="https://github.com/theburrowhub/heimdallr/releases/latest" class="btn btn-primary" style="margin-top:.75rem; font-size:.85rem; padding:.5rem 1rem;">⬇️ Download Heimdallr</a>
-        </div>
-      </div>
-      <div class="install-step">
-        <div class="step-num">2</div>
-        <div>
-          <h4>Drag to Applications</h4>
-          <p>Open the DMG and drag Heimdallr to the Applications folder shortcut.</p>
-        </div>
-      </div>
-      <div class="install-step">
-        <div class="step-num">3</div>
-        <div>
-          <h4>Remove quarantine</h4>
-          <p>Run this once in Terminal (macOS security requirement for unsigned apps):</p>
-          <pre class="inline-code">xattr -cr /Applications/Heimdallr.app</pre>
-        </div>
-      </div>
+    <h2>Up and running in minutes</h2>
+
+    <!-- OS tabs -->
+    <div style="display:flex; gap:.5rem; margin-bottom:2rem; flex-wrap:wrap;">
+      <button class="os-tab active" onclick="showOS('macos',this)">🍎 macOS</button>
+      <button class="os-tab" onclick="showOS('linux-deb',this)">🐧 Ubuntu / Debian</button>
+      <button class="os-tab" onclick="showOS('linux-rpm',this)">🎩 Fedora / RHEL</button>
+      <button class="os-tab" onclick="showOS('linux-appimage',this)">📦 AppImage (universal)</button>
     </div>
-    <p style="margin-top:2rem; color:var(--muted); font-size:.875rem;">
-      Requires macOS 13+, <a href="https://cli.github.com">gh CLI</a> authenticated, and Claude/Gemini/Codex CLI installed.
-      Heimdallr auto-detects your <code>gh auth token</code> on first launch — no configuration needed.
-    </p>
+
+    <!-- macOS -->
+    <div id="os-macos" class="os-panel">
+      <div class="install-steps">
+        <div class="install-step">
+          <div class="step-num">1</div>
+          <div>
+            <h4>Download</h4>
+            <p>Grab the latest DMG from GitHub Releases.</p>
+            <a href="https://github.com/theburrowhub/heimdallr/releases/latest" class="btn btn-primary" style="margin-top:.75rem; font-size:.85rem; padding:.5rem 1rem;">⬇️ Download .dmg</a>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">2</div>
+          <div>
+            <h4>Drag to Applications</h4>
+            <p>Open the DMG and drag Heimdallr to the Applications folder.</p>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">3</div>
+          <div>
+            <h4>Remove quarantine</h4>
+            <p>Run once in Terminal — macOS security requirement for unsigned apps:</p>
+            <pre class="inline-code">xattr -cr /Applications/Heimdallr.app</pre>
+          </div>
+        </div>
+      </div>
+      <p style="margin-top:1.5rem; color:var(--muted); font-size:.875rem;">Requires macOS 13+ · <a href="https://cli.github.com">gh CLI</a> authenticated · Claude/Gemini/Codex CLI installed</p>
+    </div>
+
+    <!-- Ubuntu/Debian -->
+    <div id="os-linux-deb" class="os-panel" style="display:none">
+      <div class="install-steps">
+        <div class="install-step">
+          <div class="step-num">1</div>
+          <div>
+            <h4>Download .deb</h4>
+            <a href="https://github.com/theburrowhub/heimdallr/releases/latest" class="btn btn-primary" style="margin-top:.75rem; font-size:.85rem; padding:.5rem 1rem;">⬇️ Download .deb</a>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">2</div>
+          <div>
+            <h4>Install</h4>
+            <pre class="inline-code">sudo dpkg -i heimdallr_*.deb
+sudo apt-get install -f -y</pre>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">3</div>
+          <div>
+            <h4>Launch</h4>
+            <pre class="inline-code">heimdallr</pre>
+            <p style="margin-top:.4rem;">Or find it in your application launcher.</p>
+          </div>
+        </div>
+      </div>
+      <p style="margin-top:1.5rem; color:var(--muted); font-size:.875rem;">Installs to <code>/opt/heimdallr/</code> · Dependencies: libgtk-3, libayatana-appindicator, libsecret · Token via GNOME Keyring or <code>gh auth token</code></p>
+    </div>
+
+    <!-- Fedora/RHEL -->
+    <div id="os-linux-rpm" class="os-panel" style="display:none">
+      <div class="install-steps">
+        <div class="install-step">
+          <div class="step-num">1</div>
+          <div>
+            <h4>Download .rpm</h4>
+            <a href="https://github.com/theburrowhub/heimdallr/releases/latest" class="btn btn-primary" style="margin-top:.75rem; font-size:.85rem; padding:.5rem 1rem;">⬇️ Download .rpm</a>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">2</div>
+          <div>
+            <h4>Install</h4>
+            <pre class="inline-code">sudo rpm -i heimdallr-*.x86_64.rpm</pre>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">3</div>
+          <div>
+            <h4>Launch</h4>
+            <pre class="inline-code">heimdallr</pre>
+          </div>
+        </div>
+      </div>
+      <p style="margin-top:1.5rem; color:var(--muted); font-size:.875rem;">Installs to <code>/opt/heimdallr/</code> · Dependencies: gtk3, libnotify, libsecret · Token via KDE Wallet or <code>gh auth token</code></p>
+    </div>
+
+    <!-- AppImage -->
+    <div id="os-linux-appimage" class="os-panel" style="display:none">
+      <div class="install-steps">
+        <div class="install-step">
+          <div class="step-num">1</div>
+          <div>
+            <h4>Download AppImage</h4>
+            <a href="https://github.com/theburrowhub/heimdallr/releases/latest" class="btn btn-primary" style="margin-top:.75rem; font-size:.85rem; padding:.5rem 1rem;">⬇️ Download .AppImage</a>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">2</div>
+          <div>
+            <h4>Make executable</h4>
+            <pre class="inline-code">chmod +x Heimdallr-*.AppImage</pre>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">3</div>
+          <div>
+            <h4>Run</h4>
+            <pre class="inline-code">./Heimdallr-*.AppImage</pre>
+            <p style="margin-top:.4rem;">No installation needed. Works on Arch, NixOS, and any distro.</p>
+          </div>
+        </div>
+      </div>
+      <p style="margin-top:1.5rem; color:var(--muted); font-size:.875rem;">Self-contained · No system dependencies · Token via <code>gh auth token</code> or <code>~/.config/heimdallr/.token</code></p>
+    </div>
   </div>
 </section>
+
+<style>
+  .os-tab {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: .45rem 1rem;
+    border-radius: 6px;
+    font-size: .85rem;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .os-tab:hover { color: var(--text); border-color: var(--accent); }
+  .os-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+</style>
+<script>
+  function showOS(id, btn) {
+    document.querySelectorAll('.os-panel').forEach(p => p.style.display = 'none');
+    document.querySelectorAll('.os-tab').forEach(b => b.classList.remove('active'));
+    document.getElementById('os-' + id).style.display = 'block';
+    btn.classList.add('active');
+  }
+</script>
 
 <!-- Footer -->
 <footer>

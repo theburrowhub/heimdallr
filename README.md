@@ -1,6 +1,6 @@
 # Heimdallr
 
-> AI-powered GitHub PR review agent for macOS — reviews your pull requests automatically using Claude, Gemini or Codex, posts the review directly to GitHub, and keeps you informed via native notifications.
+> AI-powered GitHub PR review agent for macOS and Linux — reviews your pull requests automatically using Claude, Gemini or Codex, posts the review directly to GitHub, and keeps you informed via native notifications.
 
 ![Heimdallr dashboard](assets/icon.png)
 
@@ -12,31 +12,46 @@ Heimdallr runs silently in your menu bar. It watches the GitHub PRs where you're
 
 - **Automatic reviews** — polls `review-requested:@me` on GitHub and submits reviews as your GitHub account
 - **Configurable prompts** — general review, security audit, performance, architecture, or your own custom instructions with `{diff}` `{title}` `{author}` placeholders
-- **Per-repo overrides** — different AI agent and prompt per repository
+- **Two feedback modes** — *single* (one consolidated review) or *multi* (one GitHub comment per issue + summary review), configurable globally and per repo
+- **Per-repo overrides** — different AI agent, prompt, and feedback mode per repository
 - **Severity gating** — only `high` severity triggers `REQUEST_CHANGES`; everything else approves with informational notes
-- **Native macOS** — menu bar icon, system notifications, dark mode, no Electron
+- **Native desktop** — menu bar icon (macOS), system notifications, dark mode, no Electron
 
 ---
 
 ## Installation
 
-### From GitHub Releases (recommended)
+### macOS (DMG)
 
 1. Download `Heimdallr-vX.Y.Z.dmg` from [Releases](https://github.com/theburrowhub/heimdallr/releases)
 2. Open the DMG and drag **Heimdallr** to **Applications**
-3. Open Terminal and run:
+3. Open Terminal and run once:
    ```bash
    xattr -cr /Applications/Heimdallr.app
    ```
 4. Double-click Heimdallr in Applications
 
-On first launch Heimdallr detects your `gh` CLI token automatically and sets itself up.
-
 > **Requires**: macOS 13+ (Apple Silicon or Intel), `gh` CLI authenticated (`gh auth login`).
+
+### Linux
+
+Download from [Releases](https://github.com/theburrowhub/heimdallr/releases) and install for your distro:
+
+| Package | Distros | Command |
+|---------|---------|---------|
+| `.deb` | Ubuntu, Debian, Mint, Pop!\_OS | `sudo dpkg -i heimdallr_X.Y.Z_amd64.deb` |
+| `.rpm` | Fedora, RHEL, openSUSE | `sudo rpm -i heimdallr-X.Y.Z-1.x86_64.rpm` |
+| `.AppImage` | Arch, NixOS, any distro | `chmod +x Heimdallr-X.Y.Z-x86_64.AppImage && ./Heimdallr-X.Y.Z-x86_64.AppImage` |
+
+Installs to `/opt/heimdallr/` with a desktop entry and `/usr/bin/heimdallr` symlink.
+
+> **Requires**: `gh` CLI authenticated (`gh auth login`). Token stored via GNOME Keyring / KDE Wallet (`secret-tool`), or `~/.config/heimdallr/.token` as fallback.
 
 ### Automated install (for agents / scripts)
 
 See [LLM-HOW-TO-INSTALL.md](LLM-HOW-TO-INSTALL.md) for a step-by-step guide suitable for Claude Code, shell scripts, or any automation tool.
+
+On first launch Heimdallr detects your `gh` CLI token automatically and sets itself up.
 
 ---
 
@@ -65,7 +80,7 @@ Flutter app  ←→  HTTP/SSE  ←→  heimdalld  ←→  GitHub API
 - Go 1.21+
 - Flutter 3.x (stable)
 - `gh` CLI authenticated
-- macOS 13+ with Xcode
+- macOS 13+ with Xcode **or** Linux with GTK 3 dev libraries
 
 ### Running locally
 
