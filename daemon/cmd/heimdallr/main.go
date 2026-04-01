@@ -233,11 +233,21 @@ func main() {
 
 	// Wire the trigger-review callback: re-run pipeline on a single stored PR.
 	srv.SetTriggerReviewFn(func(prID int64) error {
+		publishErr := func(msg string) {
+			broker.Publish(sse.Event{
+				Type: sse.EventReviewError,
+				Data: fmt.Sprintf(`{"pr_id":%d,"error":%q}`, prID, msg),
+			})
+		}
+
 		pr, err := s.GetPR(prID)
 		if err != nil {
+			publishErr(fmt.Sprintf("PR not found: %v", err))
 			return fmt.Errorf("trigger review: get pr %d: %w", prID, err)
 		}
 		if pr.Repo == "" {
+			publishErr("Repo unknown — this PR was stored before repo detection was working. " +
+				"Wait for the next poll cycle or re-discover repos in Settings.")
 			return fmt.Errorf("trigger review: pr %d has empty repo", prID)
 		}
 		cfgMu.Lock()

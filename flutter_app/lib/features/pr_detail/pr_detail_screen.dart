@@ -91,8 +91,11 @@ class _PRDetailScreenState extends ConsumerState<PRDetailScreen> {
       });
     });
 
-    final reviews = detailAsync.valueOrNull?['reviews'] as List<Review>? ?? [];
+    final detailData = detailAsync.valueOrNull;
+    final reviews = detailData?['reviews'] as List<Review>? ?? [];
     final hasReviews = reviews.isNotEmpty;
+    final pr = detailData?['pr'] as PR?;
+    final repoMissing = pr != null && pr.repo.isEmpty;
 
     return Scaffold(
       appBar: AppBar(
@@ -101,20 +104,26 @@ class _PRDetailScreenState extends ConsumerState<PRDetailScreen> {
             icon: const Icon(Icons.arrow_back),
             onPressed: () => context.canPop() ? context.pop() : context.go('/')),
         actions: [
-          _reviewing
-              ? const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                )
-              : ElevatedButton.icon(
-                  icon: const Icon(Icons.refresh, size: 16),
-                  label: Text(hasReviews ? 'Re-review' : 'Review'),
-                  onPressed: _trigger,
-                ),
+          if (_reviewing)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            Tooltip(
+              message: repoMissing
+                  ? 'Repo unknown — wait for next poll or re-discover in Settings'
+                  : '',
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.refresh, size: 16),
+                label: Text(hasReviews ? 'Re-review' : 'Review'),
+                onPressed: repoMissing ? null : _trigger,
+              ),
+            ),
           const SizedBox(width: 12),
         ],
       ),
@@ -133,7 +142,7 @@ class _PRDetailScreenState extends ConsumerState<PRDetailScreen> {
               const VerticalDivider(width: 1),
               Expanded(
                 flex: 1,
-                child: _PRMetaPanel(pr: pr),
+                child: _PRMetaPanel(pr: pr, onReview: pr.repo.isEmpty ? null : _trigger),
               ),
             ],
           );
@@ -234,7 +243,8 @@ class _ReviewCard extends StatelessWidget {
 
 class _PRMetaPanel extends StatelessWidget {
   final PR pr;
-  const _PRMetaPanel({required this.pr});
+  final VoidCallback? onReview;
+  const _PRMetaPanel({required this.pr, this.onReview});
 
   @override
   Widget build(BuildContext context) {
@@ -245,7 +255,27 @@ class _PRMetaPanel extends StatelessWidget {
         children: [
           Text('Details', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 12),
-          _row(context, 'Repo', pr.repo),
+          if (pr.repo.isEmpty)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.1),
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Row(children: [
+                Icon(Icons.warning_amber, size: 16, color: Colors.orange),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Repo unknown. Re-discover repos in Settings to enable auto-review.',
+                    style: TextStyle(fontSize: 12, color: Colors.orange),
+                  ),
+                ),
+              ]),
+            ),
+          _row(context, 'Repo', pr.repo.isEmpty ? '(unknown)' : pr.repo),
           _row(context, 'Number', '#${pr.number}'),
           _row(context, 'Author', pr.author),
           _row(context, 'State', pr.state),
