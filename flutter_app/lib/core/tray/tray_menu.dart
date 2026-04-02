@@ -3,7 +3,6 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import '../api/api_client.dart';
-import '../models/config_model.dart';
 import '../models/pr.dart';
 import '../../main.dart' show appRouter;
 
@@ -12,22 +11,16 @@ class TrayMenuRef {
   static Future<void> rebuild({
     required List<PR> prs,
     required String me,
-    required AppConfig config,
-  }) => TrayMenu.instance.rebuild(prs: prs, me: me, config: config);
+  }) => TrayMenu.instance.rebuild(prs: prs, me: me);
 }
 
 /// Manages the system tray context menu.
-///
-/// Call [rebuild] whenever the PR list or config changes.
-/// The menu handles navigation, GitHub links, and review triggers internally.
 class TrayMenu with TrayListener {
   static final TrayMenu _instance = TrayMenu._();
   static TrayMenu get instance => _instance;
   TrayMenu._();
 
   final ApiClient _api = ApiClient();
-
-  // Latest known PRs — used by menu item click handlers
   List<PR> _prs = [];
 
   void init() {
@@ -38,121 +31,109 @@ class TrayMenu with TrayListener {
   Future<void> rebuild({
     required List<PR> prs,
     required String me,
-    required AppConfig config,
   }) async {
     _prs = prs;
 
-    final myPRs = prs
-        .where((p) => p.author.toLowerCase() == me.toLowerCase())
+    // Pending = reviews where I'm the reviewer and there's no review yet
+    final pending = prs
+        .where((p) =>
+            p.repo.isNotEmpty &&
+            p.author.toLowerCase() != me.toLowerCase() &&
+            p.latestReview == null)
         .toList();
-    final myReviews = prs
-        .where((p) => p.author.toLowerCase() != me.toLowerCase())
-        .toList();
-    final monitoredRepos = config.repoConfigs.entries
-        .where((e) => e.value.monitored)
-        .map((e) => e.key)
-        .toList()
-      ..sort();
-    final disabledRepos = config.repoConfigs.entries
-        .where((e) => !e.value.monitored)
-        .map((e) => e.key)
-        .toList()
-      ..sort();
 
-    final items = <MenuItem>[
-      // ── My PRs ───────────────────────────────────────────────────────
-      _header('My PRs  (${myPRs.length})'),
-      if (myPRs.isEmpty)
-        _disabled('  No open PRs'),
-      ...myPRs.take(6).map(_prItem),
+    // Reviewed today (any review created today)
+    final now = DateTime.now().toLocal();
+    final reviewedToday = prs.where((p) {
+      if (p.latestReview == null) return false;
+      final d = p.latestReview!.createdAt.toLocal();
+      return d.year == now.year && d.month == now.month && d.day == now.day;
+    }).length;
 
-      MenuItem.separator(),
+    // Update tray icon urgency
+    await _updateIcon(pending);
 
-      // ── My Reviews ───────────────────────────────────────────────────
-      _header('My Reviews  (${myReviews.length})'),
-      if (myReviews.isEmpty)
-        _disabled('  No pending reviews'),
-      ...myReviews.take(6).map(_prItem),
+    final items = <MenuItem>[];
 
-      MenuItem.separator(),
+    // ── Summary ─────────────────────────────────────────────────────────
+    if (pending.isEmpty) {
+      items.add(_info('✓  No pending reviews'));
+    } else {
+      items.add(_info(
+          '⏳  ${pending.length} pending review${pending.length == 1 ? '' : 's'}'));
+    }
+    if (reviewedToday > 0) {
+      items.add(_info('✓  $reviewedToday reviewed today'));
+    }
 
-      // ── Repositories ─────────────────────────────────────────────────
-      _header('Repositories'),
-      ...monitoredRepos.take(5).map((r) => MenuItem(
-            key: 'repo_$r',
-            label: '✓  $r',
-          )),
-      ...disabledRepos.take(3).map((r) => MenuItem(
-            key: 'repo_dis_$r',
-            label: '○  $r',
-            disabled: true,
-          )),
-      if (config.repoConfigs.isEmpty) _disabled('  Not configured'),
+    items.add(MenuItem.separator());
 
-      MenuItem.separator(),
+    // ── Pending reviews ──────────────────────────────────────────────────
+    if (pending.isNotEmpty) {
+      const maxShown = 7;
+      for (final pr in pending.take(maxShown)) {
+        items.add(_pendingItem(pr));
+      }
+      if (pending.length > maxShown) {
+        items.add(MenuItem(
+          key: 'open',
+          label: '   + ${pending.length - maxShown} more…',
+        ));
+      }
+      items.add(MenuItem.separator());
+    }
 
-      // ── App ──────────────────────────────────────────────────────────
-      MenuItem(key: 'open', label: 'Open Heimdallr'),
-      MenuItem(key: 'settings', label: 'Settings'),
-
-      MenuItem.separator(),
-
-      MenuItem(key: 'quit', label: 'Quit'),
-    ];
+    // ── App controls ────────────────────────────────────────────────────
+    items.add(MenuItem(key: 'open', label: 'Open Heimdallr'));
+    items.add(MenuItem.separator());
+    items.add(MenuItem(key: 'quit', label: 'Quit'));
 
     await trayManager.setContextMenu(Menu(items: items));
   }
 
-  MenuItem _prItem(PR pr) {
-    final reviewed = pr.latestReview != null;
-    final statusIcon = reviewed
-        ? _severityIcon(pr.latestReview!.severity)
-        : '○';
-    final label = '$statusIcon  #${pr.number}  ${pr.repo}';
+  // ── Item builders ──────────────────────────────────────────────────────
 
+  MenuItem _pendingItem(PR pr) {
+    final short = _shortRepo(pr.repo);
     return MenuItem(
       key: 'pr_${pr.id}',
-      label: label,
+      label: '○   #${pr.number}  $short',
       toolTip: pr.title,
       submenu: Menu(items: [
-        MenuItem(
-          key: 'pr_title_${pr.id}',
-          label: pr.title,
-          disabled: true,
-        ),
+        MenuItem(key: 'pr_title_${pr.id}', label: pr.title, disabled: true),
+        _info(pr.repo),
         MenuItem.separator(),
-        MenuItem(key: 'view_${pr.id}', label: 'View on GitHub'),
         MenuItem(key: 'open_pr_${pr.id}', label: 'Open in Heimdallr'),
+        MenuItem(key: 'view_${pr.id}',    label: 'View on GitHub'),
         MenuItem.separator(),
-        MenuItem(
-          key: 'review_${pr.id}',
-          label: reviewed ? 'Re-review' : 'Review Now',
-        ),
+        MenuItem(key: 'review_${pr.id}',  label: 'Review Now'),
       ]),
     );
   }
 
-  MenuItem _header(String label) => MenuItem(
-        key: '_h_$label',
-        label: label,
-        disabled: true,
-      );
+  MenuItem _info(String label) =>
+      MenuItem(key: '_i_${label.hashCode}', label: label, disabled: true);
 
-  MenuItem _disabled(String label) => MenuItem(
-        key: '_d_$label',
-        label: label,
-        disabled: true,
-      );
+  // ── Tray icon ─────────────────────────────────────────────────────────
 
-  String _severityIcon(String severity) {
-    switch (severity.toLowerCase()) {
-      case 'high':   return '🔴';
-      case 'medium': return '🟡';
-      default:       return '🟢';
-    }
+  Future<void> _updateIcon(List<PR> pending) async {
+    // TODO: swap icons when urgency assets are available.
+    // For now a single icon is used; the pending count in the menu conveys urgency.
+    try {
+      await trayManager.setIcon('assets/tray_icon.png');
+    } catch (_) {}
   }
 
-  // ── Click handlers ─────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────
+
+  /// Returns just the repo name without the org prefix.
+  /// `freepik-company/ai-bumblebee-proxy` → `bumblebee-proxy`
+  String _shortRepo(String repo) {
+    final idx = repo.lastIndexOf('/');
+    return idx >= 0 ? repo.substring(idx + 1) : repo;
+  }
+
+  // ── Click handlers ────────────────────────────────────────────────────
 
   @override
   void onTrayIconMouseDown() {
@@ -163,25 +144,10 @@ class TrayMenu with TrayListener {
   void onTrayMenuItemClick(MenuItem menuItem) {
     final key = menuItem.key ?? '';
 
-    // Quit
     if (key == 'quit') { exit(0); }
 
-    // Open main window
-    if (key == 'open') {
-      _showApp();
-      return;
-    }
+    if (key == 'open') { _showApp(); return; }
 
-    // Settings
-    if (key == 'settings') {
-      _showApp();
-      Future.delayed(const Duration(milliseconds: 200), () {
-        appRouter.go('/config');
-      });
-      return;
-    }
-
-    // View on GitHub — launch URL
     if (key.startsWith('view_')) {
       final prId = int.tryParse(key.substring(5));
       if (prId != null) {
@@ -191,7 +157,6 @@ class TrayMenu with TrayListener {
       return;
     }
 
-    // Open PR detail in app
     if (key.startsWith('open_pr_')) {
       final prId = int.tryParse(key.substring(8));
       if (prId != null) {
@@ -203,7 +168,6 @@ class TrayMenu with TrayListener {
       return;
     }
 
-    // Trigger review
     if (key.startsWith('review_')) {
       final prId = int.tryParse(key.substring(7));
       if (prId != null) {

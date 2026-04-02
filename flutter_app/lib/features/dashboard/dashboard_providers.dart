@@ -2,11 +2,9 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_client.dart';
 import '../../core/api/sse_client.dart';
-import '../../core/models/config_model.dart';
 import '../../core/models/pr.dart';
 import '../../core/tray/tray_menu.dart' show TrayMenuRef;
 import '../../main.dart' show sendPRNotification;
-import '../config/config_providers.dart' show configNotifierProvider;
 
 final apiClientProvider = Provider<ApiClient>((ref) => ApiClient());
 
@@ -93,12 +91,10 @@ final statsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
 });
 
 void _rebuildTray(Ref ref, List<PR> prs) {
-  // Best-effort — ignore errors (tray is not critical path)
   Future(() async {
     try {
       final me = ref.read(meProvider).valueOrNull ?? '';
-      final config = ref.read(configNotifierProvider).valueOrNull ?? const AppConfig();
-      await TrayMenuRef.rebuild(prs: prs, me: me, config: config);
+      await TrayMenuRef.rebuild(prs: prs, me: me);
     } catch (_) {}
   });
 }
