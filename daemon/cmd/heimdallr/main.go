@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -77,8 +80,15 @@ func main() {
 	ghClient := gh.NewClient(token)
 	exec := executor.New()
 
+	// Load or create the per-daemon API token.  All mutating HTTP endpoints
+	// require this token in X-Heimdallr-Token (security issue #3).
+	apiToken, err := loadOrCreateAPIToken(dataDir())
+	if err != nil {
+		slog.Warn("could not create API token — mutating endpoints unprotected", "err", err)
+	}
+
 	p := pipeline.New(s, ghClient, exec, &notifyWithSSE{notifier: notifier})
-	srv := server.New(s, broker, p)
+	srv := server.New(s, broker, p, apiToken)
 
 	// cfgMu protects cfg and sched so reload is safe from any goroutine.
 	var cfgMu sync.Mutex
@@ -405,4 +415,35 @@ type notifyWithSSE struct {
 
 func (n *notifyWithSSE) Notify(title, message string) {
 	n.notifier.Notify(title, message)
+}
+
+// loadOrCreateAPIToken reads an existing token from <dataDir>/api_token, or
+// generates a new cryptographically-random one and writes it with mode 0600.
+// The token is used by the HTTP server to authenticate all mutating requests
+// (POST/PUT/DELETE) — see security issue #3.
+func loadOrCreateAPIToken(dir string) (string, error) {
+	path := filepath.Join(dir, "api_token")
+
+	// Try to read existing token first.
+	data, err := os.ReadFile(path)
+	if err == nil {
+		tok := strings.TrimSpace(string(data))
+		if len(tok) >= 32 {
+			return tok, nil
+		}
+	}
+
+	// Generate a new 32-byte random token (64 hex chars).
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("api_token: generate random: %w", err)
+	}
+	tok := hex.EncodeToString(buf)
+
+	// Write with mode 0600 so only the owning user can read it.
+	if err := os.WriteFile(path, []byte(tok+"\n"), 0600); err != nil {
+		return "", fmt.Errorf("api_token: write %s: %w", path, err)
+	}
+	slog.Info("api_token: created new token", "path", path)
+	return tok, nil
 }
