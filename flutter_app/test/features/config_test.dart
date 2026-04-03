@@ -42,7 +42,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // Poll interval is still shown in Settings
     expect(find.text('5m'), findsAtLeastNWidgets(1));
-    expect(find.text('claude'), findsAtLeastNWidgets(1));
+    // Primary agent ('claude') moved to Agents tab — no longer in ConfigScreen
   });
 }
