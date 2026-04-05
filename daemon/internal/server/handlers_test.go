@@ -97,3 +97,41 @@ func TestHandlerPutConfig(t *testing.T) {
 func itoa(n int64) string {
 	return fmt.Sprintf("%d", n)
 }
+
+func TestHandlerUpsertAgent_ValidCLIFlags(t *testing.T) {
+	srv, _ := setupServer(t)
+	body := `{"id":"agent1","name":"Test Agent","cli_flags":"--output json"}`
+	req := httptest.NewRequest("POST", "/agents", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("upsert agent with valid cli_flags: status %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerUpsertAgent_DangerousCLIFlags(t *testing.T) {
+	srv, _ := setupServer(t)
+	tests := []struct {
+		name  string
+		flags string
+	}{
+		{"dangerously-skip-permissions", "--dangerously-skip-permissions"},
+		{"danger prefix", "--dangerous-flag"},
+		{"allow-dangerously prefix", "--allow-dangerously-anything"},
+		{"bypassPermissions value", "--permission-mode bypassPermissions"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"id":"agent2","name":"Evil Agent","cli_flags":"` + tc.flags + `"}`
+			req := httptest.NewRequest("POST", "/agents", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.Router().ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("upsert agent with dangerous cli_flags %q: expected 400, got %d (body: %s)",
+					tc.flags, w.Code, w.Body.String())
+			}
+		})
+	}
+}

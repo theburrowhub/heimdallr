@@ -84,3 +84,69 @@ func TestBuildPrompt(t *testing.T) {
 		t.Error("prompt too long — diff not normalized")
 	}
 }
+
+func TestValidateExtraFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		flags   string
+		wantErr bool
+	}{
+		{
+			name:    "empty — allowed",
+			flags:   "",
+			wantErr: false,
+		},
+		{
+			name:    "safe flags — allowed",
+			flags:   "--output json --verbose",
+			wantErr: false,
+		},
+		{
+			name:    "--dangerously-skip-permissions — rejected",
+			flags:   "--dangerously-skip-permissions",
+			wantErr: true,
+		},
+		{
+			name:    "--dangerously-skip-permissions mixed with safe flags — rejected",
+			flags:   "--output json --dangerously-skip-permissions",
+			wantErr: true,
+		},
+		{
+			name:    "--danger prefix — rejected",
+			flags:   "--dangerous-flag",
+			wantErr: true,
+		},
+		{
+			name:    "--allow-dangerously prefix — rejected",
+			flags:   "--allow-dangerously-skip-permissions",
+			wantErr: true,
+		},
+		{
+			name:    "bypassPermissions value — rejected",
+			flags:   "--permission-mode bypassPermissions",
+			wantErr: true,
+		},
+		{
+			name:    "bypassPermissions value standalone — rejected",
+			flags:   "bypassPermissions",
+			wantErr: true,
+		},
+		{
+			name:    "case-insensitive --DANGER prefix — rejected",
+			flags:   "--DANGEROUSLY-SKIP-PERMISSIONS",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := executor.ValidateExtraFlags(tc.flags)
+			if tc.wantErr && err == nil {
+				t.Errorf("expected error for flags %q, got nil", tc.flags)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error for flags %q: %v", tc.flags, err)
+			}
+		})
+	}
+}

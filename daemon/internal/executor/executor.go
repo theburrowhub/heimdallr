@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -129,10 +130,70 @@ func resolveCLIPath(name string) string {
 	return ""
 }
 
+// forbiddenFlagPrefixes lists flag prefixes that must never appear in the
+// free-form ExtraFlags / CLIFlags fields.  These are already modelled as
+// explicit, typed boolean fields on ExecOptions (DangerouslySkipPerms, Bare,
+// NoSessionPersistence) or reviewed values (PermissionMode).  Allowing them
+// via a free-form string would let a crafted config or API call bypass the
+// safety boundaries that the explicit fields enforce.
+var forbiddenFlagPrefixes = []string{
+	"--dangerously-skip-permissions",
+	"--danger",
+	"--allow-dangerously",
+}
+
+// forbiddenFlagValues is the set of values that are forbidden regardless of
+// which flag they follow.  "bypassPermissions" is the permission-mode value
+// that grants unrestricted tool access — it must be set only through the
+// explicit PermissionMode field, never injected via free-form strings.
+var forbiddenFlagValues = map[string]struct{}{
+	"bypassPermissions": {},
+}
+
+// ValidateExtraFlags splits flags on whitespace and rejects any token that
+// matches a dangerous flag prefix or a forbidden value (issue #5).
+// It returns a descriptive error naming the offending token so callers can
+// log it and surface it clearly to the user.
+func ValidateExtraFlags(flags string) error {
+	tokens := strings.Fields(flags)
+	for i, tok := range tokens {
+		// Check against dangerous flag prefixes (case-insensitive).
+		lower := strings.ToLower(tok)
+		for _, prefix := range forbiddenFlagPrefixes {
+			if strings.HasPrefix(lower, strings.ToLower(prefix)) {
+				return fmt.Errorf(
+					"executor: flag %q is forbidden in ExtraFlags/CLIFlags — use the dedicated config field instead",
+					tok,
+				)
+			}
+		}
+		// Check forbidden values (e.g. "bypassPermissions" after --permission-mode).
+		if _, bad := forbiddenFlagValues[tok]; bad {
+			prev := ""
+			if i > 0 {
+				prev = tokens[i-1]
+			}
+			return fmt.Errorf(
+				"executor: value %q (after %q) is forbidden in ExtraFlags/CLIFlags — use the dedicated permissionMode config field instead",
+				tok, prev,
+			)
+		}
+	}
+	return nil
+}
+
 // Execute runs the AI CLI with the given prompt and options, returning the parsed result.
 func (e *Executor) Execute(cli, prompt string, opts ExecOptions) (*ReviewResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), executionTimeout)
 	defer cancel()
+
+	// Validate free-form flags before they reach the subprocess.
+	// Reject dangerous flags that are already modelled as explicit typed fields;
+	// log a warning and surface the error to the caller (issue #5).
+	if err := ValidateExtraFlags(opts.ExtraFlags); err != nil {
+		slog.Warn("executor: ExtraFlags validation failed", "err", err)
+		return nil, err
+	}
 
 	// Resolve full path — uses login shell to find binaries in Homebrew/npm/etc.
 	cliPath := resolveCLIPath(cli)

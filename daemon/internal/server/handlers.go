@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/heimdallr/daemon/internal/executor"
 	"github.com/heimdallr/daemon/internal/pipeline"
 	"github.com/heimdallr/daemon/internal/sse"
 	"github.com/heimdallr/daemon/internal/store"
@@ -294,6 +295,16 @@ func (srv *Server) handleUpsertAgent(w http.ResponseWriter, r *http.Request) {
 	if a.ID == "" || a.Name == "" {
 		http.Error(w, "id and name are required", http.StatusBadRequest)
 		return
+	}
+	// Validate CLIFlags against the dangerous-flag denylist before storing.
+	// A compromised or malicious API call must not be able to inject flags like
+	// --dangerously-skip-permissions into stored agents (issue #5).
+	if a.CLIFlags != "" {
+		if err := executor.ValidateExtraFlags(a.CLIFlags); err != nil {
+			slog.Warn("server: CLIFlags validation failed", "agent_id", a.ID, "err", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	if err := srv.store.UpsertAgent(&a); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
