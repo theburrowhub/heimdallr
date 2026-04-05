@@ -157,6 +157,17 @@ class FirstRunSetup {
     await File('$home/.config/heimdallr/config.toml').writeAsString(content);
   }
 
+  /// Escapes backslashes, double-quotes, and newline characters in a
+  /// user-supplied string so it is safe to embed inside a TOML basic string
+  /// (i.e. between double-quote delimiters).  Without this, a value such as
+  /// `foo"\n[malicious]` could break out of the string context and inject
+  /// arbitrary TOML sections.
+  static String _tomlEscapeString(String s) => s
+      .replaceAll(r'\', r'\\')
+      .replaceAll('"', r'\"')
+      .replaceAll('\n', r'\n')
+      .replaceAll('\r', r'\r');
+
   static String _buildToml(AppConfig config) {
     final buf = StringBuffer();
 
@@ -165,8 +176,8 @@ class FirstRunSetup {
     buf.writeln();
 
     buf.writeln('[github]');
-    buf.writeln('poll_interval = "${config.pollInterval}"');
-    final repos = config.repositories.map((r) => '"$r"').join(', ');
+    buf.writeln('poll_interval = "${_tomlEscapeString(config.pollInterval)}"');
+    final repos = config.repositories.map((r) => '"${_tomlEscapeString(r)}"').join(', ');
     buf.writeln('repositories = [$repos]');
     // Persist non-monitored repos so the UI can display and re-enable them after restart.
     final nonMonitored = config.repoConfigs.entries
@@ -174,17 +185,17 @@ class FirstRunSetup {
         .map((e) => e.key)
         .toList()..sort();
     if (nonMonitored.isNotEmpty) {
-      final nonMon = nonMonitored.map((r) => '"$r"').join(', ');
+      final nonMon = nonMonitored.map((r) => '"${_tomlEscapeString(r)}"').join(', ');
       buf.writeln('non_monitored = [$nonMon]');
     }
     buf.writeln();
 
     buf.writeln('[ai]');
-    buf.writeln('primary = "${config.aiPrimary}"');
+    buf.writeln('primary = "${_tomlEscapeString(config.aiPrimary)}"');
     if (config.aiFallback.isNotEmpty) {
-      buf.writeln('fallback = "${config.aiFallback}"');
+      buf.writeln('fallback = "${_tomlEscapeString(config.aiFallback)}"');
     }
-    buf.writeln('review_mode = "${config.reviewMode}"');
+    buf.writeln('review_mode = "${_tomlEscapeString(config.reviewMode)}"');
     buf.writeln();
 
     // Per-agent CLI configs
@@ -193,13 +204,13 @@ class FirstRunSetup {
       final ac = entry.value;
       if (ac.hasConfig) {
         buf.writeln('[ai.agents.$name]');
-        if (ac.model.isNotEmpty) buf.writeln('model = "${ac.model}"');
+        if (ac.model.isNotEmpty) buf.writeln('model = "${_tomlEscapeString(ac.model)}"');
         if (ac.maxTurns > 0) buf.writeln('max_turns = ${ac.maxTurns}');
-        if (ac.approvalMode.isNotEmpty) buf.writeln('approval_mode = "${ac.approvalMode}"');
-        if (ac.extraFlags.isNotEmpty) buf.writeln('extra_flags = "${ac.extraFlags}"');
-        if (ac.promptId != null) buf.writeln('prompt = "${ac.promptId}"');
-        if (ac.effort.isNotEmpty) buf.writeln('effort = "${ac.effort}"');
-        if (ac.permissionMode.isNotEmpty) buf.writeln('permission_mode = "${ac.permissionMode}"');
+        if (ac.approvalMode.isNotEmpty) buf.writeln('approval_mode = "${_tomlEscapeString(ac.approvalMode)}"');
+        if (ac.extraFlags.isNotEmpty) buf.writeln('extra_flags = "${_tomlEscapeString(ac.extraFlags)}"');
+        if (ac.promptId != null) buf.writeln('prompt = "${_tomlEscapeString(ac.promptId!)}"');
+        if (ac.effort.isNotEmpty) buf.writeln('effort = "${_tomlEscapeString(ac.effort)}"');
+        if (ac.permissionMode.isNotEmpty) buf.writeln('permission_mode = "${_tomlEscapeString(ac.permissionMode)}"');
         if (ac.bare) buf.writeln('bare = true');
         if (ac.dangerouslySkipPerms) buf.writeln('dangerously_skip_perms = true');
         if (ac.noSessionPersistence) buf.writeln('no_session_persistence = true');
@@ -212,13 +223,13 @@ class FirstRunSetup {
       final repo = entry.key;
       final rc = entry.value;
       if (rc.hasAiOverride) {
-        buf.writeln('[ai.repos."$repo"]');
-        if (rc.aiPrimary != null) buf.writeln('primary = "${rc.aiPrimary}"');
-        if (rc.aiFallback != null) buf.writeln('fallback = "${rc.aiFallback}"');
-        if (rc.promptId != null) buf.writeln('prompt = "${rc.promptId}"');
-        if (rc.reviewMode != null) buf.writeln('review_mode = "${rc.reviewMode}"');
+        buf.writeln('[ai.repos."${_tomlEscapeString(repo)}"]');
+        if (rc.aiPrimary != null) buf.writeln('primary = "${_tomlEscapeString(rc.aiPrimary!)}"');
+        if (rc.aiFallback != null) buf.writeln('fallback = "${_tomlEscapeString(rc.aiFallback!)}"');
+        if (rc.promptId != null) buf.writeln('prompt = "${_tomlEscapeString(rc.promptId!)}"');
+        if (rc.reviewMode != null) buf.writeln('review_mode = "${_tomlEscapeString(rc.reviewMode!)}"');
         if (rc.localDir != null && rc.localDir!.isNotEmpty) {
-          buf.writeln('local_dir = "${rc.localDir}"');
+          buf.writeln('local_dir = "${_tomlEscapeString(rc.localDir!)}"');
         }
         buf.writeln();
       }
