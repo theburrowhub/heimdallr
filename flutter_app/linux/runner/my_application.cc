@@ -63,7 +63,11 @@ static void my_application_activate(GApplication* application) {
       g_autofree gchar* exe_dir = g_path_get_dirname(exe_path);
       g_autofree gchar* icon_path = g_build_filename(
           exe_dir, "data", "flutter_assets", "assets", "icon.png", NULL);
-      gtk_window_set_icon_from_file(window, icon_path, nullptr);
+      if (g_file_test(icon_path, G_FILE_TEST_EXISTS)) {
+        gtk_window_set_icon_from_file(window, icon_path, nullptr);
+      } else {
+        g_warning("Window icon not found at %s", icon_path);
+      }
     }
   }
 

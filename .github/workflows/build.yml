@@ -118,7 +118,7 @@ jobs:
           for SIZE in 48 128 256 512; do
             ICON_DIR="$STAGING/usr/share/icons/hicolor/${SIZE}x${SIZE}/apps"
             mkdir -p "$ICON_DIR"
-            magick "$SRC_ICON" -resize "${SIZE}x${SIZE}" "$ICON_DIR/heimdallr.png"
+            convert "$SRC_ICON" -resize "${SIZE}x${SIZE}" "$ICON_DIR/heimdallr.png"
           done
 
           # Desktop entry – filename must match APPLICATION_ID for GNOME taskbar mapping
@@ -199,6 +199,8 @@ jobs:
           chmod +x "$APPDIR/AppRun"
 
           # Desktop entry (AppImage spec: Exec= is just the binary name)
+          # Note: AppImage .desktop filename must match the icon basename, so we
+          # keep 'heimdallr.desktop' here (not the reverse-DNS used for system installs).
           printf '%s\n' \
             '[Desktop Entry]' \
             'Name=Heimdallr' \
@@ -209,7 +211,7 @@ jobs:
             'Categories=Development;' \
             'StartupWMClass=com.theburrowhub.heimdallr' \
             'StartupNotify=true' \
-            > "$APPDIR/com.theburrowhub.heimdallr.desktop"
+            > "$APPDIR/heimdallr.desktop"
 
           # Icon named after the desktop file (required by AppImage spec)
           cp flutter_app/assets/icon.png "$APPDIR/heimdallr.png"
