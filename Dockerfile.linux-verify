@@ -18,7 +18,11 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ── System dependencies (matches CI: build.yml → Install dependencies) ────────
-# Includes both build-time and runtime deps (for make run-linux).
+#
+# The -dev packages are needed at build time (Flutter + Go compilation).
+# The runtime packages (dbus-x11, libcanberra-gtk3-module, mesa-utils) add ~5 MB
+# and allow this same image to be reused for `make run-linux` (interactive GUI
+# testing on the host desktop) without needing a separate Dockerfile.
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
       clang cmake ninja-build pkg-config \
       libgtk-3-dev liblzma-dev libstdc++-12-dev \
