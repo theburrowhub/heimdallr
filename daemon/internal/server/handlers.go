@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -26,13 +27,39 @@ type Server struct {
 	meFn            func() (string, error)
 	// configFn returns the current running config as a JSON-serializable map.
 	configFn func() map[string]any
+	// apiToken is required on all state-mutating requests (POST/PUT/DELETE).
+	// Empty string disables authentication (should not happen in production).
+	apiToken string
 }
 
 // New creates a new Server. p may be nil if the pipeline is not yet configured.
-func New(s *store.Store, broker *sse.Broker, p *pipeline.Pipeline) *Server {
-	srv := &Server{store: s, broker: broker, pipeline: p}
+// apiToken must be the value returned by LoadOrCreateAPIToken — it is required
+// on all mutating endpoints to prevent cross-process/browser config poisoning.
+func New(s *store.Store, broker *sse.Broker, p *pipeline.Pipeline, apiToken string) *Server {
+	srv := &Server{store: s, broker: broker, pipeline: p, apiToken: apiToken}
 	srv.router = srv.buildRouter()
 	return srv
+}
+
+// authMiddleware rejects POST/PUT/DELETE requests that do not carry the correct
+// X-Heimdallr-Token header. GET endpoints and the SSE stream are unrestricted
+// because they are read-only; the mutating endpoints are where the risk lies
+// (see security issue #3).
+func (srv *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if srv.apiToken != "" {
+			switch r.Method {
+			case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+				token := r.Header.Get("X-Heimdallr-Token")
+				// Constant-time comparison to prevent timing attacks.
+				if !hmac.Equal([]byte(token), []byte(srv.apiToken)) {
+					http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // SetReloadFn wires the config-reload callback called by POST /reload.
@@ -72,6 +99,7 @@ func (srv *Server) Shutdown(ctx context.Context) error {
 
 func (srv *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
+	r.Use(srv.authMiddleware)
 	r.Get("/health", srv.handleHealth)
 	r.Get("/me", srv.handleMe)
 	r.Get("/prs", srv.handleListPRs)

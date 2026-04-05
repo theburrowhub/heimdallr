@@ -24,7 +24,7 @@ func setupServer(t *testing.T) (*server.Server, *store.Store) {
 	broker := sse.NewBroker()
 	broker.Start()
 	t.Cleanup(broker.Stop)
-	srv := server.New(s, broker, nil)
+	srv := server.New(s, broker, nil, "")
 	return srv, s
 }
 

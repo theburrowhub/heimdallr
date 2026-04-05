@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/pr.dart';
 import '../models/review.dart';
@@ -6,11 +7,35 @@ import '../models/review.dart';
 class ApiClient {
   final http.Client _client;
   final int port;
+  String? _cachedToken;
 
   ApiClient({http.Client? httpClient, this.port = 7842})
       : _client = httpClient ?? http.Client();
 
   Uri _uri(String path) => Uri.parse('http://127.0.0.1:$port$path');
+
+  /// Returns the API token read from the daemon's token file, or null if not found.
+  /// Cached after first successful read.
+  Future<String?> _apiToken() async {
+    if (_cachedToken != null) return _cachedToken;
+    final home = Platform.environment['HOME'] ?? '';
+    if (home.isEmpty) return null;
+    final file = File('$home/.local/share/heimdallr/api_token');
+    if (await file.exists()) {
+      _cachedToken = (await file.readAsString()).trim();
+    }
+    return _cachedToken;
+  }
+
+  /// Headers for mutating requests (POST/PUT/DELETE).
+  /// Includes X-Heimdallr-Token to satisfy the auth middleware (issue #3).
+  Future<Map<String, String>> _authHeaders() async {
+    final token = await _apiToken();
+    return {
+      'Content-Type': 'application/json',
+      if (token != null && token.isNotEmpty) 'X-Heimdallr-Token': token,
+    };
+  }
 
   Future<bool> checkHealth() async {
     try {
@@ -47,21 +72,24 @@ class ApiClient {
   }
 
   Future<void> triggerReview(int prId) async {
-    final resp = await _client.post(_uri('/prs/$prId/review'));
+    final resp = await _client.post(_uri('/prs/$prId/review'),
+        headers: await _authHeaders());
     if (resp.statusCode != 202) {
       throw ApiException('POST /prs/$prId/review failed: ${resp.statusCode}');
     }
   }
 
   Future<void> dismissPR(int prId) async {
-    final resp = await _client.post(_uri('/prs/$prId/dismiss'));
+    final resp = await _client.post(_uri('/prs/$prId/dismiss'),
+        headers: await _authHeaders());
     if (resp.statusCode != 200) {
       throw ApiException('POST /prs/$prId/dismiss failed: ${resp.statusCode}');
     }
   }
 
   Future<void> undismissPR(int prId) async {
-    final resp = await _client.post(_uri('/prs/$prId/undismiss'));
+    final resp = await _client.post(_uri('/prs/$prId/undismiss'),
+        headers: await _authHeaders());
     if (resp.statusCode != 200) {
       throw ApiException('POST /prs/$prId/undismiss failed: ${resp.statusCode}');
     }
@@ -70,7 +98,7 @@ class ApiClient {
   /// Tells the daemon to reload its config from disk and restart the poll scheduler.
   Future<void> reloadConfig() async {
     try {
-      await _client.post(_uri('/reload'));
+      await _client.post(_uri('/reload'), headers: await _authHeaders());
     } catch (_) {
       // Best-effort — daemon may not be running
     }
@@ -95,13 +123,14 @@ class ApiClient {
 
   Future<void> upsertAgent(Map<String, dynamic> agent) async {
     final resp = await _client.post(_uri('/agents'),
-        headers: {'Content-Type': 'application/json'},
+        headers: await _authHeaders(),
         body: jsonEncode(agent));
     if (resp.statusCode != 200) throw ApiException('POST /agents failed: ${resp.statusCode}');
   }
 
   Future<void> deleteAgent(String id) async {
-    final resp = await _client.delete(_uri('/agents/$id'));
+    final resp = await _client.delete(_uri('/agents/$id'),
+        headers: await _authHeaders());
     if (resp.statusCode != 200) throw ApiException('DELETE /agents/$id failed: ${resp.statusCode}');
   }
 
@@ -121,7 +150,7 @@ class ApiClient {
   Future<void> updateConfig(Map<String, dynamic> config) async {
     final resp = await _client.put(
       _uri('/config'),
-      headers: {'Content-Type': 'application/json'},
+      headers: await _authHeaders(),
       body: jsonEncode(config),
     );
     if (resp.statusCode != 200) {
