@@ -9,12 +9,13 @@ const maxDiffBytes = 32 * 1024 // 32KB ~ 8k tokens
 
 // PRContext holds all substitutable data for a prompt template.
 type PRContext struct {
-	Title  string
-	Number int
-	Repo   string
-	Author string
-	Link   string
-	Diff   string
+	Title    string
+	Number   int
+	Repo     string
+	Author   string
+	Link     string
+	Diff     string
+	Comments string // pre-formatted discussion section; empty string if no comments
 }
 
 // defaultTemplate is used when no custom agent template is configured.
@@ -37,6 +38,8 @@ Link: {link}
 Diff:
 {diff}
 </user_content>
+
+{comments}
 
 Review the above diff and respond with ONLY valid JSON in this exact format (no markdown, no explanation):
 {
@@ -72,6 +75,8 @@ Diff:
 {diff}
 </user_content>
 
+{comments}
+
 Review the diff according to the focus above and respond with ONLY valid JSON (no markdown, no explanation):
 {
   "summary": "brief overall assessment",
@@ -95,12 +100,20 @@ func BuildPrompt(title, author, diff string) string {
 	})
 }
 
-// BuildPromptFromTemplate substitutes placeholders in a custom template.
-// Supported: {title} {number} {repo} {author} {link} {diff}
-func BuildPromptFromTemplate(template string, ctx PRContext) string {
+// BuildPromptFromTemplate substitutes placeholders in a template.
+// Supported placeholders: {title} {number} {repo} {author} {link} {diff} {comments}
+//
+// Behavior for {comments}:
+//
+//	A) If the template contains {comments}: substituted directly (empty string if no comments).
+//	B) If the template does NOT contain {comments} and Comments is non-empty: the comments
+//	   block is appended at the very end of the rendered prompt.
+func BuildPromptFromTemplate(tmpl string, ctx PRContext) string {
 	if len(ctx.Diff) > maxDiffBytes {
 		ctx.Diff = ctx.Diff[:maxDiffBytes] + "\n... (diff truncated)"
 	}
+
+	hasPlaceholder := strings.Contains(tmpl, "{comments}")
 
 	r := strings.NewReplacer(
 		"{title}", ctx.Title,
@@ -109,6 +122,19 @@ func BuildPromptFromTemplate(template string, ctx PRContext) string {
 		"{author}", ctx.Author,
 		"{link}", ctx.Link,
 		"{diff}", ctx.Diff,
+		"{comments}", ctx.Comments,
 	)
-	return r.Replace(template)
+	result := r.Replace(tmpl)
+
+	// Collapse triple+ newlines caused by an empty {comments} placeholder
+	for strings.Contains(result, "\n\n\n") {
+		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
+	}
+
+	// B: append comments if the template had no {comments} placeholder
+	if !hasPlaceholder && ctx.Comments != "" {
+		result += "\n\n" + ctx.Comments
+	}
+
+	return result
 }
