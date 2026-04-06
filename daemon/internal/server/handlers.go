@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/heimdallr/daemon/internal/executor"
 	"github.com/heimdallr/daemon/internal/pipeline"
 	"github.com/heimdallr/daemon/internal/sse"
 	"github.com/heimdallr/daemon/internal/store"
@@ -42,11 +44,12 @@ func New(s *store.Store, broker *sse.Broker, p *pipeline.Pipeline, apiToken stri
 	return srv
 }
 
-// sensitiveGETPaths lists GET paths that expose internal config or agent data
-// and therefore require authentication even though they are read-only.
-// All other GET paths (/health, /me, /prs, /prs/{id}, /stats, /events) are
-// considered safe to read without a token.
-var sensitiveGETPaths = []string{"/config", "/agents"}
+// sensitiveGETPaths lists GET paths that require authentication even though they
+// are read-only. This includes endpoints that expose internal config, agent
+// data, or activity metadata (SSE stream).
+// /health, /me, /prs, /prs/{id}, and /stats are considered safe to read without
+// a token as they expose only minimal public-facing information.
+var sensitiveGETPaths = []string{"/config", "/agents", "/events"}
 
 // authMiddleware rejects:
 //   - POST/PUT/PATCH/DELETE requests without a valid X-Heimdallr-Token header.
@@ -102,8 +105,11 @@ func (srv *Server) Router() http.Handler {
 func (srv *Server) Start(port int) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	srv.httpServer = &http.Server{
-		Addr:    addr,
-		Handler: srv.router,
+		Addr:         addr,
+		Handler:      srv.router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 	return srv.httpServer.ListenAndServe()
 }
@@ -150,7 +156,8 @@ func (srv *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (srv *Server) handleListPRs(w http.ResponseWriter, r *http.Request) {
 	prs, err := srv.store.ListPRs()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("handleListPRs: store error", "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	type prWithReview struct {
@@ -187,7 +194,8 @@ func (srv *Server) handleDismissPR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := srv.store.DismissPR(id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("handleDismissPR: store error", "id", id, "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
@@ -200,7 +208,8 @@ func (srv *Server) handleUndismissPR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := srv.store.UndismissPR(id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("handleUndismissPR: store error", "id", id, "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "undismissed"})
@@ -246,6 +255,7 @@ var validConfigKeys = map[string]struct{}{
 }
 
 func (srv *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -258,7 +268,21 @@ func (srv *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for k, v := range body {
-		val := fmt.Sprintf("%v", v)
+		var val string
+		switch typed := v.(type) {
+		case string:
+			val = typed
+		default:
+			// Arrays, numbers, booleans: serialize as JSON so they round-trip correctly.
+			// fmt.Sprintf("%v", v) would produce "[item1 item2]" for arrays, which
+			// cannot be parsed back — see security issue M-2.
+			b, err := json.Marshal(v)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("invalid value for key %q", k), http.StatusBadRequest)
+				return
+			}
+			val = string(b)
+		}
 		if _, err := srv.store.SetConfig(k, val); err != nil {
 			slog.Error("config: set", "key", k, "err", err)
 		}
@@ -273,7 +297,7 @@ func (srv *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := srv.reloadFn(); err != nil {
 		slog.Error("reload failed", "err", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	slog.Info("config reloaded via API")
@@ -313,7 +337,8 @@ func (srv *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 func (srv *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	agents, err := srv.store.ListAgents()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("handleListAgents: store error", "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	if agents == nil {
@@ -323,6 +348,7 @@ func (srv *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleUpsertAgent(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 	var a store.Agent
 	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -332,8 +358,23 @@ func (srv *Server) handleUpsertAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id and name are required", http.StatusBadRequest)
 		return
 	}
+	// Validate CLI name against the executor allowlist (claude, gemini, codex).
+	if a.CLI != "" {
+		if err := executor.ValidateCLIName(a.CLI); err != nil {
+			http.Error(w, fmt.Sprintf("invalid cli: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+	// Validate CLIFlags to reject dangerous flags before persisting.
+	if a.CLIFlags != "" {
+		if err := executor.ValidateExtraFlags(a.CLIFlags); err != nil {
+			http.Error(w, fmt.Sprintf("invalid cli_flags: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
 	if err := srv.store.UpsertAgent(&a); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("handleUpsertAgent: store error", "id", a.ID, "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, a)
@@ -342,7 +383,8 @@ func (srv *Server) handleUpsertAgent(w http.ResponseWriter, r *http.Request) {
 func (srv *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := srv.store.DeleteAgent(id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("handleDeleteAgent: store error", "id", id, "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
@@ -355,7 +397,8 @@ func (srv *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	login, err := srv.meFn()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("handleMe: fetch authenticated user", "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"login": login})
@@ -364,7 +407,8 @@ func (srv *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 func (srv *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := srv.store.ComputeStats()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("handleStats: store error", "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)

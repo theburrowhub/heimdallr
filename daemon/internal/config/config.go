@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/BurntSushi/toml"
+	"github.com/heimdallr/daemon/internal/executor"
 )
 
 var validIntervals = map[string]bool{
@@ -42,9 +43,9 @@ type CLIAgentConfig struct {
 
 	// Claude-specific flags
 	Effort               string `toml:"effort"`                  // low|medium|high|max
-	PermissionMode       string `toml:"permission_mode"`         // default|auto|bypassPermissions|acceptEdits|dontAsk
+	PermissionMode       string `toml:"permission_mode"`         // default|auto|acceptEdits|dontAsk (bypassPermissions is explicitly forbidden)
 	Bare                 bool   `toml:"bare"`                    // --bare
-	DangerouslySkipPerms bool   `toml:"dangerously_skip_perms"` // --dangerously-skip-permissions
+	DangerouslySkipPerms bool   `toml:"dangerously_skip_perms"` // --dangerously-skip-permissions (cannot be set via HTTP API, see M-5)
 	NoSessionPersistence bool   `toml:"no_session_persistence"` // --no-session-persistence
 }
 
@@ -121,6 +122,15 @@ func (c *Config) Validate() error {
 	}
 	if c.GitHub.PollInterval != "" && !validIntervals[c.GitHub.PollInterval] {
 		return fmt.Errorf("config: invalid poll_interval %q (valid: 1m, 5m, 30m, 1h)", c.GitHub.PollInterval)
+	}
+	// Validate per-CLI agent configs: permission_mode and approval_mode must be in their allowlists.
+	for name, a := range c.AI.Agents {
+		if err := executor.ValidatePermissionMode(a.PermissionMode); err != nil {
+			return fmt.Errorf("config: agents[%s].permission_mode: %w", name, err)
+		}
+		if err := executor.ValidateApprovalMode(a.ApprovalMode); err != nil {
+			return fmt.Errorf("config: agents[%s].approval_mode: %w", name, err)
+		}
 	}
 	return nil
 }

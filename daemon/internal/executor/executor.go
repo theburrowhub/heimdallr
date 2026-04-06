@@ -49,8 +49,12 @@ type ExecOptions struct {
 
 	// Claude-specific flags
 	Effort               string // --effort low|medium|high|max
-	PermissionMode       string // --permission-mode <value>
+	PermissionMode       string // --permission-mode <value> — must pass ValidatePermissionMode (bypassPermissions is blocked)
 	Bare                 bool   // --bare
+	// DangerouslySkipPerms enables --dangerously-skip-permissions.
+	// SECURITY (M-5): This field MUST NOT be exposed via the HTTP API or
+	// deserialized from agent JSON requests. It is only set from config.toml
+	// (CLIAgentConfig.DangerouslySkipPerms) which requires local file access.
 	DangerouslySkipPerms bool   // --dangerously-skip-permissions
 	NoSessionPersistence bool   // --no-session-persistence
 }
@@ -92,6 +96,47 @@ var allowedCLIs = map[string]struct{}{
 	"claude": {},
 	"gemini": {},
 	"codex":  {},
+}
+
+// allowedPermissionModes is the strict allowlist for the --permission-mode flag.
+// "bypassPermissions" is intentionally excluded — it grants unrestricted filesystem
+// access and must never be passed to the claude CLI from Heimdallr config.
+var allowedPermissionModes = map[string]struct{}{
+	"default":     {},
+	"auto":        {},
+	"acceptEdits": {},
+	"dontAsk":     {},
+}
+
+// allowedApprovalModes is the allowlist for the codex --approval-mode flag.
+var allowedApprovalModes = map[string]struct{}{
+	"auto-edit":  {},
+	"full-auto":  {},
+	"suggest":    {},
+}
+
+// ValidatePermissionMode returns an error if mode is not in the allowlist.
+// An empty string is accepted (means "not set").
+func ValidatePermissionMode(mode string) error {
+	if mode == "" {
+		return nil
+	}
+	if _, ok := allowedPermissionModes[mode]; !ok {
+		return fmt.Errorf("executor: permission_mode %q is not allowed — valid values: default, auto, acceptEdits, dontAsk", mode)
+	}
+	return nil
+}
+
+// ValidateApprovalMode returns an error if mode is not in the allowlist.
+// An empty string is accepted (means "not set").
+func ValidateApprovalMode(mode string) error {
+	if mode == "" {
+		return nil
+	}
+	if _, ok := allowedApprovalModes[mode]; !ok {
+		return fmt.Errorf("executor: approval_mode %q is not allowed — valid values: auto-edit, full-auto, suggest", mode)
+	}
+	return nil
 }
 
 // dangerousFlagPrefixes is the denylist for ValidateExtraFlags.
@@ -141,14 +186,21 @@ func ValidateExtraFlags(flags string) error {
 	return nil
 }
 
-// validateCLIName returns an error if name is not in the known-safe allowlist.
+// ValidateCLIName returns an error if name is not in the known-safe allowlist.
+// This is exported so that callers outside the package (e.g. HTTP handlers) can
+// validate user-supplied CLI names before persisting them.
 // This must be called before any function that interpolates the name into a
 // shell command (e.g. resolveCLIPath).
-func validateCLIName(name string) error {
+func ValidateCLIName(name string) error {
 	if _, ok := allowedCLIs[name]; !ok {
 		return fmt.Errorf("executor: unknown CLI %q — must be one of: claude, gemini, codex", name)
 	}
 	return nil
+}
+
+// validateCLIName is the unexported alias kept for internal callers.
+func validateCLIName(name string) error {
+	return ValidateCLIName(name)
 }
 
 // resolveCLIPath returns the full path for a CLI tool, checking both the
@@ -323,7 +375,11 @@ func buildArgs(cli string, opts ExecOptions) []string {
 			args = append(args, "--model", opts.Model)
 		}
 		if opts.ApprovalMode != "" {
-			args = append(args, "--approval-mode", opts.ApprovalMode)
+			if err := ValidateApprovalMode(opts.ApprovalMode); err != nil {
+				slog.Warn("buildArgs: ApprovalMode rejected, ignoring", "mode", opts.ApprovalMode, "err", err)
+			} else {
+				args = append(args, "--approval-mode", opts.ApprovalMode)
+			}
 		}
 	default:
 		// claude, gemini: stdin mode
@@ -339,7 +395,11 @@ func buildArgs(cli string, opts ExecOptions) []string {
 				args = append(args, "--effort", opts.Effort)
 			}
 			if opts.PermissionMode != "" {
-				args = append(args, "--permission-mode", opts.PermissionMode)
+				if err := ValidatePermissionMode(opts.PermissionMode); err != nil {
+					slog.Warn("buildArgs: PermissionMode rejected, ignoring", "mode", opts.PermissionMode, "err", err)
+				} else {
+					args = append(args, "--permission-mode", opts.PermissionMode)
+				}
 			}
 			if opts.Bare {
 				args = append(args, "--bare")

@@ -2,6 +2,7 @@ package keychain
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -23,8 +24,11 @@ func Get() (string, error) {
 			return token, nil
 		}
 	}
-	// Fallback to environment variable
+	// Fallback to environment variable — less secure than Keychain because env
+	// vars can be read by other processes of the same user. Warn so the user
+	// knows to prefer Keychain storage.
 	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
+		slog.Warn("keychain: using GITHUB_TOKEN env var as fallback — consider storing the token in macOS Keychain for better security")
 		return t, nil
 	}
 	return "", fmt.Errorf("keychain: GitHub token not found in Keychain or GITHUB_TOKEN env var")

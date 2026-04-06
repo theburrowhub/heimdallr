@@ -237,8 +237,18 @@ func main() {
 		return sc
 	}
 
+	cfgMu.Lock()
 	sched = startScheduler(cfg)
-	defer sched.Stop()
+	cfgMu.Unlock()
+
+	// Capture the scheduler pointer under mutex so the deferred Stop is safe
+	// even if a concurrent reload replaces sched before this goroutine exits.
+	defer func() {
+		cfgMu.Lock()
+		sc := sched
+		cfgMu.Unlock()
+		sc.Stop()
+	}()
 
 	// Expose live config for GET /config
 	srv.SetConfigFn(func() map[string]any {
@@ -304,11 +314,13 @@ func main() {
 		}
 		cfgMu.Lock()
 		cfg = newCfg
+		oldSched := sched
+		sched = startScheduler(newCfg)
 		cfgMu.Unlock()
 
-		// Restart scheduler with new interval and repo list
-		sched.Stop()
-		sched = startScheduler(newCfg)
+		// Stop the old scheduler outside the lock to avoid holding the mutex
+		// during a potentially blocking Stop call.
+		oldSched.Stop()
 
 		// Run first poll immediately with new config
 		go makePollFn(newCfg)()
@@ -432,6 +444,11 @@ func (n *notifyWithSSE) Notify(title, message string) {
 // generates a new cryptographically-random one and writes it with mode 0600.
 // The token is used by the HTTP server to authenticate all mutating requests
 // (POST/PUT/DELETE) — see security issue #3.
+//
+// SECURITY (M-4): Uses O_CREATE|O_EXCL to create the file atomically. If two
+// daemon instances race, only one will win the exclusive create; the other reads
+// the file that was created by the winner, ensuring both instances share the
+// same token rather than silently diverging.
 func loadOrCreateAPIToken(dir string) (string, error) {
 	path := filepath.Join(dir, "api_token")
 
@@ -451,8 +468,26 @@ func loadOrCreateAPIToken(dir string) (string, error) {
 	}
 	tok := hex.EncodeToString(buf)
 
-	// Write with mode 0600 so only the owning user can read it.
-	if err := os.WriteFile(path, []byte(tok+"\n"), 0600); err != nil {
+	// Use O_CREATE|O_EXCL for atomic creation: if another process created the
+	// file between our ReadFile and here, os.OpenFile returns an error that
+	// satisfies os.IsExist — we then read the file created by the other process.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		if os.IsExist(err) {
+			// Another process created the file first — read their token.
+			data2, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return "", fmt.Errorf("api_token: read after race: %w", readErr)
+			}
+			existing := strings.TrimSpace(string(data2))
+			if len(existing) >= 32 {
+				return existing, nil
+			}
+		}
+		return "", fmt.Errorf("api_token: create %s: %w", path, err)
+	}
+	defer f.Close()
+	if _, err := fmt.Fprintf(f, "%s\n", tok); err != nil {
 		return "", fmt.Errorf("api_token: write %s: %w", path, err)
 	}
 	slog.Info("api_token: created new token", "path", path)
