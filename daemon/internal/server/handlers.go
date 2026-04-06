@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/heimdallr/daemon/internal/pipeline"
@@ -17,11 +18,11 @@ import (
 
 // Server holds the HTTP router, SSE broker, store, and optional pipeline.
 type Server struct {
-	store      *store.Store
-	broker     *sse.Broker
-	pipeline   *pipeline.Pipeline
-	router     chi.Router
-	httpServer *http.Server
+	store           *store.Store
+	broker          *sse.Broker
+	pipeline        *pipeline.Pipeline
+	router          chi.Router
+	httpServer      *http.Server
 	reloadFn        func() error
 	triggerReviewFn func(prID int64) error
 	meFn            func() (string, error)
@@ -41,15 +42,33 @@ func New(s *store.Store, broker *sse.Broker, p *pipeline.Pipeline, apiToken stri
 	return srv
 }
 
-// authMiddleware rejects POST/PUT/DELETE requests that do not carry the correct
-// X-Heimdallr-Token header. GET endpoints and the SSE stream are unrestricted
-// because they are read-only; the mutating endpoints are where the risk lies
-// (see security issue #3).
+// sensitiveGETPaths lists GET paths that expose internal config or agent data
+// and therefore require authentication even though they are read-only.
+// All other GET paths (/health, /me, /prs, /prs/{id}, /stats, /events) are
+// considered safe to read without a token.
+var sensitiveGETPaths = []string{"/config", "/agents"}
+
+// authMiddleware rejects:
+//   - POST/PUT/PATCH/DELETE requests without a valid X-Heimdallr-Token header.
+//   - GET requests to /config or /agents without a valid token (these endpoints
+//     return local directory paths, CLI flags, and agent configs that should not
+//     be readable by arbitrary browser tabs — see security issue #3).
 func (srv *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if srv.apiToken != "" {
+			needsAuth := false
 			switch r.Method {
 			case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+				needsAuth = true
+			case http.MethodGet:
+				for _, p := range sensitiveGETPaths {
+					if r.URL.Path == p || strings.HasPrefix(r.URL.Path, p+"/") {
+						needsAuth = true
+						break
+					}
+				}
+			}
+			if needsAuth {
 				token := r.Header.Get("X-Heimdallr-Token")
 				// Constant-time comparison to prevent timing attacks.
 				if !hmac.Equal([]byte(token), []byte(srv.apiToken)) {
@@ -213,11 +232,30 @@ func (srv *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
+// validConfigKeys is the exhaustive allowlist of keys that callers are permitted
+// to write via PUT /config. Any key outside this set is rejected with HTTP 400
+// to prevent arbitrary data injection into the configs table (security issue #4).
+var validConfigKeys = map[string]struct{}{
+	"server_port":    {},
+	"poll_interval":  {},
+	"repositories":   {},
+	"ai_primary":     {},
+	"ai_fallback":    {},
+	"review_mode":    {},
+	"retention_days": {},
+}
+
 func (srv *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
+	}
+	for k := range body {
+		if _, ok := validConfigKeys[k]; !ok {
+			http.Error(w, fmt.Sprintf("unknown config key: %q", k), http.StatusBadRequest)
+			return
+		}
 	}
 	for k, v := range body {
 		val := fmt.Sprintf("%v", v)
