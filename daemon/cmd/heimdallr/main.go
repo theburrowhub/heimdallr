@@ -294,16 +294,27 @@ func main() {
 		}
 	})
 
-	// Cache authenticated username for GET /me
+	// Cache authenticated username for GET /me.
+	// loginMu guards cachedLogin against concurrent reads/writes from HTTP goroutines.
+	var loginMu sync.Mutex
 	var cachedLogin string
 	srv.SetMeFn(func() (string, error) {
+		loginMu.Lock()
 		if cachedLogin != "" {
-			return cachedLogin, nil
+			l := cachedLogin
+			loginMu.Unlock()
+			return l, nil
 		}
+		loginMu.Unlock()
+
 		login, err := ghClient.AuthenticatedUser()
-		if err == nil {
+
+		loginMu.Lock()
+		if err == nil && cachedLogin == "" {
 			cachedLogin = login
 		}
+		loginMu.Unlock()
+
 		return login, err
 	})
 
