@@ -244,7 +244,9 @@ class _BootstrapAppState extends State<_BootstrapApp> with WindowListener {
     // ── 5. Launch daemon ──────────────────────────────────────────────────
     _setStatus('Starting Heimdallr…');
     try {
-      await Process.start(binaryPath, []);
+      // Use detached mode so the daemon process outlives the Flutter process.
+      // This ensures reviews in progress survive window hides and dev restarts.
+      await Process.start(binaryPath, [], mode: ProcessStartMode.detached);
     } catch (e) {
       _setError(
         title: 'Could not start daemon',
@@ -269,7 +271,7 @@ class _BootstrapAppState extends State<_BootstrapApp> with WindowListener {
       }
       // Re-launch every 10 seconds in case the daemon crashed at startup
       if (attempt > 0 && attempt % 25 == 0 && retryBinary != null) {
-        try { await Process.start(retryBinary, []); } catch (_) {}
+        try { await Process.start(retryBinary, [], mode: ProcessStartMode.detached); } catch (_) {}
       }
     }
   }
