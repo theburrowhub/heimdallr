@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -96,4 +97,49 @@ func TestHandlerPutConfig(t *testing.T) {
 
 func itoa(n int64) string {
 	return fmt.Sprintf("%d", n)
+}
+
+func setupServerWithToken(t *testing.T, token string) *server.Server {
+	t.Helper()
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	broker := sse.NewBroker()
+	broker.Start()
+	t.Cleanup(broker.Stop)
+	return server.New(s, broker, nil, token)
+}
+
+func TestHandlerLogsStream_RequiresAuth(t *testing.T) {
+	srv := setupServerWithToken(t, "secret-token")
+	req := httptest.NewRequest("GET", "/logs/stream", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 without token, got %d", w.Code)
+	}
+}
+
+func TestHandlerLogsStream_WithToken(t *testing.T) {
+	srv := setupServerWithToken(t, "secret-token")
+
+	// Use a context with a short deadline so the polling loop exits.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req := httptest.NewRequest("GET", "/logs/stream", nil).WithContext(ctx)
+	req.Header.Set("X-Heimdallr-Token", "secret-token")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	// Log file won't exist in CI/test env; endpoint should return 200 with SSE not-found message
+	// and exit cleanly. If the log file DOES exist (dev machine), the handler exits when ctx is done.
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 with valid token, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("expected Content-Type text/event-stream, got %q", ct)
+	}
 }

@@ -1,12 +1,16 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -49,7 +53,7 @@ func New(s *store.Store, broker *sse.Broker, p *pipeline.Pipeline, apiToken stri
 // data, or activity metadata (SSE stream).
 // /health, /me, /prs, /prs/{id}, and /stats are considered safe to read without
 // a token as they expose only minimal public-facing information.
-var sensitiveGETPaths = []string{"/config", "/agents", "/events"}
+var sensitiveGETPaths = []string{"/config", "/agents", "/events", "/logs/stream"}
 
 // authMiddleware rejects:
 //   - POST/PUT/PATCH/DELETE requests without a valid X-Heimdallr-Token header.
@@ -140,6 +144,7 @@ func (srv *Server) buildRouter() chi.Router {
 	r.Put("/config", srv.handlePutConfig)
 	r.Post("/reload", srv.handleReload)
 	r.Get("/events", srv.handleSSE)
+	r.Get("/logs/stream", srv.handleLogsStream)
 	return r
 }
 
@@ -416,4 +421,110 @@ func (srv *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+func (srv *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
+	home, _ := os.UserHomeDir()
+	logPath := filepath.Join(home, "Library", "Logs", "auto-pr", "auto-pr-daemon.log")
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flush := func() {
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+	emit := func(line string) {
+		escaped, _ := json.Marshal(line)
+		fmt.Fprintf(w, "event: log_line\ndata: {\"line\":%s}\n\n", escaped)
+		flush()
+	}
+
+	// Check if file exists.
+	f, err := os.Open(logPath)
+	if err != nil {
+		emit("(log file not found — daemon may be running in dev mode)")
+		return
+	}
+	defer f.Close()
+
+	// Read last 300 lines.
+	for _, line := range tailLines(f, 300) {
+		emit(line)
+	}
+
+	// Get current offset.
+	offset, _ := f.Seek(0, io.SeekCurrent)
+
+	// Polling loop.
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			f2, err := os.Open(logPath)
+			if err != nil {
+				continue
+			}
+			f2.Seek(offset, io.SeekStart) //nolint:errcheck
+			scanner := bufio.NewScanner(f2)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if line != "" {
+					emit(line)
+				}
+			}
+			offset, _ = f2.Seek(0, io.SeekCurrent)
+			f2.Close()
+		}
+	}
+}
+
+// tailLines returns up to n lines from the end of f.
+// Reads the file in reverse chunks to avoid loading the entire file into memory.
+func tailLines(f *os.File, n int) []string {
+	const chunkSize = 4096
+	stat, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	size := stat.Size()
+	if size == 0 {
+		return nil
+	}
+
+	var lines []string
+	var partial string
+	pos := size
+
+	for len(lines) < n && pos > 0 {
+		readSize := int64(chunkSize)
+		if pos < readSize {
+			readSize = pos
+		}
+		pos -= readSize
+		buf := make([]byte, readSize)
+		f.ReadAt(buf, pos) //nolint:errcheck
+		chunk := string(buf) + partial
+		parts := strings.Split(chunk, "\n")
+		partial = parts[0]
+		for i := len(parts) - 1; i >= 1; i-- {
+			if parts[i] != "" {
+				lines = append([]string{parts[i]}, lines...)
+			}
+		}
+	}
+	if partial != "" {
+		lines = append([]string{partial}, lines...)
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	// Seek file to end of last line read.
+	f.Seek(size, io.SeekStart) //nolint:errcheck
+	return lines
 }
