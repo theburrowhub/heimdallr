@@ -1,4 +1,0 @@
-#!/bin/sh
-cat <<'EOF'
-{"summary":"LGTM","issues":[],"suggestions":["consider adding tests"],"severity":"low"}
-EOF

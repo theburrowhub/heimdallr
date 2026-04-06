@@ -29,6 +29,7 @@ class _StatsBody extends StatelessWidget {
     final topRepos = (stats['top_repos'] as List<dynamic>?) ?? [];
     final last7 = (stats['reviews_last_7_days'] as List<dynamic>?) ?? [];
     final avgIssues = (stats['avg_issues_per_review'] as num?)?.toDouble() ?? 0;
+    final timing = (stats['review_timing'] as Map<String, dynamic>?) ?? {};
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -67,6 +68,14 @@ class _StatsBody extends StatelessWidget {
               ),
             ],
           ),
+
+          // Review timing
+          if ((timing['sample_count'] as int? ?? 0) > 0) ...[
+            const SizedBox(height: 24),
+            _sectionTitle(context, 'Review Duration'),
+            const SizedBox(height: 8),
+            _ReviewTimingSection(timing: timing),
+          ],
 
           const SizedBox(height: 24),
 
@@ -149,6 +158,118 @@ class _StatsBody extends StatelessWidget {
             .textTheme
             .titleSmall
             ?.copyWith(fontWeight: FontWeight.bold));
+  }
+}
+
+// ── Review timing section ────────────────────────────────────────────────────
+
+class _ReviewTimingSection extends StatelessWidget {
+  final Map<String, dynamic> timing;
+  const _ReviewTimingSection({required this.timing});
+
+  static String _fmt(double secs) {
+    if (secs < 60) return '${secs.round()}s';
+    final m = (secs / 60).floor();
+    final s = (secs % 60).round();
+    return s > 0 ? '${m}m ${s}s' : '${m}m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final avg    = (timing['avg_seconds']    as num?)?.toDouble() ?? 0;
+    final median = (timing['median_seconds'] as num?)?.toDouble() ?? 0;
+    final min    = (timing['min_seconds']    as num?)?.toDouble() ?? 0;
+    final max    = (timing['max_seconds']    as num?)?.toDouble() ?? 0;
+    final n      = timing['sample_count'] as int? ?? 0;
+
+    final fast     = timing['bucket_fast']      as int? ?? 0;
+    final medium   = timing['bucket_medium']    as int? ?? 0;
+    final slow     = timing['bucket_slow']      as int? ?? 0;
+    final verySlow = timing['bucket_very_slow'] as int? ?? 0;
+    final totalRaw = fast + medium + slow + verySlow;
+    final total    = totalRaw < 1 ? 1.0 : totalRaw.toDouble();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Metrics row
+        Row(children: [
+          _TimeCard(label: 'Avg',    value: _fmt(avg),    icon: Icons.timer_outlined,    color: Colors.blue),
+          const SizedBox(width: 10),
+          _TimeCard(label: 'Median', value: _fmt(median), icon: Icons.align_vertical_center, color: Colors.purple),
+          const SizedBox(width: 10),
+          _TimeCard(label: 'Fastest', value: _fmt(min),   icon: Icons.flash_on,          color: Colors.green.shade600),
+          const SizedBox(width: 10),
+          _TimeCard(label: 'Slowest', value: _fmt(max),   icon: Icons.hourglass_bottom,  color: Colors.orange.shade700),
+        ]),
+        const SizedBox(height: 12),
+        // Distribution bar
+        Text('Distribution ($n reviews)',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+        const SizedBox(height: 6),
+        _DistBar(label: '< 30s',   count: fast,     total: total, color: Colors.green.shade600),
+        const SizedBox(height: 4),
+        _DistBar(label: '30–120s', count: medium,   total: total, color: Colors.blue),
+        const SizedBox(height: 4),
+        _DistBar(label: '2–5 min', count: slow,     total: total, color: Colors.orange.shade700),
+        const SizedBox(height: 4),
+        _DistBar(label: '> 5 min', count: verySlow, total: total, color: Colors.red.shade700),
+      ],
+    );
+  }
+}
+
+class _TimeCard extends StatelessWidget {
+  final String label, value;
+  final IconData icon;
+  final Color color;
+  const _TimeCard({required this.label, required this.value,
+      required this.icon, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(icon, size: 16, color: color),
+            const SizedBox(height: 4),
+            Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color)),
+            Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _DistBar extends StatelessWidget {
+  final String label;
+  final int count;
+  final double total;
+  final Color color;
+  const _DistBar({required this.label, required this.count,
+      required this.total, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final frac = count / total;
+    return Row(children: [
+      SizedBox(width: 60, child: Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey))),
+      Expanded(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: LinearProgressIndicator(
+            value: frac, minHeight: 10,
+            backgroundColor: Colors.grey.shade800,
+            valueColor: AlwaysStoppedAnimation<Color>(color),
+          ),
+        ),
+      ),
+      const SizedBox(width: 6),
+      Text('$count', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+    ]);
   }
 }
 

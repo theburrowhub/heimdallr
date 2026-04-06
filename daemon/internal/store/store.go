@@ -107,14 +107,29 @@ func (s *Store) GetConfig(key string) (string, error) {
 	return value, err
 }
 
+// ReviewTimingStats contains metrics about how long reviews take.
+// Duration is measured from prs.fetched_at (pipeline start) to reviews.created_at (AI done).
+type ReviewTimingStats struct {
+	SampleCount    int     `json:"sample_count"`
+	AvgSeconds     float64 `json:"avg_seconds"`
+	MedianSeconds  float64 `json:"median_seconds"`
+	MinSeconds     float64 `json:"min_seconds"`
+	MaxSeconds     float64 `json:"max_seconds"`
+	BucketFast     int     `json:"bucket_fast"`      // < 30 s
+	BucketMedium   int     `json:"bucket_medium"`    // 30–120 s
+	BucketSlow     int     `json:"bucket_slow"`      // 120–300 s
+	BucketVerySlow int     `json:"bucket_very_slow"` // > 300 s
+}
+
 // Stats is the data returned by GET /stats.
 type Stats struct {
-	TotalReviews     int            `json:"total_reviews"`
-	BySeverity       map[string]int `json:"by_severity"`
-	ByCLI            map[string]int `json:"by_cli"`
-	TopRepos         []RepoCount    `json:"top_repos"`
-	ReviewsLast7Days []DayCount     `json:"reviews_last_7_days"`
-	AvgIssuesPerReview float64      `json:"avg_issues_per_review"`
+	TotalReviews       int               `json:"total_reviews"`
+	BySeverity         map[string]int    `json:"by_severity"`
+	ByCLI              map[string]int    `json:"by_cli"`
+	TopRepos           []RepoCount       `json:"top_repos"`
+	ReviewsLast7Days   []DayCount        `json:"reviews_last_7_days"`
+	AvgIssuesPerReview float64           `json:"avg_issues_per_review"`
+	ReviewTiming       ReviewTimingStats `json:"review_timing"`
 }
 
 type RepoCount struct {
@@ -201,6 +216,64 @@ func (s *Store) ComputeStats() (*Stats, error) {
 		s.db.QueryRow(`SELECT COALESCE(SUM(json_array_length(issues)),0) FROM reviews WHERE issues IS NOT NULL`).Scan(&totalIssues)
 		if stats.TotalReviews > 0 {
 			stats.AvgIssuesPerReview = float64(totalIssues) / float64(stats.TotalReviews)
+		}
+	}
+
+	// Review timing: duration from pipeline start (prs.fetched_at) to AI done (reviews.created_at).
+	// Fetch last 200 published reviews and compute stats in Go for accuracy.
+	timingRows, _ := s.db.Query(`
+		SELECT (julianday(r.created_at) - julianday(p.fetched_at)) * 86400.0
+		FROM reviews r
+		JOIN prs p ON p.id = r.pr_id
+		WHERE r.github_review_id > 0
+		  AND p.fetched_at IS NOT NULL
+		  AND p.fetched_at != ''
+		ORDER BY r.created_at DESC
+		LIMIT 200
+	`)
+	if timingRows != nil {
+		var durations []float64
+		for timingRows.Next() {
+			var d float64
+			timingRows.Scan(&d)
+			// Sanity check: 5s–3600s (ignore implausible values)
+			if d >= 5 && d <= 3600 {
+				durations = append(durations, d)
+			}
+		}
+		timingRows.Close()
+		if n := len(durations); n > 0 {
+			t := &stats.ReviewTiming
+			t.SampleCount = n
+			sum, minD, maxD := 0.0, durations[0], durations[0]
+			for _, d := range durations {
+				sum += d
+				if d < minD { minD = d }
+				if d > maxD { maxD = d }
+				switch {
+				case d < 30:   t.BucketFast++
+				case d < 120:  t.BucketMedium++
+				case d < 300:  t.BucketSlow++
+				default:       t.BucketVerySlow++
+				}
+			}
+			t.AvgSeconds = sum / float64(n)
+			t.MinSeconds = minD
+			t.MaxSeconds = maxD
+			// Median (durations are already in insertion order, approximate)
+			sorted := make([]float64, n)
+			copy(sorted, durations)
+			// Simple insertion sort for small N
+			for i := 1; i < n; i++ {
+				for j := i; j > 0 && sorted[j] < sorted[j-1]; j-- {
+					sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+				}
+			}
+			if n%2 == 0 {
+				t.MedianSeconds = (sorted[n/2-1] + sorted[n/2]) / 2
+			} else {
+				t.MedianSeconds = sorted[n/2]
+			}
 		}
 	}
 
