@@ -1,6 +1,9 @@
 package github
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type User struct {
 	Login string `json:"login"`
@@ -35,9 +38,17 @@ func (pr *PullRequest) ResolveRepo() {
 		pr.Repo = pr.Head.Repo.FullName
 		return
 	}
-	// Extract "org/repo" from "https://api.github.com/repos/org/repo"
+	// Extract "org/repo" from "https://api.github.com/repos/org/repo".
+	// Validate the extracted segment has exactly the format "org/repo" —
+	// one slash, no path traversal sequences, no special path characters —
+	// to prevent a manipulated RepositoryURL from injecting path traversal.
 	const prefix = "https://api.github.com/repos/"
 	if len(pr.RepositoryURL) > len(prefix) {
-		pr.Repo = pr.RepositoryURL[len(prefix):]
+		extracted := pr.RepositoryURL[len(prefix):]
+		if strings.Count(extracted, "/") == 1 &&
+			!strings.Contains(extracted, "..") &&
+			!strings.Contains(extracted, "//") {
+			pr.Repo = extracted
+		}
 	}
 }

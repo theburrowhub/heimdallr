@@ -13,6 +13,17 @@ import (
 
 const defaultBaseURL = "https://api.github.com"
 
+// maxBodyBytes limits the size of API response bodies read into memory to
+// prevent out-of-memory conditions caused by unexpectedly large responses.
+const maxBodyBytes = 1 * 1024 * 1024 // 1 MB for most API responses
+
+// maxDiffBodyBytes allows a larger limit for PR diffs, which can be legitimately large.
+const maxDiffBodyBytes = 10 * 1024 * 1024 // 10 MB for diffs
+
+// maxErrBodyLen limits the number of bytes included in error messages to avoid
+// leaking sensitive GitHub diagnostic information (e.g. token details).
+const maxErrBodyLen = 200
+
 type Client struct {
 	token   string
 	baseURL string
@@ -46,13 +57,17 @@ func (c *Client) AuthenticatedUser() (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("github: get user: status %d: %s", resp.StatusCode, body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+		errBody := string(body)
+		if len(errBody) > maxErrBodyLen {
+			errBody = errBody[:maxErrBodyLen]
+		}
+		return "", fmt.Errorf("github: get user: status %d: %s", resp.StatusCode, errBody)
 	}
 	var u struct {
 		Login string `json:"login"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&u); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBodyBytes)).Decode(&u); err != nil {
 		return "", fmt.Errorf("github: decode user: %w", err)
 	}
 	return u.Login, nil
@@ -130,11 +145,15 @@ func (c *Client) fetchByQualifier(username, qualifier string, repos []string) ([
 	if err != nil {
 		return nil, fmt.Errorf("github: search PRs (%s): %w", qualifier, err)
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github: search PRs (%s): status %d: %s", qualifier, resp.StatusCode, body)
+		errBody := string(body)
+		if len(errBody) > maxErrBodyLen {
+			errBody = errBody[:maxErrBodyLen]
+		}
+		return nil, fmt.Errorf("github: search PRs (%s): status %d: %s", qualifier, resp.StatusCode, errBody)
 	}
 	var result struct {
 		Items []*PullRequest `json:"items"`
@@ -171,9 +190,13 @@ func (c *Client) SubmitReview(repo string, number int, body, event string) (int6
 		return 0, fmt.Errorf("github: submit review: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != 200 {
-		return 0, fmt.Errorf("github: submit review: status %d: %s", resp.StatusCode, respBody)
+		errBody := string(respBody)
+		if len(errBody) > maxErrBodyLen {
+			errBody = errBody[:maxErrBodyLen]
+		}
+		return 0, fmt.Errorf("github: submit review: status %d: %s", resp.StatusCode, errBody)
 	}
 
 	var result struct {
@@ -205,8 +228,12 @@ func (c *Client) PostComment(repo string, number int, body string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("github: post comment: status %d: %s", resp.StatusCode, respBody)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+		errBody := string(respBody)
+		if len(errBody) > maxErrBodyLen {
+			errBody = errBody[:maxErrBodyLen]
+		}
+		return fmt.Errorf("github: post comment: status %d: %s", resp.StatusCode, errBody)
 	}
 	return nil
 }
@@ -220,9 +247,19 @@ func (c *Client) FetchDiff(repo string, number int) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("github: fetch diff: status %d: %s", resp.StatusCode, body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+		errBody := string(body)
+		if len(errBody) > maxErrBodyLen {
+			errBody = errBody[:maxErrBodyLen]
+		}
+		return "", fmt.Errorf("github: fetch diff: status %d: %s", resp.StatusCode, errBody)
 	}
-	data, err := io.ReadAll(resp.Body)
-	return string(data), err
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDiffBodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("github: fetch diff (%s #%d): read: %w", repo, number, err)
+	}
+	if int64(len(data)) >= maxDiffBodyBytes {
+		slog.Warn("github: diff truncated at size limit", "repo", repo, "pr", number, "limit_bytes", maxDiffBodyBytes)
+	}
+	return string(data), nil
 }

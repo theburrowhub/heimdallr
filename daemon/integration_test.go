@@ -61,7 +61,7 @@ func TestIntegration_FullPipeline(t *testing.T) {
 	}
 
 	p := pipeline.New(s, ghClient, exec, &noopNotifier{})
-	srv := server.New(s, broker, p)
+	srv := server.New(s, broker, p, "")
 
 	prs, err := ghClient.FetchPRs([]string{"org/repo"})
 	if err != nil {
@@ -73,7 +73,7 @@ func TestIntegration_FullPipeline(t *testing.T) {
 
 	pr := prs[0]
 	pr.Repo = pr.Head.Repo.FullName
-	rev, err := p.Run(pr, "claude", "gemini")
+	rev, err := p.Run(pr, pipeline.RunOptions{Primary: "claude", Fallback: "gemini"})
 	if err != nil {
 		t.Fatalf("pipeline run: %v", err)
 	}

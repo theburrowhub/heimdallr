@@ -47,7 +47,7 @@ func Install(binaryPath string) error {
 		return err
 	}
 	logDir := filepath.Join(home, "Library", "Logs", "auto-pr")
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0700); err != nil {
 		return fmt.Errorf("launchagent: mkdir logs: %w", err)
 	}
 
@@ -56,7 +56,7 @@ func Install(binaryPath string) error {
 		return err
 	}
 
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("launchagent: create plist: %w", err)
 	}

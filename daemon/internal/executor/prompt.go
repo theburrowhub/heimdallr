@@ -18,6 +18,14 @@ type PRContext struct {
 }
 
 // defaultTemplate is used when no custom agent template is configured.
+//
+// Security note — prompt injection risk:
+// The title, author, and diff come from untrusted GitHub PR data. A malicious PR
+// author could craft a title or diff body containing LLM instructions intended to
+// override the system prompt. The <user_content>…</user_content> delimiters below
+// signal to the model that the enclosed content is untrusted user data and should
+// be treated as data, not instructions. This mitigation reduces (but cannot fully
+// eliminate) the risk of prompt injection in open-ended LLM interactions.
 const defaultTemplate = `You are a senior software engineer performing a pull request code review.
 
 PR: {title} (#{number})
@@ -25,8 +33,10 @@ Repo: {repo}
 Author: {author}
 Link: {link}
 
+<user_content>
 Diff:
 {diff}
+</user_content>
 
 Review the above diff and respond with ONLY valid JSON in this exact format (no markdown, no explanation):
 {
@@ -57,8 +67,10 @@ Link: {link}
 REVIEW FOCUS:
 ` + instructions + `
 
+<user_content>
 Diff:
 {diff}
+</user_content>
 
 Review the diff according to the focus above and respond with ONLY valid JSON (no markdown, no explanation):
 {

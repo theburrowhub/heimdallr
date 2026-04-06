@@ -315,6 +315,10 @@ func (srv *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	ch := srv.broker.Subscribe()
+	if ch == nil {
+		http.Error(w, "too many SSE connections", http.StatusServiceUnavailable)
+		return
+	}
 	defer srv.broker.Unsubscribe(ch)
 
 	fmt.Fprintf(w, ": connected\n\n")
