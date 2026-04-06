@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -262,4 +263,121 @@ func (c *Client) FetchDiff(repo string, number int) (string, error) {
 		slog.Warn("github: diff truncated at size limit", "repo", repo, "pr", number, "limit_bytes", maxDiffBodyBytes)
 	}
 	return string(data), nil
+}
+
+// FetchComments retrieves both inline review comments and general issue comments
+// for a PR, merged and sorted chronologically.
+// Both endpoint calls run concurrently. An error from either is returned immediately.
+func (c *Client) FetchComments(repo string, number int) ([]Comment, error) {
+	type result struct {
+		comments []Comment
+		err      error
+	}
+	reviewCh := make(chan result, 1)
+	issueCh := make(chan result, 1)
+
+	go func() {
+		comments, err := c.fetchReviewComments(repo, number)
+		reviewCh <- result{comments, err}
+	}()
+	go func() {
+		comments, err := c.fetchIssueComments(repo, number)
+		issueCh <- result{comments, err}
+	}()
+
+	r1 := <-reviewCh
+	r2 := <-issueCh
+	if r1.err != nil {
+		return nil, r1.err
+	}
+	if r2.err != nil {
+		return nil, r2.err
+	}
+
+	all := append(r1.comments, r2.comments...)
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].CreatedAt.Before(all[j].CreatedAt)
+	})
+	return all, nil
+}
+
+func (c *Client) fetchReviewComments(repo string, number int) ([]Comment, error) {
+	path := fmt.Sprintf("/repos/%s/pulls/%d/comments", repo, number)
+	resp, err := c.do("GET", path, "application/vnd.github+json")
+	if err != nil {
+		return nil, fmt.Errorf("github: fetch review comments: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if resp.StatusCode != http.StatusOK {
+		errBody := string(body)
+		if len(errBody) > maxErrBodyLen {
+			errBody = errBody[:maxErrBodyLen]
+		}
+		return nil, fmt.Errorf("github: fetch review comments: status %d: %s", resp.StatusCode, errBody)
+	}
+	var raw []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Body         string    `json:"body"`
+		CreatedAt    time.Time `json:"created_at"`
+		Path         string    `json:"path"`
+		Line         *int      `json:"line"`
+		OriginalLine int       `json:"original_line"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("github: decode review comments: %w", err)
+	}
+	comments := make([]Comment, len(raw))
+	for i, r := range raw {
+		line := r.OriginalLine
+		if r.Line != nil {
+			line = *r.Line
+		}
+		comments[i] = Comment{
+			Author:    r.User.Login,
+			Body:      r.Body,
+			CreatedAt: r.CreatedAt,
+			File:      r.Path,
+			Line:      line,
+		}
+	}
+	return comments, nil
+}
+
+func (c *Client) fetchIssueComments(repo string, number int) ([]Comment, error) {
+	path := fmt.Sprintf("/repos/%s/issues/%d/comments", repo, number)
+	resp, err := c.do("GET", path, "application/vnd.github+json")
+	if err != nil {
+		return nil, fmt.Errorf("github: fetch issue comments: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if resp.StatusCode != http.StatusOK {
+		errBody := string(body)
+		if len(errBody) > maxErrBodyLen {
+			errBody = errBody[:maxErrBodyLen]
+		}
+		return nil, fmt.Errorf("github: fetch issue comments: status %d: %s", resp.StatusCode, errBody)
+	}
+	var raw []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Body      string    `json:"body"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("github: decode issue comments: %w", err)
+	}
+	comments := make([]Comment, len(raw))
+	for i, r := range raw {
+		comments[i] = Comment{
+			Author:    r.User.Login,
+			Body:      r.Body,
+			CreatedAt: r.CreatedAt,
+		}
+	}
+	return comments, nil
 }

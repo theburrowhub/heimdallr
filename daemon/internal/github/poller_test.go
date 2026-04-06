@@ -61,3 +61,82 @@ func TestFetchDiff(t *testing.T) {
 		t.Errorf("diff mismatch: %q", got)
 	}
 }
+
+func TestFetchComments_MergesAndSorts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/org/repo/pulls/1/comments":
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"user":          map[string]string{"login": "bob"},
+					"body":          "inline comment",
+					"created_at":    "2024-01-02T00:00:00Z",
+					"path":          "main.go",
+					"original_line": 10,
+				},
+			})
+		case "/repos/org/repo/issues/1/comments":
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"user":       map[string]string{"login": "alice"},
+					"body":       "general comment",
+					"created_at": "2024-01-01T00:00:00Z",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	comments, err := client.FetchComments("org/repo", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("expected 2 comments, got %d", len(comments))
+	}
+	// Sorted by CreatedAt: alice first (2024-01-01), bob second (2024-01-02)
+	if comments[0].Author != "alice" {
+		t.Errorf("expected alice first, got %s", comments[0].Author)
+	}
+	if comments[1].Author != "bob" {
+		t.Errorf("expected bob second, got %s", comments[1].Author)
+	}
+	if comments[1].File != "main.go" {
+		t.Errorf("expected File=main.go for review comment, got %q", comments[1].File)
+	}
+	if comments[1].Line != 10 {
+		t.Errorf("expected Line=10 for review comment, got %d", comments[1].Line)
+	}
+}
+
+func TestFetchComments_Empty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]any{})
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	comments, err := client.FetchComments("org/repo", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(comments) != 0 {
+		t.Errorf("expected 0 comments, got %d", len(comments))
+	}
+}
+
+func TestFetchComments_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	_, err := client.FetchComments("org/repo", 1)
+	if err == nil {
+		t.Fatal("expected error for 404 response, got nil")
+	}
+}

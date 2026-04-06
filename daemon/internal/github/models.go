@@ -32,6 +32,16 @@ type PullRequest struct {
 	Repo string `json:"-"`
 }
 
+// Comment represents a single comment on a PR — either an inline review comment
+// (File and Line are set) or a general issue comment (File and Line are zero values).
+type Comment struct {
+	Author    string
+	Body      string
+	CreatedAt time.Time
+	File      string // non-empty for inline review comments
+	Line      int    // non-zero for inline review comments
+}
+
 // ResolveRepo sets the Repo field from available data.
 func (pr *PullRequest) ResolveRepo() {
 	if pr.Head.Repo.FullName != "" {
