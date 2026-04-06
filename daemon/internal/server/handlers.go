@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -516,9 +517,24 @@ func (srv *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
-func (srv *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
+// daemonLogPath returns the platform-specific path to the daemon stderr log.
+// macOS: ~/Library/Logs/heimdallr/heimdallr-daemon-error.log (LaunchAgent convention)
+// Linux/other: $XDG_STATE_HOME/heimdallr/heimdallr.log (fallback ~/.local/share/heimdallr/heimdallr.log)
+func daemonLogPath() string {
 	home, _ := os.UserHomeDir()
-	logPath := filepath.Join(home, "Library", "Logs", "heimdallr", "heimdallr-daemon-error.log")
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Logs", "heimdallr", "heimdallr-daemon-error.log")
+	default:
+		if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+			return filepath.Join(xdg, "heimdallr", "heimdallr.log")
+		}
+		return filepath.Join(home, ".local", "share", "heimdallr", "heimdallr.log")
+	}
+}
+
+func (srv *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
+	logPath := daemonLogPath()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -538,7 +554,7 @@ func (srv *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	// Check if file exists.
 	f, err := os.Open(logPath)
 	if err != nil {
-		emit("(log file not found — daemon may be running in dev mode)")
+		emit(fmt.Sprintf("(log file not found at %s — daemon may be running in dev mode or log path differs)", logPath))
 		return
 	}
 	defer f.Close()
