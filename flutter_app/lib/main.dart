@@ -131,7 +131,9 @@ Future<void> _setupTray() async {
     MenuItem.separator(),
     MenuItem(key: 'quit', label: 'Quit'),
   ]));
-  TrayMenu.instance.init();
+  // Pass the shared ApiClient so TrayMenu uses the same token cache
+  // as the rest of the app — avoids stale-token issues after rotation.
+  TrayMenu.instance.init(apiClient: ApiClient());
 }
 
 /// Send a macOS notification from the Flutter app (correct icon, clickable).
@@ -263,14 +265,27 @@ class _BootstrapAppState extends State<_BootstrapApp> with WindowListener {
   }
 
   Future<void> _waitForHealth(ApiClient api, {String? retryBinary}) async {
+    const maxDaemonRestarts = 3;
+    var daemonRestarts = 0;
     for (var attempt = 0; ; attempt++) {
       await Future.delayed(const Duration(milliseconds: 400));
       if (await api.checkHealth()) {
         _go('/');
         return;
       }
-      // Re-launch every 10 seconds in case the daemon crashed at startup
+      // Re-launch every 10 seconds in case the daemon crashed at startup,
+      // but only up to maxDaemonRestarts times to avoid accumulating zombies.
       if (attempt > 0 && attempt % 25 == 0 && retryBinary != null) {
+        if (daemonRestarts >= maxDaemonRestarts) {
+          _setError(
+            title: 'Daemon failed to start',
+            details: 'Heimdallr could not start after $maxDaemonRestarts attempts.',
+            hint: 'Try restarting the app. If the problem persists, check your installation:\n'
+                'xattr -cr /Applications/Heimdallr.app',
+          );
+          return;
+        }
+        daemonRestarts++;
         try { await Process.start(retryBinary, [], mode: ProcessStartMode.detached); } catch (_) {}
       }
     }

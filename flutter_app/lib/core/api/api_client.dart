@@ -14,6 +14,12 @@ class ApiClient {
 
   Uri _uri(String path) => Uri.parse('http://127.0.0.1:$port$path');
 
+  /// Clears the cached API token, forcing the next request to re-read it from disk.
+  /// Call this after storing a new token (e.g. on token rotation).
+  void clearTokenCache() {
+    _cachedToken = null;
+  }
+
   /// Returns the API token read from the daemon's token file, or null if not found.
   /// Cached after first successful read.
   Future<String?> _apiToken() async {

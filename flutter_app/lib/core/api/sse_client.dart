@@ -48,6 +48,8 @@ class SseClient {
     return _controller!.stream;
   }
 
+  static const _maxBufferSize = 1024 * 1024; // 1 MB
+
   void _startListening() async {
     try {
       final request = http.Request(
@@ -62,6 +64,14 @@ class SseClient {
       _subscription = response.stream.transform(utf8.decoder).listen(
         (chunk) {
           buffer += chunk;
+          // Guard against unbounded buffer growth from a malformed/malicious stream.
+          if (buffer.length > _maxBufferSize) {
+            buffer = '';
+            _subscription?.cancel();
+            _subscription = null;
+            _startListening();
+            return;
+          }
           while (buffer.contains('\n\n')) {
             final idx = buffer.indexOf('\n\n');
             final block = buffer.substring(0, idx + 2);

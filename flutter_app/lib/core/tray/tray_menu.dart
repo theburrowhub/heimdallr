@@ -20,10 +20,14 @@ class TrayMenu with TrayListener {
   static TrayMenu get instance => _instance;
   TrayMenu._();
 
-  final ApiClient _api = ApiClient();
+  ApiClient _api = ApiClient();
   List<PR> _prs = [];
 
-  void init() {
+  /// Initialises the tray listener.
+  /// [apiClient] must be the shared instance from the app's provider so that
+  /// token cache invalidations (clearTokenCache) propagate correctly.
+  void init({required ApiClient apiClient}) {
+    _api = apiClient;
     trayManager.addListener(this);
   }
 
@@ -154,7 +158,7 @@ class TrayMenu with TrayListener {
       final prId = int.tryParse(key.substring(5));
       if (prId != null) {
         final pr = _prs.where((p) => p.id == prId).firstOrNull;
-        if (pr != null) launchUrl(Uri.parse(pr.url));
+        if (pr != null) _launchGitHubUrl(pr.url);
       }
       return;
     }
@@ -182,5 +186,14 @@ class TrayMenu with TrayListener {
   void _showApp() {
     windowManager.show();
     windowManager.focus();
+  }
+
+  /// Launches [url] only if it is a valid https://github.com URL.
+  /// Silently ignores invalid or non-GitHub URLs to prevent handler hijacking.
+  void _launchGitHubUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri != null && uri.scheme == 'https' && uri.host == 'github.com') {
+      launchUrl(uri);
+    }
   }
 }

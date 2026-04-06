@@ -54,6 +54,8 @@ class ConfigNotifier extends AsyncNotifier<AppConfig> {
     state = await AsyncValue.guard(() async {
       // 1. Store token in Keychain
       await FirstRunSetup.storeToken(token);
+      // Invalidate the cached token so the ApiClient re-reads it on the next request.
+      ref.read(apiClientProvider).clearTokenCache();
 
       // 2. Write config to ~/.config/heimdallr/config.toml
       await FirstRunSetup.writeConfig(config);
@@ -70,7 +72,7 @@ class ConfigNotifier extends AsyncNotifier<AppConfig> {
 
       if (!await api.checkHealth()) {
         throw Exception(
-          'Heimdallr did not start. Check that the binary exists at:\n$daemonBinaryPath',
+          'Heimdallr could not start. Check the app installation.',
         );
       }
 

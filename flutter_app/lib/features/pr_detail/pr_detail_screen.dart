@@ -339,7 +339,12 @@ class _PRMetaPanel extends StatelessWidget {
           OutlinedButton.icon(
             icon: const Icon(Icons.open_in_browser),
             label: const Text('Open on GitHub'),
-            onPressed: () => launchUrl(Uri.parse(pr.url)),
+            onPressed: () {
+              final uri = Uri.tryParse(pr.url);
+              if (uri != null && uri.scheme == 'https' && uri.host == 'github.com') {
+                launchUrl(uri);
+              }
+            },
           ),
         ],
       ),

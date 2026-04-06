@@ -8,6 +8,7 @@ import '../../core/setup/first_run_setup.dart';
 import '../../core/setup/gh_cli.dart';
 import '../../core/setup/repo_discovery.dart';
 import '../../shared/widgets/toast.dart';
+import '../dashboard/dashboard_providers.dart';
 import 'config_providers.dart';
 
 const _aiOptions = ['claude', 'gemini', 'codex'];
@@ -368,6 +369,8 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
               final token = _tokenController.text.trim();
               if (token.isNotEmpty && !_tokenFromGh) {
                 await FirstRunSetup.storeToken(token);
+                // Invalidate the cached token so the ApiClient re-reads it on the next request.
+                ref.read(apiClientProvider).clearTokenCache();
               }
               await ref.read(configNotifierProvider.notifier).save(updated);
               if (context.mounted) showToast(context, 'Settings saved');
