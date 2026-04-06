@@ -213,7 +213,11 @@ func main() {
 					}
 				}
 				prCopy := *pr // copy to avoid loop variable capture
-				runReview(&prCopy, aiCfg)
+				// Run each review in its own goroutine so the poll loop is not
+				// blocked by a long-running AI review (especially when local_dir
+				// is set and the CLI analyses the full repo).  The inFlight guard
+				// inside runReview prevents concurrent reviews of the same PR.
+				go runReview(&prCopy, aiCfg)
 			}
 			// Retry reviews stored locally but not yet published to GitHub
 			p.PublishPending()
