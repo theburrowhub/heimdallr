@@ -59,7 +59,9 @@ class DashboardScreen extends ConsumerWidget {
 
 // ── Reviews tab ──────────────────────────────────────────────────────────────
 
-/// Sort order: pending → high → medium → low
+enum _SortMode { priority, newest }
+
+/// Sort by priority: pending → high → medium → low, then most recent first within group.
 int _prSortKey(PR p) {
   if (p.latestReview == null) return 0;
   switch (p.latestReview!.severity.toLowerCase()) {
@@ -69,13 +71,20 @@ int _prSortKey(PR p) {
   }
 }
 
-List<PR> _sortedPRs(List<PR> prs) =>
-    [...prs]..sort((a, b) {
-      final sev = _prSortKey(a).compareTo(_prSortKey(b));
-      if (sev != 0) return sev;
-      // Within same severity: most recent first
-      return b.updatedAt.compareTo(a.updatedAt);
-    });
+List<PR> _sortedPRs(List<PR> prs, _SortMode mode) {
+  final list = [...prs];
+  switch (mode) {
+    case _SortMode.priority:
+      list.sort((a, b) {
+        final sev = _prSortKey(a).compareTo(_prSortKey(b));
+        if (sev != 0) return sev;
+        return b.updatedAt.compareTo(a.updatedAt);
+      });
+    case _SortMode.newest:
+      list.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  }
+  return list;
+}
 
 class _ReviewsTab extends ConsumerStatefulWidget {
   const _ReviewsTab();
@@ -86,6 +95,7 @@ class _ReviewsTab extends ConsumerStatefulWidget {
 class _ReviewsTabState extends ConsumerState<_ReviewsTab> {
   bool _reviewsExpanded = true;
   bool _prsExpanded     = true;
+  _SortMode _sort       = _SortMode.priority;
 
   @override
   Widget build(BuildContext context) {
@@ -97,11 +107,10 @@ class _ReviewsTabState extends ConsumerState<_ReviewsTab> {
       error: (e, _) => _errorView(context, e),
       data: (prs) {
         final me = meAsync.valueOrNull ?? '';
-        // Exclude PRs with no repo — orphaned records from before repo detection was fixed.
         final myReviews = _sortedPRs(prs.where((p) =>
-            p.repo.isNotEmpty && p.author.toLowerCase() != me.toLowerCase()).toList());
+            p.repo.isNotEmpty && p.author.toLowerCase() != me.toLowerCase()).toList(), _sort);
         final myPRs = _sortedPRs(prs.where((p) =>
-            p.repo.isNotEmpty && p.author.toLowerCase() == me.toLowerCase()).toList());
+            p.repo.isNotEmpty && p.author.toLowerCase() == me.toLowerCase()).toList(), _sort);
 
         if (prs.isEmpty) {
           return const Center(child: Text('No open PRs found'));
@@ -110,6 +119,30 @@ class _ReviewsTabState extends ConsumerState<_ReviewsTab> {
         return ListView(
           padding: const EdgeInsets.symmetric(vertical: 8),
           children: [
+            // Sort selector
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Row(
+                children: [
+                  Text('Sort:',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                  const SizedBox(width: 8),
+                  _SortButton(
+                    label: 'Priority',
+                    icon: Icons.sort,
+                    selected: _sort == _SortMode.priority,
+                    onTap: () => setState(() => _sort = _SortMode.priority),
+                  ),
+                  const SizedBox(width: 6),
+                  _SortButton(
+                    label: 'Newest',
+                    icon: Icons.schedule,
+                    selected: _sort == _SortMode.newest,
+                    onTap: () => setState(() => _sort = _SortMode.newest),
+                  ),
+                ],
+              ),
+            ),
             if (myReviews.isNotEmpty) ...[
               _CollapseHeader(
                 title: 'My Reviews',
@@ -170,6 +203,43 @@ class _ReviewsTabState extends ConsumerState<_ReviewsTab> {
 }
 
 // ── Collapsible section header ────────────────────────────────────────────────
+
+// ── Sort button ───────────────────────────────────────────────────────────────
+
+class _SortButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+  const _SortButton({required this.label, required this.icon,
+      required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected
+        ? Theme.of(context).colorScheme.primary
+        : Colors.grey.shade600;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: selected
+              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.15)
+              : Colors.transparent,
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 4),
+          Text(label, style: TextStyle(fontSize: 12, color: color,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.normal)),
+        ]),
+      ),
+    );
+  }
+}
 
 class _CollapseHeader extends StatelessWidget {
   final String title;
