@@ -71,7 +71,7 @@ class SseClient {
       request.headers['Cache-Control'] = 'no-cache';
       final token = await _loadToken();
       if (token != null && token.isNotEmpty) {
-        request.headers['Authorization'] = 'Bearer $token';
+        request.headers['X-Heimdallr-Token'] = token;
       }
       final response = await _httpClient.send(request);
 
