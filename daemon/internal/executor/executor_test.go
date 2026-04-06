@@ -118,6 +118,21 @@ func TestValidateWorkDir(t *testing.T) {
 			dir:     "/etc",
 			wantErr: true,
 		},
+		{
+			name:    ".kube dir — rejected",
+			dir:     filepath.Join(home, ".kube"),
+			wantErr: true,
+		},
+		{
+			name:    ".docker dir — rejected",
+			dir:     filepath.Join(home, ".docker"),
+			wantErr: true,
+		},
+		{
+			name:    ".config/gcloud — rejected",
+			dir:     filepath.Join(home, ".config", "gcloud"),
+			wantErr: true,
+		},
 	}
 
 	for _, tc := range tests {
