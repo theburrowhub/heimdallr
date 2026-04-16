@@ -1,0 +1,58 @@
+services:
+  heimdallr:
+    build: .
+    container_name: heimdallr
+    restart: unless-stopped
+    ports:
+      - "${HEIMDALLR_PORT:-7842}:${HEIMDALLR_PORT:-7842}"
+    environment:
+      # ── Heimdallr config ───────────────────────────────────────────────
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - HEIMDALLR_AI_PRIMARY=${HEIMDALLR_AI_PRIMARY:-claude}
+      - HEIMDALLR_AI_FALLBACK=${HEIMDALLR_AI_FALLBACK:-}
+      - HEIMDALLR_REPOSITORIES=${HEIMDALLR_REPOSITORIES:-}
+      - HEIMDALLR_POLL_INTERVAL=${HEIMDALLR_POLL_INTERVAL:-5m}
+      - HEIMDALLR_REVIEW_MODE=${HEIMDALLR_REVIEW_MODE:-single}
+      - HEIMDALLR_RETENTION_DAYS=${HEIMDALLR_RETENTION_DAYS:-90}
+      - HEIMDALLR_PORT=${HEIMDALLR_PORT:-7842}
+      - HEIMDALLR_BIND_ADDR=0.0.0.0
+
+      # ── AI CLI authentication ──────────────────────────────────────────
+      # Claude Code CLI (Anthropic)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+
+      # Codex CLI (OpenAI)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CODEX_API_KEY=${CODEX_API_KEY:-}
+
+      # Gemini CLI (Google)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+
+      # OpenCode CLI (uses any provider key above, or OpenRouter)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+
+      # ── Headless / non-interactive mode ────────────────────────────────
+      - CI=true
+      - OPENCODE_DISABLE_AUTOUPDATE=true
+    volumes:
+      # Persistent data (SQLite DB + API token)
+      - heimdallr-data:/data
+      # Configuration (optional — env vars work without this)
+      - ./config:/config
+      #
+      # Gemini OAuth tokens from host (if using browser-based auth):
+      # - ~/.gemini:/home/heimdallr/.gemini:ro
+      #
+      # Local repos for full-repo analysis (optional):
+      # - /path/to/repos:/repos:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7842/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  heimdallr-data:
+    driver: local
