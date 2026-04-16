@@ -1,90 +1,389 @@
-package config_test
+package config
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/heimdallr/daemon/internal/config"
 )
 
-func TestLoad_Defaults(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	content := `
-[github]
-repositories = ["org/repo1"]
+// ── applyDefaults ────────────────────────────────────────────────────────────
 
-[ai]
-primary = "claude"
-`
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatalf("failed to write test config: %v", err)
-	}
+func TestApplyDefaults(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
 
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 	if cfg.Server.Port != 7842 {
-		t.Errorf("expected default port 7842, got %d", cfg.Server.Port)
+		t.Errorf("Port = %d, want 7842", cfg.Server.Port)
+	}
+	if cfg.Server.BindAddr != "127.0.0.1" {
+		t.Errorf("BindAddr = %q, want %q", cfg.Server.BindAddr, "127.0.0.1")
 	}
 	if cfg.GitHub.PollInterval != "5m" {
-		t.Errorf("expected default poll interval 5m, got %s", cfg.GitHub.PollInterval)
+		t.Errorf("PollInterval = %q, want %q", cfg.GitHub.PollInterval, "5m")
 	}
 	if cfg.Retention.MaxDays != 90 {
-		t.Errorf("expected default retention 90, got %d", cfg.Retention.MaxDays)
+		t.Errorf("MaxDays = %d, want 90", cfg.Retention.MaxDays)
+	}
+	if cfg.AI.ReviewMode != "single" {
+		t.Errorf("ReviewMode = %q, want %q", cfg.AI.ReviewMode, "single")
 	}
 }
 
-func TestLoad_PerRepoAI(t *testing.T) {
+func TestApplyDefaults_PreservesExisting(t *testing.T) {
+	cfg := &Config{}
+	cfg.Server.Port = 9999
+	cfg.Server.BindAddr = "0.0.0.0"
+	cfg.GitHub.PollInterval = "1m"
+	cfg.Retention.MaxDays = 30
+	cfg.AI.ReviewMode = "multi"
+
+	cfg.applyDefaults()
+
+	if cfg.Server.Port != 9999 {
+		t.Errorf("Port overwritten: %d", cfg.Server.Port)
+	}
+	if cfg.Server.BindAddr != "0.0.0.0" {
+		t.Errorf("BindAddr overwritten: %q", cfg.Server.BindAddr)
+	}
+	if cfg.GitHub.PollInterval != "1m" {
+		t.Errorf("PollInterval overwritten: %q", cfg.GitHub.PollInterval)
+	}
+	if cfg.Retention.MaxDays != 30 {
+		t.Errorf("MaxDays overwritten: %d", cfg.Retention.MaxDays)
+	}
+	if cfg.AI.ReviewMode != "multi" {
+		t.Errorf("ReviewMode overwritten: %q", cfg.AI.ReviewMode)
+	}
+}
+
+// ── applyEnvOverrides ────────────────────────────────────────────────────────
+
+func TestApplyEnvOverrides(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+
+	t.Setenv("HEIMDALLR_PORT", "8080")
+	t.Setenv("HEIMDALLR_BIND_ADDR", "0.0.0.0")
+	t.Setenv("HEIMDALLR_POLL_INTERVAL", "1m")
+	t.Setenv("HEIMDALLR_REPOSITORIES", "org/repo1, org/repo2, org/repo3")
+	t.Setenv("HEIMDALLR_AI_PRIMARY", "gemini")
+	t.Setenv("HEIMDALLR_AI_FALLBACK", "claude")
+	t.Setenv("HEIMDALLR_REVIEW_MODE", "multi")
+	t.Setenv("HEIMDALLR_RETENTION_DAYS", "30")
+
+	cfg.applyEnvOverrides()
+
+	if cfg.Server.Port != 8080 {
+		t.Errorf("Port = %d, want 8080", cfg.Server.Port)
+	}
+	if cfg.Server.BindAddr != "0.0.0.0" {
+		t.Errorf("BindAddr = %q, want %q", cfg.Server.BindAddr, "0.0.0.0")
+	}
+	if cfg.GitHub.PollInterval != "1m" {
+		t.Errorf("PollInterval = %q, want %q", cfg.GitHub.PollInterval, "1m")
+	}
+	if len(cfg.GitHub.Repositories) != 3 {
+		t.Fatalf("Repositories = %v, want 3 items", cfg.GitHub.Repositories)
+	}
+	if cfg.GitHub.Repositories[1] != "org/repo2" {
+		t.Errorf("Repositories[1] = %q, want %q", cfg.GitHub.Repositories[1], "org/repo2")
+	}
+	if cfg.AI.Primary != "gemini" {
+		t.Errorf("Primary = %q, want %q", cfg.AI.Primary, "gemini")
+	}
+	if cfg.AI.Fallback != "claude" {
+		t.Errorf("Fallback = %q, want %q", cfg.AI.Fallback, "claude")
+	}
+	if cfg.AI.ReviewMode != "multi" {
+		t.Errorf("ReviewMode = %q, want %q", cfg.AI.ReviewMode, "multi")
+	}
+	if cfg.Retention.MaxDays != 30 {
+		t.Errorf("MaxDays = %d, want 30", cfg.Retention.MaxDays)
+	}
+}
+
+func TestApplyEnvOverrides_InvalidPort(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+
+	t.Setenv("HEIMDALLR_PORT", "notanumber")
+	cfg.applyEnvOverrides()
+
+	if cfg.Server.Port != 7842 {
+		t.Errorf("Port = %d, should stay default 7842 on invalid input", cfg.Server.Port)
+	}
+}
+
+func TestApplyEnvOverrides_EmptyRepositories(t *testing.T) {
+	cfg := &Config{}
+	cfg.GitHub.Repositories = []string{"existing/repo"}
+
+	t.Setenv("HEIMDALLR_REPOSITORIES", "  ,  ,  ")
+	cfg.applyEnvOverrides()
+
+	if len(cfg.GitHub.Repositories) != 1 {
+		t.Errorf("Repositories = %v, expected original preserved", cfg.GitHub.Repositories)
+	}
+}
+
+// ── Validate ─────────────────────────────────────────────────────────────────
+
+func TestValidate_MissingPrimary(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() = nil, want error for missing ai.primary")
+	}
+}
+
+func TestValidate_ValidConfig(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	cfg.AI.Primary = "claude"
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
+	}
+}
+
+func TestValidate_InvalidPollInterval(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	cfg.AI.Primary = "claude"
+	cfg.GitHub.PollInterval = "2m"
+
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() = nil, want error for invalid poll_interval")
+	}
+}
+
+func TestValidate_AllValidIntervals(t *testing.T) {
+	for _, interval := range []string{"1m", "5m", "30m", "1h"} {
+		cfg := &Config{AI: AIConfig{Primary: "claude"}, GitHub: GitHubConfig{PollInterval: interval}}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate() with interval %q = %v", interval, err)
+		}
+	}
+}
+
+// ── AIForRepo ────────────────────────────────────────────────────────────────
+
+func TestAIForRepo_GlobalFallback(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{Primary: "claude", Fallback: "gemini", ReviewMode: "single"},
+	}
+
+	r := cfg.AIForRepo("unknown/repo")
+	if r.Primary != "claude" {
+		t.Errorf("Primary = %q, want %q", r.Primary, "claude")
+	}
+	if r.Fallback != "gemini" {
+		t.Errorf("Fallback = %q, want %q", r.Fallback, "gemini")
+	}
+	if r.ReviewMode != "single" {
+		t.Errorf("ReviewMode = %q, want %q", r.ReviewMode, "single")
+	}
+}
+
+func TestAIForRepo_PerRepo(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:  "claude",
+			Fallback: "gemini",
+			Repos: map[string]RepoAI{
+				"org/special": {Primary: "codex", LocalDir: "/data/repos/special"},
+			},
+		},
+	}
+
+	r := cfg.AIForRepo("org/special")
+	if r.Primary != "codex" {
+		t.Errorf("Primary = %q, want %q", r.Primary, "codex")
+	}
+	if r.Fallback != "gemini" {
+		t.Error("Fallback should inherit from global when not set per-repo")
+	}
+	if r.LocalDir != "/data/repos/special" {
+		t.Errorf("LocalDir = %q", r.LocalDir)
+	}
+}
+
+func TestAIForRepo_PerRepoInheritsGlobal(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:    "claude",
+			Fallback:   "gemini",
+			ReviewMode: "multi",
+			Repos: map[string]RepoAI{
+				"org/repo": {},
+			},
+		},
+	}
+
+	r := cfg.AIForRepo("org/repo")
+	if r.Primary != "claude" {
+		t.Errorf("Primary = %q, want global fallback %q", r.Primary, "claude")
+	}
+	if r.Fallback != "gemini" {
+		t.Errorf("Fallback = %q, want global fallback %q", r.Fallback, "gemini")
+	}
+	if r.ReviewMode != "multi" {
+		t.Errorf("ReviewMode = %q, want global fallback %q", r.ReviewMode, "multi")
+	}
+}
+
+// ── AgentConfigFor ───────────────────────────────────────────────────────────
+
+func TestAgentConfigFor_Found(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Agents: map[string]CLIAgentConfig{
+				"claude": {Model: "claude-opus-4-6", MaxTurns: 5},
+			},
+		},
+	}
+
+	ac := cfg.AgentConfigFor("claude")
+	if ac.Model != "claude-opus-4-6" {
+		t.Errorf("Model = %q, want %q", ac.Model, "claude-opus-4-6")
+	}
+	if ac.MaxTurns != 5 {
+		t.Errorf("MaxTurns = %d, want 5", ac.MaxTurns)
+	}
+}
+
+func TestAgentConfigFor_NotFound(t *testing.T) {
+	cfg := &Config{}
+	ac := cfg.AgentConfigFor("unknown")
+	if ac.Model != "" {
+		t.Errorf("Model = %q, want empty", ac.Model)
+	}
+}
+
+// ── Load ─────────────────────────────────────────────────────────────────────
+
+func TestLoad_ValidTOML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
+
 	content := `
+[server]
+port = 9000
+bind_addr = "0.0.0.0"
+
 [github]
-repositories = ["org/repo1"]
+poll_interval = "1m"
+repositories = ["org/repo"]
 
 [ai]
-primary = "claude"
-fallback = "gemini"
+primary = "gemini"
+fallback = "claude"
 
-[ai.repos."org/repo1"]
-primary = "codex"
+[retention]
+max_days = 60
 `
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatalf("failed to write test config: %v", err)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
 	}
 
-	cfg, err := config.Load(path)
+	cfg, err := Load(path)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	ai := cfg.AIForRepo("org/repo1")
-	if ai.Primary != "codex" {
-		t.Errorf("expected codex for org/repo1, got %s", ai.Primary)
+	if cfg.Server.Port != 9000 {
+		t.Errorf("Port = %d, want 9000", cfg.Server.Port)
 	}
-}
-
-func TestValidate_EmptyReposAllowed(t *testing.T) {
-	// Empty repositories is valid — daemon polls all user PRs without a repo filter
-	cfg := &config.Config{
-		AI: config.AIConfig{Primary: "claude"},
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("empty repositories should be valid, got: %v", err)
+	if cfg.AI.Primary != "gemini" {
+		t.Errorf("Primary = %q, want %q", cfg.AI.Primary, "gemini")
 	}
 }
 
-func TestValidate_InvalidInterval(t *testing.T) {
-	cfg := &config.Config{
-		GitHub: config.GitHubConfig{
-			Repositories: []string{"org/repo"},
-			PollInterval: "invalid",
-		},
-		AI: config.AIConfig{Primary: "claude"},
-	}
-	err := cfg.Validate()
+func TestLoad_MissingFile(t *testing.T) {
+	_, err := Load("/nonexistent/config.toml")
 	if err == nil {
-		t.Error("expected error for invalid poll interval")
+		t.Error("Load(missing) = nil, want error")
+	}
+}
+
+func TestLoad_InvalidTOML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	os.WriteFile(path, []byte("this is not { valid } toml [[["), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Error("Load(invalid TOML) = nil, want error")
+	}
+}
+
+func TestLoad_EnvOverridesToml(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	content := `
+[ai]
+primary = "claude"
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	t.Setenv("HEIMDALLR_AI_PRIMARY", "gemini")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AI.Primary != "gemini" {
+		t.Errorf("Primary = %q, want %q (env override)", cfg.AI.Primary, "gemini")
+	}
+}
+
+// ── LoadOrCreate ─────────────────────────────────────────────────────────────
+
+func TestLoadOrCreate_Creates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	t.Setenv("HEIMDALLR_AI_PRIMARY", "claude")
+	t.Setenv("HEIMDALLR_REPOSITORIES", "org/repo")
+
+	cfg, err := LoadOrCreate(path)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+	if cfg.AI.Primary != "claude" {
+		t.Errorf("Primary = %q, want %q", cfg.AI.Primary, "claude")
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Error("config file was not created")
+	}
+}
+
+func TestLoadOrCreate_LoadsExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	content := `
+[ai]
+primary = "gemini"
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	cfg, err := LoadOrCreate(path)
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+	if cfg.AI.Primary != "gemini" {
+		t.Errorf("Primary = %q, want %q", cfg.AI.Primary, "gemini")
+	}
+}
+
+func TestLoadOrCreate_FailsWithoutPrimary(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	_, err := LoadOrCreate(path)
+	if err == nil {
+		t.Error("LoadOrCreate without ai.primary should fail")
 	}
 }

@@ -145,7 +145,9 @@ func (c *Config) applyEnvOverrides() {
 				cleaned = append(cleaned, s)
 			}
 		}
-		c.GitHub.Repositories = cleaned
+		if len(cleaned) > 0 {
+			c.GitHub.Repositories = cleaned
+		}
 	}
 	if v := os.Getenv("HEIMDALLR_AI_PRIMARY"); v != "" {
 		c.AI.Primary = v
