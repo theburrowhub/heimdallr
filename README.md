@@ -8,7 +8,7 @@
 
 ## What it does
 
-Heimdallm runs silently in your menu bar. It watches the GitHub PRs where you're requested as a reviewer, runs an AI code review on each one, and submits the review back to GitHub — no copy-pasting, no manual prompting.
+Heimdallm runs silently in your menu bar. It watches the GitHub PRs where you're requested as a reviewer, runs an AI code review using Claude, Gemini, Codex, or OpenCode, and submits the review back to GitHub — no copy-pasting, no manual prompting.
 
 - **Automatic reviews** — polls `review-requested:@me` on GitHub and submits reviews as your GitHub account
 - **Configurable prompts** — general review, security audit, performance, architecture, or your own custom instructions with `{diff}` `{title}` `{author}` placeholders
@@ -16,6 +16,7 @@ Heimdallm runs silently in your menu bar. It watches the GitHub PRs where you're
 - **Per-repo overrides** — different AI agent, prompt, and feedback mode per repository
 - **Severity gating** — only `high` severity triggers `REQUEST_CHANGES`; everything else approves with informational notes
 - **Native desktop** — menu bar icon (macOS), system notifications, dark mode, no Electron
+- **Docker mode** — runs headless as a Docker container for server/CI deployments
 
 ---
 
@@ -47,6 +48,26 @@ Installs to `/opt/heimdallm/` with a desktop entry and `/usr/bin/heimdallm` syml
 
 > **Requires**: `gh` CLI authenticated (`gh auth login`). Token stored via GNOME Keyring / KDE Wallet (`secret-tool`), or `~/.config/heimdallm/.token` as fallback.
 
+### Docker
+
+For headless/server deployment, Heimdallm runs as a Docker container with all four AI CLIs bundled.
+
+```bash
+# 1. Set up configuration
+cd docker
+cp .env.example .env
+# Edit .env — set GITHUB_TOKEN, HEIMDALLM_REPOSITORIES, and AI API key(s)
+
+# 2. Start the service
+docker compose up -d
+
+# 3. Verify
+curl http://localhost:7842/health
+# {"status":"ok"}
+```
+
+The Docker image is published to `ghcr.io/theburrowhub/heimdallm:latest` on every release. See [`docker/.env.example`](docker/.env.example) for all configuration options.
+
 ### Automated install (for agents / scripts)
 
 See [LLM-HOW-TO-INSTALL.md](LLM-HOW-TO-INSTALL.md) for a step-by-step guide suitable for Claude Code, shell scripts, or any automation tool.
@@ -70,6 +91,8 @@ Flutter app  ←→  HTTP/SSE  ←→  heimdalld  ←→  GitHub API
                                      ↓
                               claude / gemini / codex CLI
 ```
+
+In **Docker mode**, the daemon runs standalone without the Flutter UI. Configuration is via environment variables (`HEIMDALLM_*`) or a mounted `config.toml`.
 
 ---
 
@@ -124,10 +147,17 @@ heimdallm/
 │       └── core/
 │           ├── api/         HTTP + SSE client
 │           └── setup/       First-run setup, token detection
+├── docker/                  Docker deployment
+│   ├── Dockerfile           Multi-stage build (Go + Node.js + 4 AI CLIs)
+│   ├── docker-compose.yml   Production deployment
+│   ├── .env.example         Environment variable reference
+│   └── scripts/             Local test runner (smoke/github/e2e)
 ├── .github/workflows/
 │   ├── tests.yml            CI: Go + Flutter tests on PR/main
 │   ├── build.yml            CI: build + release on version tags
-│   └── tag.yml              Manual: compute semver tag from conventional commits
+│   ├── tag.yml              Manual: compute semver tag from conventional commits
+│   ├── docker-publish.yml   CI: Docker build validation on PRs
+│   └── release.yml          CI: release-please + Docker push to GHCR
 └── Makefile
 ```
 
@@ -149,6 +179,8 @@ The `tag.yml` workflow analyses commits since the last tag:
 - `fix:`, `refactor:`, etc. → patch bump
 
 Pushing the tag triggers `build.yml`, which builds, signs, notarizes (if Developer ID configured), and publishes the DMG to GitHub Releases.
+
+Alternatively, **release-please** (via `release.yml`) automates this: it reads conventional commits, opens a Release PR with changelog, and on merge creates the tag + GitHub Release. This also triggers the Docker image build and push to `ghcr.io/theburrowhub/heimdallm`.
 
 ---
 

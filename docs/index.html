@@ -320,7 +320,7 @@
 
 <!-- Hero -->
 <section class="hero">
-  <div class="hero-badge">⚡ macOS &amp; Linux · Free · Open Source</div>
+  <div class="hero-badge">⚡ macOS · Linux · Docker · Free · Open Source</div>
   <h1>Your PRs, <em>reviewed automatically</em>.<br>Posted to GitHub.</h1>
   <p>
     Heimdallm runs silently in your menu bar, watches your GitHub review requests,
@@ -383,6 +383,11 @@
         <div class="card-icon">💬</div>
         <h3>Feedback modes</h3>
         <p><em>Single</em>: one consolidated review comment. <em>Multi</em>: one comment per issue + summary. Configurable globally or per repo.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🐳</div>
+        <h3>Docker deployment</h3>
+        <p>Run headless on any server. Pre-built image with Claude, Gemini, Codex and OpenCode bundled. Configure via environment variables.</p>
       </div>
       <div class="card">
         <div class="card-icon">🖥️</div>
@@ -454,6 +459,7 @@
       <button class="os-tab" onclick="showOS('linux-deb',this)">🐧 Ubuntu / Debian</button>
       <button class="os-tab" onclick="showOS('linux-rpm',this)">🎩 Fedora / RHEL</button>
       <button class="os-tab" onclick="showOS('linux-appimage',this)">📦 AppImage (universal)</button>
+      <button class="os-tab" onclick="showOS('docker',this)">🐳 Docker</button>
     </div>
 
     <!-- macOS -->
@@ -571,6 +577,35 @@ sudo apt-get install -f -y</pre>
         </div>
       </div>
       <p style="margin-top:1.5rem; color:var(--muted); font-size:.875rem;">Self-contained · No system dependencies · Token via <code>gh auth token</code> or <code>~/.config/heimdallm/.token</code></p>
+    </div>
+
+    <!-- Docker -->
+    <div id="os-docker" class="os-panel" style="display:none">
+      <div class="install-steps">
+        <div class="install-step">
+          <div class="step-num">1</div>
+          <div>
+            <h4>Configure</h4>
+            <pre class="inline-code">cd docker && cp .env.example .env
+# Edit .env with your tokens</pre>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">2</div>
+          <div>
+            <h4>Start</h4>
+            <pre class="inline-code">docker compose up -d</pre>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">3</div>
+          <div>
+            <h4>Verify</h4>
+            <pre class="inline-code">curl http://localhost:7842/health</pre>
+          </div>
+        </div>
+      </div>
+      <p style="margin-top:1.5rem; color:var(--muted); font-size:.875rem;">Image: <code>ghcr.io/theburrowhub/heimdallm:latest</code> · ~2.4 GB · Runs as non-root · Built-in health check</p>
     </div>
   </div>
 </section>
