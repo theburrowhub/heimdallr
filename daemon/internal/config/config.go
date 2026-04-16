@@ -239,6 +239,7 @@ func LoadOrCreate(path string) (*Config, error) {
 	return cfg, nil
 }
 
+
 // DefaultPath returns ~/.config/heimdallm/config.toml
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()

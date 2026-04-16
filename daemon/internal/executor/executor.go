@@ -247,10 +247,17 @@ var dangerousPaths = []string{
 // working directory. These directories commonly contain private keys, API tokens,
 // and other secrets that must not be sent to an AI provider.
 var dangerousSegments = []string{
-	"/.ssh",
-	"/.gnupg",
-	"/.aws",
-	"/.config/heimdallm",
+	"/.ssh",            // SSH private keys, host keys, authorized_keys
+	"/.gnupg",          // GPG keys, trust database
+	"/.aws",            // AWS access keys, credentials files
+	"/.config/heimdallm", // Heimdallm daemon config (auth tokens, etc)
+	"/.kube",           // Kubernetes credentials (service account tokens, certs)
+	"/.docker",         // Docker registry auth (config.json with credentials)
+	"/.netrc",          // FTP/HTTP plaintext credentials
+	"/.npmrc",          // npm publish tokens
+	"/.pypirc",         // PyPI publish tokens
+	"/.gem",            // RubyGems credentials
+	"/.config/gcloud",  // Google Cloud credentials (service accounts, OAuth tokens)
 }
 
 // ValidateWorkDir checks that dir is a safe working directory for the AI CLI.

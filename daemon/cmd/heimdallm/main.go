@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -90,7 +91,8 @@ func main() {
 	// require this token in X-Heimdallm-Token (security issue #3).
 	apiToken, err := loadOrCreateAPIToken(dataDir())
 	if err != nil {
-		slog.Warn("could not create API token — mutating endpoints unprotected", "err", err)
+		slog.Error("could not create API token — refusing to start without authentication", "err", err)
+		os.Exit(1)
 	}
 
 	p := pipeline.New(s, ghClient, exec, &notifyWithSSE{notifier: notifier})
@@ -161,21 +163,23 @@ func main() {
 		slog.Info("pipeline: reviewing PR",
 			"repo", pr.Repo, "number", pr.Number, "github_id", pr.ID, "title", pr.Title)
 
-		broker.Publish(sse.Event{Type: sse.EventPRDetected, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
-		broker.Publish(sse.Event{Type: sse.EventReviewStarted, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q}`, pr.Number, pr.Repo)})
+		broker.Publish(sse.Event{Type: sse.EventPRDetected, Data: sseData(map[string]any{"pr_number": pr.Number, "repo": pr.Repo})})
+		broker.Publish(sse.Event{Type: sse.EventReviewStarted, Data: sseData(map[string]any{"pr_number": pr.Number, "repo": pr.Repo})})
 		rev, err := p.Run(pr, buildRunOpts(pr, aiCfg))
 		if err != nil {
 			slog.Error("pipeline run failed", "repo", pr.Repo, "pr", pr.Number, "err", err)
-			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_number":%d,"repo":%q,"error":%q}`, pr.Number, pr.Repo, err.Error())})
+			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: sseData(map[string]any{"pr_number": pr.Number, "repo": pr.Repo, "error": err.Error()})})
 			return
 		}
 		slog.Info("pipeline: review done",
 			"repo", pr.Repo, "number", pr.Number, "severity", rev.Severity,
 			"github_review_id", rev.GitHubReviewID)
-		broker.Publish(sse.Event{Type: sse.EventReviewCompleted, Data: fmt.Sprintf(
-			`{"pr_number":%d,"repo":%q,"pr_id":%d,"severity":%q}`,
-			pr.Number, pr.Repo, rev.PRID, rev.Severity,
-		)})
+		broker.Publish(sse.Event{Type: sse.EventReviewCompleted, Data: sseData(map[string]any{
+			"pr_number": pr.Number,
+			"repo":      pr.Repo,
+			"pr_id":     rev.PRID,
+			"severity":  rev.Severity,
+		})})
 	}
 
 	makePollFn := func(c *config.Config) func() {
@@ -299,16 +303,27 @@ func main() {
 		}
 	})
 
-	// Cache authenticated username for GET /me
+	// Cache authenticated username for GET /me.
+	// loginMu guards cachedLogin against concurrent reads/writes from HTTP goroutines.
+	var loginMu sync.Mutex
 	var cachedLogin string
 	srv.SetMeFn(func() (string, error) {
+		loginMu.Lock()
 		if cachedLogin != "" {
-			return cachedLogin, nil
+			l := cachedLogin
+			loginMu.Unlock()
+			return l, nil
 		}
+		loginMu.Unlock()
+
 		login, err := ghClient.AuthenticatedUser()
-		if err == nil {
+
+		loginMu.Lock()
+		if err == nil && cachedLogin == "" {
 			cachedLogin = login
 		}
+		loginMu.Unlock()
+
 		return login, err
 	})
 
@@ -338,7 +353,7 @@ func main() {
 		publishErr := func(msg string) {
 			broker.Publish(sse.Event{
 				Type: sse.EventReviewError,
-				Data: fmt.Sprintf(`{"pr_id":%d,"error":%q}`, prID, msg),
+				Data: sseData(map[string]any{"pr_id": prID, "error": msg}),
 			})
 		}
 
@@ -387,13 +402,15 @@ func main() {
 
 		rev, err := p.Run(ghPR, buildRunOpts(ghPR, aiCfg))
 		if err != nil {
-			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: fmt.Sprintf(`{"pr_id":%d,"error":%q}`, prID, err.Error())})
+			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: sseData(map[string]any{"pr_id": prID, "error": err.Error()})})
 			return err
 		}
-		broker.Publish(sse.Event{Type: sse.EventReviewCompleted, Data: fmt.Sprintf(
-			`{"pr_number":%d,"repo":%q,"pr_id":%d,"severity":%q}`,
-			pr.Number, pr.Repo, prID, rev.Severity,
-		)})
+		broker.Publish(sse.Event{Type: sse.EventReviewCompleted, Data: sseData(map[string]any{
+			"pr_number": pr.Number,
+			"repo":      pr.Repo,
+			"pr_id":     prID,
+			"severity":  rev.Severity,
+		})})
 		return nil
 	})
 
@@ -520,4 +537,15 @@ func loadOrCreateAPIToken(dir string) (string, error) {
 	}
 	slog.Info("api_token: created new token", "path", path)
 	return tok, nil
+}
+
+// sseData serializes a map to a compact JSON string for SSE event Data fields.
+// Using json.Marshal instead of fmt.Sprintf/%q avoids encoding divergence with
+// Unicode or special characters in error messages and repo names.
+func sseData(v map[string]any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }

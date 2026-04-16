@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -36,24 +37,56 @@ type Server struct {
 	configFn func() map[string]any
 	// apiToken is required on all state-mutating requests (POST/PUT/DELETE).
 	// Empty string disables authentication (should not happen in production).
-	apiToken string
+	apiToken  string
+	reviewSem chan struct{} // counting semaphore for concurrent review triggers
 }
+
+// Options holds optional configuration for the Server.
+type Options struct {
+	// MaxConcurrentReviews limits how many POST /prs/{id}/review goroutines
+	// can run simultaneously. 0 means use the default (5).
+	MaxConcurrentReviews int
+}
+
+const defaultMaxConcurrentReviews = 5
 
 // New creates a new Server. p may be nil if the pipeline is not yet configured.
 // apiToken must be the value returned by LoadOrCreateAPIToken — it is required
 // on all mutating endpoints to prevent cross-process/browser config poisoning.
 func New(s *store.Store, broker *sse.Broker, p *pipeline.Pipeline, apiToken string) *Server {
-	srv := &Server{store: s, broker: broker, pipeline: p, apiToken: apiToken}
+	return NewWithOptions(s, broker, p, apiToken, Options{})
+}
+
+// NewWithOptions creates a Server with configurable options.
+func NewWithOptions(s *store.Store, broker *sse.Broker, p *pipeline.Pipeline, apiToken string, opts Options) *Server {
+	max := opts.MaxConcurrentReviews
+	if max <= 0 {
+		max = defaultMaxConcurrentReviews
+	}
+	srv := &Server{
+		store:     s,
+		broker:    broker,
+		pipeline:  p,
+		apiToken:  apiToken,
+		reviewSem: make(chan struct{}, max),
+	}
 	srv.router = srv.buildRouter()
 	return srv
 }
 
 // sensitiveGETPaths lists GET paths that require authentication even though they
 // are read-only. This includes endpoints that expose internal config, agent
-// data, or activity metadata (SSE stream).
-// /health, /me, /prs, /prs/{id}, and /stats are considered safe to read without
-// a token as they expose only minimal public-facing information.
-var sensitiveGETPaths = []string{"/config", "/agents", "/events", "/logs/stream"}
+// data, activity metadata, GitHub username, PR list, and review stats.
+// Only /health remains public (used for health checks by the launcher).
+var sensitiveGETPaths = []string{
+	"/config",
+	"/agents",
+	"/events",
+	"/logs/stream",
+	"/me",    // exposes GitHub username
+	"/prs",   // exposes PR titles, repos, authors
+	"/stats", // exposes review activity metadata
+}
 
 // authMiddleware rejects:
 //   - POST/PUT/PATCH/DELETE requests without a valid X-Heimdallm-Token header.
@@ -230,7 +263,15 @@ func (srv *Server) handleTriggerReview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "review trigger not configured", http.StatusServiceUnavailable)
 		return
 	}
+	// Acquire semaphore slot (non-blocking). Returns 429 if all slots are taken.
+	select {
+	case srv.reviewSem <- struct{}{}:
+	default:
+		http.Error(w, `{"error":"too many concurrent reviews — try again later"}`, http.StatusTooManyRequests)
+		return
+	}
 	go func() {
+		defer func() { <-srv.reviewSem }()
 		if err := srv.triggerReviewFn(id); err != nil {
 			slog.Error("trigger review failed", "pr_id", id, "err", err)
 		}
@@ -259,6 +300,20 @@ var validConfigKeys = map[string]struct{}{
 	"retention_days": {},
 }
 
+// validPollIntervals is the allowlist of permitted poll_interval values.
+var validPollIntervals = map[string]struct{}{
+	"1m":  {},
+	"5m":  {},
+	"30m": {},
+	"1h":  {},
+}
+
+// validReviewModes is the allowlist of permitted review_mode values.
+var validReviewModes = map[string]struct{}{
+	"single": {},
+	"multi":  {},
+}
+
 func (srv *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 	var body map[string]any
@@ -272,6 +327,45 @@ func (srv *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Validate value formats per key.
+	if v, ok := body["poll_interval"]; ok {
+		s, isStr := v.(string)
+		if !isStr {
+			http.Error(w, "poll_interval must be a string", http.StatusBadRequest)
+			return
+		}
+		if _, valid := validPollIntervals[s]; !valid {
+			http.Error(w, "poll_interval must be one of: 1m, 5m, 30m, 1h", http.StatusBadRequest)
+			return
+		}
+	}
+	if v, ok := body["retention_days"]; ok {
+		n, isNum := v.(float64) // JSON numbers decode as float64
+		if !isNum || n < 1 || n > 3650 {
+			http.Error(w, "retention_days must be between 1 and 3650", http.StatusBadRequest)
+			return
+		}
+	}
+	if v, ok := body["server_port"]; ok {
+		n, isNum := v.(float64)
+		if !isNum || n < 1024 || n > 65535 {
+			http.Error(w, "server_port must be between 1024 and 65535", http.StatusBadRequest)
+			return
+		}
+	}
+	if v, ok := body["review_mode"]; ok {
+		s, isStr := v.(string)
+		if !isStr {
+			http.Error(w, "review_mode must be a string", http.StatusBadRequest)
+			return
+		}
+		if _, valid := validReviewModes[s]; !valid {
+			http.Error(w, "review_mode must be one of: single, multi", http.StatusBadRequest)
+			return
+		}
+	}
+
 	for k, v := range body {
 		var val string
 		switch typed := v.(type) {
@@ -423,9 +517,24 @@ func (srv *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
-func (srv *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
+// daemonLogPath returns the platform-specific path to the daemon stderr log.
+// macOS: ~/Library/Logs/heimdallm/heimdallm-daemon-error.log (LaunchAgent convention)
+// Linux/other: $XDG_STATE_HOME/heimdallm/heimdallm.log (fallback ~/.local/share/heimdallm/heimdallm.log)
+func daemonLogPath() string {
 	home, _ := os.UserHomeDir()
-	logPath := filepath.Join(home, "Library", "Logs", "heimdallm", "heimdallm-daemon-error.log")
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Logs", "heimdallm", "heimdallm-daemon-error.log")
+	default:
+		if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+			return filepath.Join(xdg, "heimdallm", "heimdallm.log")
+		}
+		return filepath.Join(home, ".local", "share", "heimdallm", "heimdallm.log")
+	}
+}
+
+func (srv *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
+	logPath := daemonLogPath()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -445,7 +554,7 @@ func (srv *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	// Check if file exists.
 	f, err := os.Open(logPath)
 	if err != nil {
-		emit("(log file not found — daemon may be running in dev mode)")
+		emit(fmt.Sprintf("(log file not found at %s — daemon may be running in dev mode or log path differs)", logPath))
 		return
 	}
 	defer f.Close()
