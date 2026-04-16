@@ -1,0 +1,29 @@
+name: Docker Build Validation
+
+on:
+  pull_request:
+    branches: [main]
+
+env:
+  # Opt-in to Node.js 24 for all JavaScript actions (Node 20 deprecated Sep 2026)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (validation only)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: heimdallr-docker:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
