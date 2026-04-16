@@ -163,7 +163,11 @@ sudo apt-get install -f -y
 Installs `libgtk-3-0`, `libayatana-appindicator3-1`, `libnotify4`, `libsecret-1-0`.
 
 **Token not detected**
-Heimdallm detects credentials in this order: `gh auth token` → GNOME/KDE Keyring (`secret-tool`) → `~/.config/heimdallm/.token` → `GITHUB_TOKEN` env var. Run `gh auth login` if none are configured.
+
+**Token resolution order:**
+- **macOS**: Keychain → `GITHUB_TOKEN` env var → `~/.config/heimdallm/.token`
+- **Linux**: `GITHUB_TOKEN` env var → `~/.config/heimdallm/.token`
+- **Docker**: `GITHUB_TOKEN` env var → `/config/.token` mount → `~/.config/heimdallm/.token`
 
 **AppImage won't run**
 ```bash

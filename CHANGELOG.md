@@ -1,5 +1,7 @@
 # Changelog
 
+> **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
+
 ## [0.1.1](https://github.com/theburrowhub/heimdallm/compare/v0.1.0...v0.1.1) (2026-04-16)
 
 
