@@ -1,0 +1,60 @@
+services:
+  heimdallm:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: heimdallm
+    restart: unless-stopped
+    ports:
+      - "${HEIMDALLM_PORT:-7842}:${HEIMDALLM_PORT:-7842}"
+    environment:
+      # ── Heimdallm config ───────────────────────────────────────────────
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - HEIMDALLM_AI_PRIMARY=${HEIMDALLM_AI_PRIMARY:-claude}
+      - HEIMDALLM_AI_FALLBACK=${HEIMDALLM_AI_FALLBACK:-}
+      - HEIMDALLM_REPOSITORIES=${HEIMDALLM_REPOSITORIES:-}
+      - HEIMDALLM_POLL_INTERVAL=${HEIMDALLM_POLL_INTERVAL:-5m}
+      - HEIMDALLM_REVIEW_MODE=${HEIMDALLM_REVIEW_MODE:-single}
+      - HEIMDALLM_RETENTION_DAYS=${HEIMDALLM_RETENTION_DAYS:-90}
+      - HEIMDALLM_PORT=${HEIMDALLM_PORT:-7842}
+      - HEIMDALLM_BIND_ADDR=0.0.0.0
+
+      # ── AI CLI authentication ──────────────────────────────────────────
+      # Claude Code CLI (Anthropic)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+
+      # Codex CLI (OpenAI)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CODEX_API_KEY=${CODEX_API_KEY:-}
+
+      # Gemini CLI (Google)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+
+      # OpenCode CLI (uses any provider key above, or OpenRouter)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+
+      # ── Headless / non-interactive mode ────────────────────────────────
+      - CI=true
+      - OPENCODE_DISABLE_AUTOUPDATE=true
+    volumes:
+      # Persistent data (SQLite DB + API token)
+      - heimdallm-data:/data
+      # Configuration (optional — env vars work without this)
+      - ./config:/config
+      #
+      # Gemini OAuth tokens from host (if using browser-based auth):
+      # - ~/.gemini:/home/heimdallm/.gemini:ro
+      #
+      # Local repos for full-repo analysis (optional):
+      # - /path/to/repos:/repos:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7842/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  heimdallm-data:
+    driver: local

@@ -1,0 +1,47 @@
+# Heimdallm configuration
+# This file is optional — all values can be set via environment variables.
+# Environment variables take precedence over values in this file.
+
+[server]
+port = 7842
+bind_addr = "0.0.0.0"
+
+[github]
+poll_interval = "5m"
+repositories = ["org/repo1", "org/repo2"]
+
+[ai]
+# Available: claude, gemini, codex, opencode
+primary = "claude"
+# fallback = "gemini"
+review_mode = "single"   # "single" or "multi"
+
+# Per-CLI settings (optional)
+# [ai.agents.claude]
+# model = "claude-sonnet-4-20250514"
+# max_turns = 0
+# effort = "high"
+# permission_mode = "auto"
+# bare = true                    # WARNING: bare mode disables OAuth authentication.
+#                                # Use only with ANTHROPIC_API_KEY, not CLAUDE_CODE_OAUTH_TOKEN.
+# dangerously_skip_perms = true
+# no_session_persistence = true
+
+# [ai.agents.gemini]
+# model = "gemini-2.5-pro"
+
+# [ai.agents.codex]
+# model = "codex-mini"
+# approval_mode = "full-auto"
+
+# [ai.agents.opencode]
+# model = "anthropic/claude-sonnet-4"
+
+# Per-repo AI overrides (optional)
+# [ai.repos."org/repo1"]
+# primary = "codex"
+# review_mode = "multi"
+# local_dir = "/repos/repo1"    # mount from host via docker-compose volumes
+
+[retention]
+max_days = 90

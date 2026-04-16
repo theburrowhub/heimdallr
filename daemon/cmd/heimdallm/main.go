@@ -49,8 +49,14 @@ func main() {
 
 	setupLogging()
 
-	cfgPath := config.DefaultPath()
-	cfg, err := config.Load(cfgPath)
+	cfgPath := configPath()
+	var cfg *config.Config
+	var err error
+	if os.Getenv("HEIMDALLM_DATA_DIR") != "" {
+		cfg, err = config.LoadOrCreate(cfgPath)
+	} else {
+		cfg, err = config.Load(cfgPath)
+	}
 	if err != nil {
 		slog.Error("config load failed", "path", cfgPath, "err", err)
 		os.Exit(1)
@@ -412,8 +418,8 @@ func main() {
 	go makePollFn(cfg)()
 
 	go func() {
-		slog.Info("daemon started", "port", cfg.Server.Port)
-		if err := srv.Start(cfg.Server.Port); err != nil {
+		slog.Info("daemon started", "port", cfg.Server.Port, "bind", cfg.Server.BindAddr)
+		if err := srv.Start(cfg.Server.Port, cfg.Server.BindAddr); err != nil {
 			slog.Error("server stopped", "err", err)
 		}
 	}()
@@ -434,11 +440,33 @@ func setupLogging() {
 	})))
 }
 
+// dataDir resolves the data directory.
+// Priority: HEIMDALLM_DATA_DIR env > /data (Docker) > ~/.local/share/heimdallm
 func dataDir() string {
+	if v := os.Getenv("HEIMDALLM_DATA_DIR"); v != "" {
+		os.MkdirAll(v, 0700)
+		return v
+	}
+	if info, err := os.Stat("/data"); err == nil && info.IsDir() {
+		return "/data"
+	}
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".local", "share", "heimdallm")
 	os.MkdirAll(dir, 0700)
 	return dir
+}
+
+// configPath resolves the config file location.
+// Priority: HEIMDALLM_CONFIG_PATH env > /config/config.toml (Docker) > ~/.config/heimdallm/config.toml
+func configPath() string {
+	if v := os.Getenv("HEIMDALLM_CONFIG_PATH"); v != "" {
+		return v
+	}
+	if info, err := os.Stat("/config"); err == nil && info.IsDir() {
+		return "/config/config.toml"
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "heimdallm", "config.toml")
 }
 
 func parsePollInterval(s string) time.Duration {

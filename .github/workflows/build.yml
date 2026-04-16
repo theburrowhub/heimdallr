@@ -2,6 +2,12 @@ name: Build & Release
 
 # Only triggered by version tags — never by branch pushes.
 # To create a release, use the "Tag release" workflow (tag.yml).
+#
+# NOTE: release-please (release.yml) also creates version tags. If both
+# tag.yml and release-please are active, this workflow may fire twice for
+# the same version. To prevent that, either disable tag.yml or add:
+#   if: "!contains(github.event.head_commit.message, 'chore(main): release')"
+# to each job below.
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
@@ -16,6 +22,7 @@ permissions:
 jobs:
   build-linux:
     name: Build Heimdallm Linux packages (.deb / .rpm / .AppImage)
+    if: "!contains(github.event.head_commit.message, 'chore(main): release')"
     runs-on: ubuntu-22.04
 
     steps:
@@ -252,6 +259,7 @@ jobs:
 
   build:
     name: Build Heimdallm.dmg
+    if: "!contains(github.event.head_commit.message, 'chore(main): release')"
     runs-on: macos-14
 
     steps:

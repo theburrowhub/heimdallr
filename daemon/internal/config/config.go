@@ -2,7 +2,11 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/heimdallm/daemon/internal/executor"
@@ -20,7 +24,8 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port int `toml:"port"`
+	Port     int    `toml:"port"`
+	BindAddr string `toml:"bind_addr"`
 }
 
 type GitHubConfig struct {
@@ -104,6 +109,9 @@ func (c *Config) applyDefaults() {
 	if c.Server.Port == 0 {
 		c.Server.Port = 7842
 	}
+	if c.Server.BindAddr == "" {
+		c.Server.BindAddr = "127.0.0.1"
+	}
 	if c.GitHub.PollInterval == "" {
 		c.GitHub.PollInterval = "5m"
 	}
@@ -112,6 +120,48 @@ func (c *Config) applyDefaults() {
 	}
 	if c.AI.ReviewMode == "" {
 		c.AI.ReviewMode = "single"
+	}
+}
+
+// applyEnvOverrides applies HEIMDALLM_* environment variable overrides.
+// Environment variables take precedence over values loaded from the TOML file.
+func (c *Config) applyEnvOverrides() {
+	if v := os.Getenv("HEIMDALLM_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			c.Server.Port = p
+		}
+	}
+	if v := os.Getenv("HEIMDALLM_BIND_ADDR"); v != "" {
+		c.Server.BindAddr = v
+	}
+	if v := os.Getenv("HEIMDALLM_POLL_INTERVAL"); v != "" {
+		c.GitHub.PollInterval = v
+	}
+	if v := os.Getenv("HEIMDALLM_REPOSITORIES"); v != "" {
+		repos := strings.Split(v, ",")
+		cleaned := make([]string, 0, len(repos))
+		for _, r := range repos {
+			if s := strings.TrimSpace(r); s != "" {
+				cleaned = append(cleaned, s)
+			}
+		}
+		if len(cleaned) > 0 {
+			c.GitHub.Repositories = cleaned
+		}
+	}
+	if v := os.Getenv("HEIMDALLM_AI_PRIMARY"); v != "" {
+		c.AI.Primary = v
+	}
+	if v := os.Getenv("HEIMDALLM_AI_FALLBACK"); v != "" {
+		c.AI.Fallback = v
+	}
+	if v := os.Getenv("HEIMDALLM_REVIEW_MODE"); v != "" {
+		c.AI.ReviewMode = v
+	}
+	if v := os.Getenv("HEIMDALLM_RETENTION_DAYS"); v != "" {
+		if d, err := strconv.Atoi(v); err == nil {
+			c.Retention.MaxDays = d
+		}
 	}
 }
 
@@ -146,11 +196,49 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	cfg.applyDefaults()
+	cfg.applyEnvOverrides()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
 }
+
+func writeConfigTOML(path string, cfg *Config) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create config file: %w", err)
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}
+
+// LoadOrCreate loads config from path, or creates a minimal config from
+// environment variables if the file does not exist. This is the preferred
+// entry point for Docker / headless deployments.
+func LoadOrCreate(path string) (*Config, error) {
+	if _, err := os.Stat(path); err == nil {
+		return Load(path)
+	}
+	// No config file — build from env vars.
+	cfg := &Config{}
+	cfg.applyDefaults()
+	cfg.applyEnvOverrides()
+	if cfg.AI.Primary == "" {
+		return nil, fmt.Errorf("no config file and HEIMDALLM_AI_PRIMARY not set")
+	}
+	if err := writeConfigTOML(path, cfg); err != nil {
+		slog.Warn("config: could not persist generated config", "path", path, "err", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
 
 // DefaultPath returns ~/.config/heimdallm/config.toml
 func DefaultPath() string {
