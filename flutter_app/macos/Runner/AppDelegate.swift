@@ -4,7 +4,7 @@ import FlutterMacOS
 @main
 class AppDelegate: FlutterAppDelegate {
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    // Heimdallr is a tray app — keep the process alive when the window closes.
+    // Heimdallm is a tray app — keep the process alive when the window closes.
     // The user quits via "Quit" in the menu bar icon.
     return false
   }
