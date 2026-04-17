@@ -346,6 +346,49 @@ func (c *Client) fetchReviewComments(repo string, number int) ([]Comment, error)
 	return comments, nil
 }
 
+// FetchReposByTopic searches for repositories with the given topic in the specified orgs.
+// Returns deduplicated "org/repo" strings, sorted alphabetically.
+func (c *Client) FetchReposByTopic(topic string, orgs []string) ([]string, error) {
+	set := make(map[string]struct{})
+	for _, org := range orgs {
+		query := url.QueryEscape(fmt.Sprintf("topic:%s org:%s", topic, org))
+		path := fmt.Sprintf("/search/repositories?q=%s&per_page=100", query)
+		resp, err := c.do("GET", path, "application/vnd.github+json")
+		if err != nil {
+			return nil, fmt.Errorf("github: search repos by topic: %w", err)
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			errBody := string(body)
+			if len(errBody) > maxErrBodyLen {
+				errBody = errBody[:maxErrBodyLen]
+			}
+			return nil, fmt.Errorf("github: search repos: %s (body: %s)", resp.Status, errBody)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("github: read search response: %w", err)
+		}
+		var result struct {
+			Items []struct {
+				FullName string `json:"full_name"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("github: parse search response: %w", err)
+		}
+		for _, item := range result.Items {
+			set[item.FullName] = struct{}{}
+		}
+	}
+	repos := make([]string, 0, len(set))
+	for r := range set {
+		repos = append(repos, r)
+	}
+	sort.Strings(repos)
+	return repos, nil
+}
+
 func (c *Client) fetchIssueComments(repo string, number int) ([]Comment, error) {
 	path := fmt.Sprintf("/repos/%s/issues/%d/comments", repo, number)
 	resp, err := c.do("GET", path, "application/vnd.github+json")

@@ -140,3 +140,75 @@ func TestFetchComments_APIError(t *testing.T) {
 		t.Fatal("expected error for 404 response, got nil")
 	}
 }
+
+func TestFetchReposByTopic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result := map[string]any{
+			"items": []map[string]any{
+				{"full_name": "myorg/repo-a"},
+				{"full_name": "myorg/repo-b"},
+			},
+		}
+		json.NewEncoder(w).Encode(result)
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	got, err := client.FetchReposByTopic("heimdallr", []string{"myorg"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 repos, got %d", len(got))
+	}
+	if got[0] != "myorg/repo-a" || got[1] != "myorg/repo-b" {
+		t.Errorf("unexpected repos: %v", got)
+	}
+}
+
+func TestFetchReposByTopic_MultipleOrgs(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var items []map[string]any
+		if calls == 1 {
+			items = []map[string]any{
+				{"full_name": "org1/shared-repo"},
+				{"full_name": "org1/unique-repo"},
+			}
+		} else {
+			items = []map[string]any{
+				{"full_name": "org2/other-repo"},
+				{"full_name": "org1/shared-repo"}, // duplicate
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"items": items})
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	got, err := client.FetchReposByTopic("heimdallr", []string{"org1", "org2"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 deduplicated repos, got %d: %v", len(got), got)
+	}
+	// Results should be sorted alphabetically
+	if got[0] != "org1/shared-repo" || got[1] != "org1/unique-repo" || got[2] != "org2/other-repo" {
+		t.Errorf("unexpected order or repos: %v", got)
+	}
+}
+
+func TestFetchReposByTopic_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Internal Server Error"}`, http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	_, err := client.FetchReposByTopic("heimdallr", []string{"myorg"})
+	if err == nil {
+		t.Fatal("expected error for 500 response, got nil")
+	}
+}
