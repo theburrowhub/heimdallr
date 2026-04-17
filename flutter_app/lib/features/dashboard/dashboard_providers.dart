@@ -5,6 +5,7 @@ import '../../core/api/sse_client.dart';
 import '../../core/models/pr.dart';
 import '../../core/tray/tray_menu.dart' show TrayMenuRef;
 import '../../main.dart' show sendPRNotification;
+import '../issues/issues_providers.dart';
 
 final apiClientProvider = Provider<ApiClient>((ref) => ApiClient());
 
@@ -70,6 +71,38 @@ void _handleSseEvent(Ref ref, SseEvent event) {
             final k = '${pr.repo}:${pr.number}';
             ref.read(reviewingPRsProvider.notifier).update((s) => s.difference({k}));
           }
+        }
+
+      // ── Issue tracking events ──────────────────────────────────────────
+      case 'issue_detected':
+        ref.read(issueListRefreshProvider.notifier).update((s) => s + 1);
+
+      case 'issue_review_started':
+        final issueNumber = (data['number'] as num?)?.toInt();
+        final issueKey = (repo.isNotEmpty && issueNumber != null)
+            ? '$repo:$issueNumber'
+            : null;
+        if (issueKey != null) {
+          ref.read(reviewingIssuesProvider.notifier).update((s) => {...s, issueKey});
+        }
+
+      case 'issue_review_completed':
+        final issueNumber = (data['number'] as num?)?.toInt();
+        final issueKey = (repo.isNotEmpty && issueNumber != null)
+            ? '$repo:$issueNumber'
+            : null;
+        if (issueKey != null) {
+          ref.read(reviewingIssuesProvider.notifier).update((s) => s.difference({issueKey}));
+        }
+        ref.read(issueListRefreshProvider.notifier).update((s) => s + 1);
+
+      case 'issue_review_error':
+        final issueNumber = (data['number'] as num?)?.toInt();
+        final issueKey = (repo.isNotEmpty && issueNumber != null)
+            ? '$repo:$issueNumber'
+            : null;
+        if (issueKey != null) {
+          ref.read(reviewingIssuesProvider.notifier).update((s) => s.difference({issueKey}));
         }
     }
   } catch (_) {}
