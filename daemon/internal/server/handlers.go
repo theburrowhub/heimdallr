@@ -655,6 +655,9 @@ func (srv *Server) handleTriggerIssueReview(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "issue review trigger not configured", http.StatusServiceUnavailable)
 		return
 	}
+	// Shared semaphore with PR reviews — intentional. Both review types spawn
+	// AI CLI processes, which are the real concurrency bottleneck. A single
+	// global cap prevents overloading the machine with concurrent CLI invocations.
 	select {
 	case srv.reviewSem <- struct{}{}:
 	default:

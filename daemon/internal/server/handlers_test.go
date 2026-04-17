@@ -420,10 +420,27 @@ func TestHandlerTriggerIssueReview_NotConfigured(t *testing.T) {
 }
 
 func TestIssueEndpointsRequireAuthWhenTokenSet(t *testing.T) {
-	srv := setupServerWithToken(t, "secret-token")
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+	broker := sse.NewBroker()
+	broker.Start()
+	defer broker.Stop()
+	srv := server.New(s, broker, nil, "secret-token")
 
-	paths := []string{"/issues"}
-	for _, path := range paths {
+	now := time.Now()
+	id, _ := s.UpsertIssue(&store.Issue{
+		GithubID: 700, Repo: "org/r", Number: 14, Title: "t",
+		Body: "b", Author: "a", Assignees: `[]`, Labels: `[]`,
+		State: "open", CreatedAt: now, FetchedAt: now,
+	})
+	issueID := fmt.Sprintf("%d", id)
+
+	// GET endpoints — protected via sensitiveGETPaths
+	getPaths := []string{"/issues", "/issues/" + issueID}
+	for _, path := range getPaths {
 		req := httptest.NewRequest("GET", path, nil)
 		w := httptest.NewRecorder()
 		srv.Router().ServeHTTP(w, req)
@@ -437,6 +454,29 @@ func TestIssueEndpointsRequireAuthWhenTokenSet(t *testing.T) {
 		srv.Router().ServeHTTP(w2, req2)
 		if w2.Code == http.StatusUnauthorized {
 			t.Errorf("GET %s with valid token: unexpected 401", path)
+		}
+	}
+
+	// POST endpoints — protected via method-based auth (all POST requires token)
+	postPaths := []string{
+		"/issues/" + issueID + "/review",
+		"/issues/" + issueID + "/dismiss",
+		"/issues/" + issueID + "/undismiss",
+	}
+	for _, path := range postPaths {
+		req := httptest.NewRequest("POST", path, nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("POST %s without token: expected 401, got %d", path, w.Code)
+		}
+
+		req2 := httptest.NewRequest("POST", path, nil)
+		req2.Header.Set("X-Heimdallm-Token", "secret-token")
+		w2 := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w2, req2)
+		if w2.Code == http.StatusUnauthorized {
+			t.Errorf("POST %s with valid token: unexpected 401", path)
 		}
 	}
 }
