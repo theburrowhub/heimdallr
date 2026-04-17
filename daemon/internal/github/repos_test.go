@@ -159,3 +159,87 @@ func TestCreatePR_MissingNumberInResponse(t *testing.T) {
 		t.Fatal("expected error when response has no number")
 	}
 }
+
+// ── SetPRReviewers ────────────────────────────────────────────────────────────
+
+func TestSetPRReviewers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/repos/org/repo/pulls/42/requested_reviewers" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string][]string
+		json.NewDecoder(r.Body).Decode(&body)
+		if len(body["reviewers"]) != 2 {
+			t.Errorf("expected 2 reviewers, got %v", body["reviewers"])
+		}
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	err := c.SetPRReviewers("org/repo", 42, []string{"user1", "user2"})
+	if err != nil {
+		t.Fatalf("SetPRReviewers: %v", err)
+	}
+}
+
+func TestSetPRReviewers_Noop(t *testing.T) {
+	c := gh.NewClient("fake-token")
+	// Should return nil without making any HTTP call
+	if err := c.SetPRReviewers("org/repo", 42, nil); err != nil {
+		t.Fatalf("expected nil for empty reviewers, got: %v", err)
+	}
+}
+
+func TestSetPRReviewers_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(`{"message":"Validation Failed"}`))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	err := c.SetPRReviewers("org/repo", 42, []string{"nonexistent"})
+	if err == nil {
+		t.Fatal("expected error for 422 response")
+	}
+}
+
+// ── AddLabels ─────────────────────────────────────────────────────────────────
+
+func TestAddLabels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/repos/org/repo/issues/42/labels" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	err := c.AddLabels("org/repo", 42, []string{"bug", "auto-generated"})
+	if err != nil {
+		t.Fatalf("AddLabels: %v", err)
+	}
+}
+
+// ── SetAssignees ──────────────────────────────────────────────────────────────
+
+func TestSetAssignees(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/repos/org/repo/issues/42/assignees" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	err := c.SetAssignees("org/repo", 42, []string{"sergiotejon"})
+	if err != nil {
+		t.Fatalf("SetAssignees: %v", err)
+	}
+}
