@@ -63,3 +63,11 @@ RUN test -f daemon/bin/heimdallm \
     && test -d flutter_app/build/linux/x64/release/bundle \
     && test -f flutter_app/build/linux/x64/release/bundle/heimdallm \
     && echo "✓  All output artifacts verified"
+
+# ── Runtime deps for `make run-linux` GUI testing ────────────────────────────
+# These are NOT needed for CI build verification — only for displaying the app
+# on the host X11 display. Kept in a separate layer for clarity.
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+    libayatana-appindicator3-1 libnotify4 libsecret-1-0 \
+    dbus-x11 libcanberra-gtk3-module mesa-utils \
+    && rm -rf /var/lib/apt/lists/*

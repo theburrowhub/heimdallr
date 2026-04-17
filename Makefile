@@ -17,7 +17,7 @@ else
 endif
 
 .PHONY: build-daemon build-app test test-docker dev dev-daemon dev-stop \
-        release-local package-macos install-service verify-linux clean
+        release-local package-macos install-service verify-linux run-linux clean
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
@@ -260,6 +260,82 @@ verify-linux:
 	docker build -f Dockerfile.linux-verify -t heimdallm-verify .
 	@echo ""
 	@echo "✅  Linux build verification passed"
+
+# ── Docker-based Linux GUI runner ─────────────────────────────────────────────
+#
+# Launches the Heimdallm desktop app from the heimdallm-verify Docker image
+# directly on the host X11 display.
+#
+# Requires:
+#   - heimdallm-verify image (run 'make verify-linux' first)
+#   - X11 display (DISPLAY env var set — XWayland counts)
+#
+# GPU acceleration is used when /dev/dri exists; otherwise the app falls
+# back to software rendering (llvmpipe) automatically.
+#
+# --net=host is required so the container can reach the X11 unix socket
+# and the host D-Bus session bus without complex network plumbing.
+# --ipc=host is required for MIT-SHM (X11 shared memory transport),
+# without which GTK falls back to slow network-style rendering.
+#
+# The container runs as the current user (not root) to avoid file
+# ownership issues with the persisted config directory.
+#
+# Config is persisted to ~/.config/heimdallm between runs.
+# Pass GITHUB_TOKEN to connect to GitHub:
+#   GITHUB_TOKEN=ghp_... make run-linux
+
+run-linux: LINUX_BUNDLE := /app/flutter_app/build/linux/x64/release/bundle
+run-linux:
+	@command -v docker >/dev/null || { echo "❌  Docker is required."; exit 1; }
+	@test -n "$$DISPLAY" || { echo "❌  No DISPLAY set — need X11 (or XWayland)."; exit 1; }
+	@docker image inspect heimdallm-verify >/dev/null 2>&1 || \
+	  { echo "❌  Image 'heimdallm-verify' not found. Run 'make verify-linux' first."; exit 1; }
+	@mkdir -p "$$HOME/.config/heimdallm"
+	@docker rm -f heimdallm-run 2>/dev/null || true
+	@ENV_FILE=$$(mktemp) ; \
+	cleanup() { \
+	  xhost -local:docker 2>/dev/null || true ; \
+	  rm -f "$$ENV_FILE" ; \
+	} ; \
+	trap cleanup EXIT ; \
+	\
+	echo "DISPLAY=$$DISPLAY" > "$$ENV_FILE" ; \
+	echo "HEIMDALLM_DAEMON_PATH=/app/daemon/bin/heimdallm" >> "$$ENV_FILE" ; \
+	if [ -n "$$GITHUB_TOKEN" ]; then \
+	  echo "GITHUB_TOKEN=$$GITHUB_TOKEN" >> "$$ENV_FILE" ; \
+	fi ; \
+	UID_VAL=$$(id -u) ; \
+	GID_VAL=$$(id -g) ; \
+	DBUS_ARGS="" ; \
+	if [ -e /run/user/$$UID_VAL/bus ]; then \
+	  DBUS_ARGS="-v /run/user/$$UID_VAL/bus:/run/user/$$UID_VAL/bus:ro" ; \
+	  echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$$UID_VAL/bus" >> "$$ENV_FILE" ; \
+	fi ; \
+	GPU_ARGS="" ; \
+	if [ -e /dev/dri ]; then \
+	  GPU_ARGS="--device /dev/dri" ; \
+	else \
+	  echo "⚠  /dev/dri not found — using software rendering (llvmpipe)." ; \
+	fi ; \
+	\
+	echo "▶  Launching Heimdallm (Linux) via Docker..." ; \
+	echo "   Close the app window or press Ctrl-C to stop." ; \
+	xhost +local:docker 2>/dev/null || true ; \
+	\
+	docker run --rm \
+	  --name heimdallm-run \
+	  --env-file "$$ENV_FILE" \
+	  --user "$$UID_VAL:$$GID_VAL" \
+	  -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
+	  -v /run/dbus:/run/dbus:ro \
+	  $$DBUS_ARGS \
+	  -v "$$HOME/.config/heimdallm:$$HOME/.config/heimdallm" \
+	  $$GPU_ARGS \
+	  --ipc=host \
+	  --net=host \
+	  heimdallm-verify \
+	  $(LINUX_BUNDLE)/heimdallm
 
 clean:
 	cd daemon && make clean
