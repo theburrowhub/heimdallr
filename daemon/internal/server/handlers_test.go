@@ -227,6 +227,220 @@ func TestHandlerTriggerReviewRateLimit(t *testing.T) {
 	close(gate)
 }
 
+func TestHandlerListIssues(t *testing.T) {
+	srv, s := setupServer(t)
+	now := time.Now()
+	id, err := s.UpsertIssue(&store.Issue{
+		GithubID: 100, Repo: "org/repo", Number: 7, Title: "bug: crash",
+		Body: "details", Author: "alice", Assignees: `["bob"]`, Labels: `["bug"]`,
+		State: "open", CreatedAt: now, FetchedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("upsert issue: %v", err)
+	}
+	s.InsertIssueReview(&store.IssueReview{
+		IssueID: id, CLIUsed: "claude", Summary: "triage summary",
+		Triage: `{"severity":"high","category":"bug"}`, Suggestions: `["fix it"]`,
+		ActionTaken: "review_only", CreatedAt: now,
+	})
+
+	req := httptest.NewRequest("GET", "/issues", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list issues: status %d, body: %s", w.Code, w.Body.String())
+	}
+	var issues []map[string]any
+	json.NewDecoder(w.Body).Decode(&issues)
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(issues))
+	}
+	iss := issues[0]
+	if iss["title"] != "bug: crash" {
+		t.Errorf("title = %v", iss["title"])
+	}
+	// Verify assignees/labels are arrays, not strings
+	if assignees, ok := iss["assignees"].([]any); !ok || len(assignees) != 1 {
+		t.Errorf("assignees should be parsed array, got %T: %v", iss["assignees"], iss["assignees"])
+	}
+	if labels, ok := iss["labels"].([]any); !ok || len(labels) != 1 {
+		t.Errorf("labels should be parsed array, got %T: %v", iss["labels"], iss["labels"])
+	}
+	// Verify latest_review is attached
+	rev, ok := iss["latest_review"].(map[string]any)
+	if !ok || rev == nil {
+		t.Fatalf("expected latest_review, got %v", iss["latest_review"])
+	}
+	if rev["summary"] != "triage summary" {
+		t.Errorf("review summary = %v", rev["summary"])
+	}
+	// Verify triage is parsed object, not string
+	if _, ok := rev["triage"].(map[string]any); !ok {
+		t.Errorf("triage should be parsed object, got %T: %v", rev["triage"], rev["triage"])
+	}
+}
+
+func TestHandlerGetIssue(t *testing.T) {
+	srv, s := setupServer(t)
+	now := time.Now()
+	id, _ := s.UpsertIssue(&store.Issue{
+		GithubID: 200, Repo: "org/repo", Number: 8, Title: "feat request",
+		Body: "details", Author: "bob", Assignees: `[]`, Labels: `["enhancement"]`,
+		State: "open", CreatedAt: now, FetchedAt: now,
+	})
+	s.InsertIssueReview(&store.IssueReview{
+		IssueID: id, CLIUsed: "gemini", Summary: "looks good",
+		Triage: `{"severity":"low","category":"feature"}`, Suggestions: `[]`,
+		ActionTaken: "review_only", CreatedAt: now,
+	})
+
+	req := httptest.NewRequest("GET", "/issues/"+itoa(id), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get issue: status %d, body: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	json.NewDecoder(w.Body).Decode(&body)
+	iss, ok := body["issue"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected issue key")
+	}
+	if iss["title"] != "feat request" {
+		t.Errorf("title = %v", iss["title"])
+	}
+	reviews, ok := body["reviews"].([]any)
+	if !ok || len(reviews) != 1 {
+		t.Fatalf("expected 1 review, got %v", body["reviews"])
+	}
+}
+
+func TestHandlerGetIssue_NotFound(t *testing.T) {
+	srv, _ := setupServer(t)
+	req := httptest.NewRequest("GET", "/issues/9999", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestHandlerDismissIssue(t *testing.T) {
+	srv, s := setupServer(t)
+	now := time.Now()
+	id, _ := s.UpsertIssue(&store.Issue{
+		GithubID: 300, Repo: "org/r", Number: 10, Title: "t",
+		Body: "b", Author: "a", Assignees: `[]`, Labels: `[]`,
+		State: "open", CreatedAt: now, FetchedAt: now,
+	})
+
+	req := httptest.NewRequest("POST", "/issues/"+itoa(id)+"/dismiss", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("dismiss issue: status %d, body: %s", w.Code, w.Body.String())
+	}
+
+	issues, _ := s.ListIssues()
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues after dismiss, got %d", len(issues))
+	}
+}
+
+func TestHandlerUndismissIssue(t *testing.T) {
+	srv, s := setupServer(t)
+	now := time.Now()
+	id, _ := s.UpsertIssue(&store.Issue{
+		GithubID: 400, Repo: "org/r", Number: 11, Title: "t",
+		Body: "b", Author: "a", Assignees: `[]`, Labels: `[]`,
+		State: "open", CreatedAt: now, FetchedAt: now,
+	})
+	s.DismissIssue(id)
+
+	req := httptest.NewRequest("POST", "/issues/"+itoa(id)+"/undismiss", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("undismiss issue: status %d, body: %s", w.Code, w.Body.String())
+	}
+
+	issues, _ := s.ListIssues()
+	if len(issues) != 1 {
+		t.Errorf("expected 1 issue after undismiss, got %d", len(issues))
+	}
+}
+
+func TestHandlerTriggerIssueReview(t *testing.T) {
+	srv, s := setupServer(t)
+	now := time.Now()
+	id, _ := s.UpsertIssue(&store.Issue{
+		GithubID: 500, Repo: "org/r", Number: 12, Title: "t",
+		Body: "b", Author: "a", Assignees: `[]`, Labels: `[]`,
+		State: "open", CreatedAt: now, FetchedAt: now,
+	})
+
+	triggered := make(chan int64, 1)
+	srv.SetTriggerIssueReviewFn(func(issueID int64) error {
+		triggered <- issueID
+		return nil
+	})
+
+	req := httptest.NewRequest("POST", "/issues/"+itoa(id)+"/review", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("trigger issue review: status %d, body: %s", w.Code, w.Body.String())
+	}
+
+	select {
+	case got := <-triggered:
+		if got != id {
+			t.Errorf("triggered with issue_id %d, expected %d", got, id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("trigger callback not called within 2s")
+	}
+}
+
+func TestHandlerTriggerIssueReview_NotConfigured(t *testing.T) {
+	srv, s := setupServer(t)
+	now := time.Now()
+	id, _ := s.UpsertIssue(&store.Issue{
+		GithubID: 600, Repo: "org/r", Number: 13, Title: "t",
+		Body: "b", Author: "a", Assignees: `[]`, Labels: `[]`,
+		State: "open", CreatedAt: now, FetchedAt: now,
+	})
+
+	req := httptest.NewRequest("POST", "/issues/"+itoa(id)+"/review", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when trigger not configured, got %d", w.Code)
+	}
+}
+
+func TestIssueEndpointsRequireAuthWhenTokenSet(t *testing.T) {
+	srv := setupServerWithToken(t, "secret-token")
+
+	paths := []string{"/issues"}
+	for _, path := range paths {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("GET %s without token: expected 401, got %d", path, w.Code)
+		}
+
+		req2 := httptest.NewRequest("GET", path, nil)
+		req2.Header.Set("X-Heimdallm-Token", "secret-token")
+		w2 := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w2, req2)
+		if w2.Code == http.StatusUnauthorized {
+			t.Errorf("GET %s with valid token: unexpected 401", path)
+		}
+	}
+}
+
 func TestHandlerPutConfigValueValidation(t *testing.T) {
 	srv := setupServerWithToken(t, "secret-token")
 

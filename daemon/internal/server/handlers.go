@@ -31,8 +31,9 @@ type Server struct {
 	router          chi.Router
 	httpServer      *http.Server
 	reloadFn        func() error
-	triggerReviewFn func(prID int64) error
-	meFn            func() (string, error)
+	triggerReviewFn      func(prID int64) error
+	triggerIssueReviewFn func(issueID int64) error
+	meFn                 func() (string, error)
 	// configFn returns the current running config as a JSON-serializable map.
 	configFn func() map[string]any
 	// apiToken is required on all state-mutating requests (POST/PUT/DELETE).
@@ -84,8 +85,9 @@ var sensitiveGETPaths = []string{
 	"/events",
 	"/logs/stream",
 	"/me",    // exposes GitHub username
-	"/prs",   // exposes PR titles, repos, authors
-	"/stats", // exposes review activity metadata
+	"/prs",    // exposes PR titles, repos, authors
+	"/stats",  // exposes review activity metadata
+	"/issues", // covers /issues and /issues/{id}
 }
 
 // authMiddleware rejects:
@@ -126,6 +128,11 @@ func (srv *Server) SetReloadFn(fn func() error) { srv.reloadFn = fn }
 
 // SetTriggerReviewFn wires the review-trigger callback called by POST /prs/{id}/review.
 func (srv *Server) SetTriggerReviewFn(fn func(prID int64) error) { srv.triggerReviewFn = fn }
+
+// SetTriggerIssueReviewFn wires the issue-review-trigger callback called by POST /issues/{id}/review.
+func (srv *Server) SetTriggerIssueReviewFn(fn func(issueID int64) error) {
+	srv.triggerIssueReviewFn = fn
+}
 
 // SetMeFn wires the authenticated-user callback called by GET /me.
 func (srv *Server) SetMeFn(fn func() (string, error)) { srv.meFn = fn }
@@ -169,6 +176,11 @@ func (srv *Server) buildRouter() chi.Router {
 	r.Post("/prs/{id}/review", srv.handleTriggerReview)
 	r.Post("/prs/{id}/dismiss", srv.handleDismissPR)
 	r.Post("/prs/{id}/undismiss", srv.handleUndismissPR)
+	r.Get("/issues", srv.handleListIssues)
+	r.Get("/issues/{id}", srv.handleGetIssue)
+	r.Post("/issues/{id}/review", srv.handleTriggerIssueReview)
+	r.Post("/issues/{id}/dismiss", srv.handleDismissIssue)
+	r.Post("/issues/{id}/undismiss", srv.handleUndismissIssue)
 	r.Get("/stats", srv.handleStats)
 	r.Get("/agents", srv.handleListAgents)
 	r.Post("/agents", srv.handleUpsertAgent)
@@ -505,6 +517,157 @@ func (srv *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"login": login})
+}
+
+// ── Issue endpoints ──────────────────────────────────────────────────────────
+
+// issueResponse wraps a store.Issue for JSON serialization, parsing the
+// Assignees/Labels JSON strings into proper arrays so the API consumer
+// receives []string instead of a JSON-encoded string.
+type issueResponse struct {
+	ID           int64                `json:"id"`
+	GithubID     int64                `json:"github_id"`
+	Repo         string               `json:"repo"`
+	Number       int                  `json:"number"`
+	Title        string               `json:"title"`
+	Body         string               `json:"body"`
+	Author       string               `json:"author"`
+	Assignees    json.RawMessage      `json:"assignees"`
+	Labels       json.RawMessage      `json:"labels"`
+	State        string               `json:"state"`
+	CreatedAt    time.Time            `json:"created_at"`
+	FetchedAt    time.Time            `json:"fetched_at"`
+	Dismissed    bool                 `json:"dismissed"`
+	LatestReview *issueReviewResponse `json:"latest_review,omitempty"`
+}
+
+// issueReviewResponse wraps a store.IssueReview, parsing Triage/Suggestions
+// JSON strings into structured objects.
+type issueReviewResponse struct {
+	ID          int64           `json:"id"`
+	IssueID     int64           `json:"issue_id"`
+	CLIUsed     string          `json:"cli_used"`
+	Summary     string          `json:"summary"`
+	Triage      json.RawMessage `json:"triage"`
+	Suggestions json.RawMessage `json:"suggestions"`
+	ActionTaken string          `json:"action_taken"`
+	PRCreated   int             `json:"pr_created"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
+func toIssueResponse(iss *store.Issue, rev *store.IssueReview) issueResponse {
+	resp := issueResponse{
+		ID: iss.ID, GithubID: iss.GithubID, Repo: iss.Repo,
+		Number: iss.Number, Title: iss.Title, Body: iss.Body,
+		Author: iss.Author, State: iss.State,
+		Assignees: json.RawMessage(iss.Assignees),
+		Labels:    json.RawMessage(iss.Labels),
+		CreatedAt: iss.CreatedAt, FetchedAt: iss.FetchedAt,
+		Dismissed: iss.Dismissed,
+	}
+	if rev != nil {
+		resp.LatestReview = toIssueReviewResponse(rev)
+	}
+	return resp
+}
+
+func toIssueReviewResponse(r *store.IssueReview) *issueReviewResponse {
+	return &issueReviewResponse{
+		ID: r.ID, IssueID: r.IssueID, CLIUsed: r.CLIUsed,
+		Summary: r.Summary,
+		Triage:      json.RawMessage(r.Triage),
+		Suggestions: json.RawMessage(r.Suggestions),
+		ActionTaken: r.ActionTaken, PRCreated: r.PRCreated,
+		CreatedAt: r.CreatedAt,
+	}
+}
+
+func (srv *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
+	issues, err := srv.store.ListIssues()
+	if err != nil {
+		slog.Error("handleListIssues: store error", "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	result := make([]issueResponse, 0, len(issues))
+	for _, iss := range issues {
+		rev, _ := srv.store.LatestIssueReview(iss.ID)
+		result = append(result, toIssueResponse(iss, rev))
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (srv *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	iss, err := srv.store.GetIssue(id)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	reviews, _ := srv.store.ListIssueReviews(id)
+	reviewResps := make([]*issueReviewResponse, 0, len(reviews))
+	for _, rev := range reviews {
+		reviewResps = append(reviewResps, toIssueReviewResponse(rev))
+	}
+	issResp := toIssueResponse(iss, nil)
+	writeJSON(w, http.StatusOK, map[string]any{"issue": issResp, "reviews": reviewResps})
+}
+
+func (srv *Server) handleDismissIssue(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if err := srv.store.DismissIssue(id); err != nil {
+		slog.Error("handleDismissIssue: store error", "id", id, "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
+}
+
+func (srv *Server) handleUndismissIssue(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if err := srv.store.UndismissIssue(id); err != nil {
+		slog.Error("handleUndismissIssue: store error", "id", id, "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "undismissed"})
+}
+
+func (srv *Server) handleTriggerIssueReview(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if srv.triggerIssueReviewFn == nil {
+		http.Error(w, "issue review trigger not configured", http.StatusServiceUnavailable)
+		return
+	}
+	select {
+	case srv.reviewSem <- struct{}{}:
+	default:
+		http.Error(w, `{"error":"too many concurrent reviews — try again later"}`, http.StatusTooManyRequests)
+		return
+	}
+	go func() {
+		defer func() { <-srv.reviewSem }()
+		if err := srv.triggerIssueReviewFn(id); err != nil {
+			slog.Error("trigger issue review failed", "issue_id", id, "err", err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "review queued"})
 }
 
 func (srv *Server) handleStats(w http.ResponseWriter, r *http.Request) {
