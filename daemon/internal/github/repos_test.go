@@ -225,6 +225,27 @@ func TestAddLabels(t *testing.T) {
 	}
 }
 
+func TestAddLabels_Noop(t *testing.T) {
+	c := gh.NewClient("fake-token")
+	if err := c.AddLabels("org/repo", 42, nil); err != nil {
+		t.Fatalf("expected nil for empty labels, got: %v", err)
+	}
+}
+
+func TestAddLabels_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	err := c.AddLabels("org/repo", 42, []string{"nonexistent-label"})
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+}
+
 // ── SetAssignees ──────────────────────────────────────────────────────────────
 
 func TestSetAssignees(t *testing.T) {
@@ -241,5 +262,26 @@ func TestSetAssignees(t *testing.T) {
 	err := c.SetAssignees("org/repo", 42, []string{"sergiotejon"})
 	if err != nil {
 		t.Fatalf("SetAssignees: %v", err)
+	}
+}
+
+func TestSetAssignees_Noop(t *testing.T) {
+	c := gh.NewClient("fake-token")
+	if err := c.SetAssignees("org/repo", 42, nil); err != nil {
+		t.Fatalf("expected nil for empty assignees, got: %v", err)
+	}
+}
+
+func TestSetAssignees_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(`{"message":"Validation Failed"}`))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	err := c.SetAssignees("org/repo", 42, []string{"nonexistent"})
+	if err == nil {
+		t.Fatal("expected error for 422 response")
 	}
 }
