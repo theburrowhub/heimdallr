@@ -19,6 +19,7 @@ import (
 	"github.com/heimdallm/daemon/internal/discovery"
 	"github.com/heimdallm/daemon/internal/executor"
 	gh "github.com/heimdallm/daemon/internal/github"
+	issuepipeline "github.com/heimdallm/daemon/internal/issues"
 	"github.com/heimdallm/daemon/internal/keychain"
 	"github.com/heimdallm/daemon/internal/notify"
 	"github.com/heimdallm/daemon/internal/pipeline"
@@ -97,6 +98,7 @@ func main() {
 	}
 
 	p := pipeline.New(s, ghClient, exec, &notifyWithSSE{notifier: notifier})
+	issuePipe := issuepipeline.New(s, ghClient, exec, broker, &notifyWithSSE{notifier: notifier})
 	srv := server.New(s, broker, p, apiToken)
 
 	// cfgMu protects cfg, sched and the discovery loop so reload is safe from any goroutine.
@@ -195,7 +197,7 @@ func main() {
 			static := c.GitHub.Repositories
 			cfgMu.Unlock()
 			// Merge static list with repos discovered via topic tag (empty when disabled).
-			repos := discovery.MergeRepos(static, discoverySvc.Discovered())
+			repos := discovery.MergeRepos(static, discoverySvc.Discovered(), c.GitHub.NonMonitored)
 
 			// Fetch all review-requested PRs without a repo filter — adding many
 			// repo: terms to the Search API query can exceed its length limit and
@@ -267,6 +269,9 @@ func main() {
 		ctx, cancel := context.WithCancel(context.Background())
 		topic := c.GitHub.DiscoveryTopic
 		orgs := append([]string(nil), c.GitHub.DiscoveryOrgs...)
+		if len(orgs) == 0 {
+			orgs = discovery.InferOrgs(c.GitHub.Repositories)
+		}
 		go discoverySvc.Run(ctx, interval, topic, orgs)
 		slog.Info("discovery: loop started", "topic", topic, "orgs", orgs, "interval", interval)
 		return cancel
@@ -457,6 +462,80 @@ func main() {
 			"pr_id":     prID,
 			"severity":  rev.Severity,
 		})})
+		return nil
+	})
+
+	// Wire the issue-review trigger callback: re-run issue pipeline on a stored issue.
+	srv.SetTriggerIssueReviewFn(func(issueID int64) error {
+		publishIssueErr := func(msg string) {
+			broker.Publish(sse.Event{
+				Type: sse.EventIssueReviewError,
+				Data: sseData(map[string]any{"issue_id": issueID, "error": msg}),
+			})
+		}
+
+		iss, err := s.GetIssue(issueID)
+		if err != nil {
+			publishIssueErr(fmt.Sprintf("Issue not found: %v", err))
+			return fmt.Errorf("trigger issue review: get issue %d: %w", issueID, err)
+		}
+
+		cfgMu.Lock()
+		aiCfg := cfg.AIForRepo(iss.Repo)
+		if aiCfg.Primary == "" {
+			aiCfg.Primary = cfg.AI.Primary
+		}
+		agentCfg := cfg.AgentConfigFor(aiCfg.Primary)
+		cfgMu.Unlock()
+
+		// Reconstruct github.Issue from store data for the pipeline
+		ghIssue := &gh.Issue{
+			ID:      iss.GithubID,
+			Number:  iss.Number,
+			Title:   iss.Title,
+			Body:    iss.Body,
+			State:   iss.State,
+			Repo:    iss.Repo,
+			HTMLURL: fmt.Sprintf("https://github.com/%s/issues/%d", iss.Repo, iss.Number),
+		}
+		ghIssue.User.Login = iss.Author
+		ghIssue.Mode = config.IssueModeReviewOnly
+
+		extraFlags := agentCfg.ExtraFlags
+		if extraFlags != "" {
+			if err := executor.ValidateExtraFlags(extraFlags); err != nil {
+				slog.Warn("triggerIssueReview: extra_flags rejected", "err", err)
+				extraFlags = ""
+			}
+		}
+
+		opts := issuepipeline.RunOptions{
+			Primary:  aiCfg.Primary,
+			Fallback: aiCfg.Fallback,
+			ExecOpts: executor.ExecOptions{
+				Model:                agentCfg.Model,
+				MaxTurns:             agentCfg.MaxTurns,
+				ApprovalMode:         agentCfg.ApprovalMode,
+				ExtraFlags:           extraFlags,
+				WorkDir:              aiCfg.LocalDir,
+				Effort:               agentCfg.Effort,
+				PermissionMode:       agentCfg.PermissionMode,
+				Bare:                 agentCfg.Bare,
+				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
+				NoSessionPersistence: agentCfg.NoSessionPersistence,
+			},
+		}
+
+		slog.Info("trigger issue review: running pipeline",
+			"store_issue_id", issueID, "repo", iss.Repo, "number", iss.Number)
+
+		_, err = issuePipe.Run(ghIssue, opts)
+		if err != nil {
+			broker.Publish(sse.Event{Type: sse.EventIssueReviewError, Data: sseData(map[string]any{
+				"issue_id": issueID, "repo": iss.Repo, "error": err.Error(),
+			})})
+			return err
+		}
 		return nil
 	})
 
