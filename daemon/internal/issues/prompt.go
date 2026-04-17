@@ -2,6 +2,7 @@ package issues
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/heimdallm/daemon/internal/github"
@@ -28,7 +29,6 @@ type PromptContext struct {
 	Author      string
 	Labels      []string
 	Assignees   []string
-	Milestone   string
 	Body        string
 	Comments    []github.Comment
 	HasLocalDir bool // when true, the LLM can read the repo for deeper context
@@ -38,9 +38,11 @@ type PromptContext struct {
 // applying customizations from Agent profiles when set:
 //   - customTemplate non-empty: replaces the entire default template with
 //     placeholder substitution ({repo}, {number}, {title}, {author}, {labels},
-//     {body}, {comments}, {assignees}, {milestone}).
+//     {body}, {comments}, {assignees}). NOTE: the custom template is responsible
+//     for including the JSON output schema — the pipeline parses the LLM response
+//     as IssueReviewResult. Same contract as PR review custom prompts.
 //   - customInstructions non-empty: injects the text into the default template
-//     between the issue context and the JSON schema.
+//     between the issue context and the JSON schema (safer — schema is preserved).
 //
 // When both are empty, falls back to the built-in default template.
 func BuildPromptWithProfile(ctx PromptContext, customTemplate, customInstructions string) string {
@@ -84,9 +86,18 @@ func applyPlaceholders(tmpl string, ctx PromptContext) string {
 		"{body}", body,
 		"{comments}", comments,
 		"{assignees}", assignees,
-		"{milestone}", ctx.Milestone,
 	)
-	return r.Replace(tmpl)
+	result := r.Replace(tmpl)
+
+	// Warn about unreplaced placeholders — helps debug typos in custom templates.
+	if idx := strings.Index(result, "{"); idx != -1 {
+		if end := strings.Index(result[idx:], "}"); end != -1 {
+			slog.Warn("issue prompt: unreplaced placeholder in custom template",
+				"placeholder", result[idx:idx+end+1])
+		}
+	}
+
+	return result
 }
 
 func buildDefaultPrompt(ctx PromptContext, customInstructions string) string {

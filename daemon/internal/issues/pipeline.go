@@ -128,7 +128,7 @@ type RunOptions struct {
 	GitHubToken string
 
 	// Issue prompt customization (resolved by caller from agent profiles).
-	// Priority: IssuePromptOverride (repo-level) > IssueAgentPromptID (agent-level) > default template.
+	// Priority: IssuePromptOverride (full template) > IssueInstructions (injected into default) > built-in default.
 	IssuePromptOverride string // full custom template from repo-level agent
 	IssueInstructions   string // plain text injected into default template
 }
