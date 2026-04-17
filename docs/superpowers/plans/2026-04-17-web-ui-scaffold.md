@@ -644,11 +644,6 @@ export async function loadToken(): Promise<string | null> {
   }
   return cached;
 }
-
-/** Resets the in-memory cache. For tests only. */
-export function __resetTokenCache(): void {
-  cached = undefined;
-}
 ```
 
 - [ ] **Step 4: Run tests — confirm they pass**
