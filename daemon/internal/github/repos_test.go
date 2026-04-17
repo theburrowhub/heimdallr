@@ -91,7 +91,7 @@ func TestCreatePR_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClient("fake", gh.WithBaseURL(srv.URL))
-	num, err := client.CreatePR("org/repo", "feat: fix", "Closes #7", "heimdallm/issue-7", "main")
+	num, err := client.CreatePR("org/repo", "feat: fix", "Closes #7", "heimdallm/issue-7", "main", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestCreatePR_MissingFields(t *testing.T) {
 		{"org/repo", "t", "h", ""},
 	}
 	for _, c := range cases {
-		if _, err := client.CreatePR(c.repo, c.title, "body", c.head, c.base); err == nil {
+		if _, err := client.CreatePR(c.repo, c.title, "body", c.head, c.base, false); err == nil {
 			t.Errorf("expected error for %+v", c)
 		}
 	}
@@ -136,7 +136,7 @@ func TestCreatePR_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClient("fake", gh.WithBaseURL(srv.URL))
-	_, err := client.CreatePR("org/repo", "t", "b", "h", "m")
+	_, err := client.CreatePR("org/repo", "t", "b", "h", "m", false)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -155,7 +155,7 @@ func TestCreatePR_MissingNumberInResponse(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClient("fake", gh.WithBaseURL(srv.URL))
-	if _, err := client.CreatePR("org/repo", "t", "b", "h", "m"); err == nil {
+	if _, err := client.CreatePR("org/repo", "t", "b", "h", "m", false); err == nil {
 		t.Fatal("expected error when response has no number")
 	}
 }

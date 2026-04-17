@@ -97,7 +97,7 @@ func (f *fakeGH) GetDefaultBranch(repo string) (string, error) {
 	return f.defaultBranch, nil
 }
 
-func (f *fakeGH) CreatePR(repo, title, body, head, base string) (int, error) {
+func (f *fakeGH) CreatePR(repo, title, body, head, base string, draft bool) (int, error) {
 	f.createPRCalls = append(f.createPRCalls, prCall{
 		Repo: repo, Title: title, Body: body, Head: head, Base: base,
 	})
@@ -109,6 +109,10 @@ func (f *fakeGH) CreatePR(repo, title, body, head, base string) (int, error) {
 	}
 	return f.createPRNumber, nil
 }
+
+func (f *fakeGH) SetPRReviewers(repo string, prNumber int, reviewers []string) error { return nil }
+func (f *fakeGH) AddLabels(repo string, number int, labels []string) error             { return nil }
+func (f *fakeGH) SetAssignees(repo string, number int, assignees []string) error       { return nil }
 
 type fakeExec struct {
 	detectCLI  string

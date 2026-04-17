@@ -308,6 +308,10 @@ func main() {
 							DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
 							NoSessionPersistence: agentCfg.NoSessionPersistence,
 						},
+						PRReviewers: aiCfg.PRReviewers,
+						PRAssignee:  aiCfg.PRAssignee,
+						PRLabels:    aiCfg.PRLabels,
+						PRDraft:     aiCfg.PRDraft,
 					}
 				}
 
@@ -594,6 +598,10 @@ func main() {
 				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
 				NoSessionPersistence: agentCfg.NoSessionPersistence,
 			},
+			PRReviewers: aiCfg.PRReviewers,
+			PRAssignee:  aiCfg.PRAssignee,
+			PRLabels:    aiCfg.PRLabels,
+			PRDraft:     aiCfg.PRDraft,
 		}
 
 		slog.Info("trigger issue review: running pipeline",

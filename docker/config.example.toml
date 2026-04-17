@@ -64,11 +64,20 @@ review_mode = "single"   # "single" or "multi"
 # [ai.agents.opencode]
 # model = "anthropic/claude-sonnet-4"
 
+# Global PR creation metadata defaults (used by auto_implement when per-repo is not set)
+# [ai.pr_metadata]
+# reviewers = ["muriano", "ivanmunozruiz"]
+# labels = ["auto-generated", "heimdallm"]
+
 # Per-repo AI overrides (optional)
 # [ai.repos."org/repo1"]
 # primary = "codex"
 # review_mode = "multi"
 # local_dir = "/repos/repo1"    # mount from host via docker-compose volumes
+# pr_reviewers = ["reviewer1"]  # override global for this repo
+# pr_assignee = "assignee1"
+# pr_labels = ["team-x"]
+# pr_draft = false
 
 [retention]
 max_days = 90
