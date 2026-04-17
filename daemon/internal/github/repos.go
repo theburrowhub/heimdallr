@@ -91,3 +91,75 @@ func (c *Client) CreatePR(repo, title, body, head, base string) (int, error) {
 	}
 	return out.Number, nil
 }
+
+// SetPRReviewers requests reviewers on a pull request.
+func (c *Client) SetPRReviewers(repo string, prNumber int, reviewers []string) error {
+	if repo == "" || prNumber == 0 || len(reviewers) == 0 {
+		return nil // nothing to do
+	}
+	payload, err := json.Marshal(map[string]any{
+		"reviewers": reviewers,
+	})
+	if err != nil {
+		return fmt.Errorf("github: marshal reviewers: %w", err)
+	}
+	path := fmt.Sprintf("/repos/%s/pulls/%d/requested_reviewers", repo, prNumber)
+	resp, err := c.doWithBody("POST", path, "application/vnd.github+json", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("github: set pr reviewers: %w", err)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("github: set pr reviewers %s#%d: status %d: %s", repo, prNumber, resp.StatusCode, safeTruncate(string(body), maxErrBodyLen))
+	}
+	return nil
+}
+
+// AddLabels adds labels to an issue or pull request.
+func (c *Client) AddLabels(repo string, number int, labels []string) error {
+	if repo == "" || number == 0 || len(labels) == 0 {
+		return nil
+	}
+	payload, err := json.Marshal(map[string]any{
+		"labels": labels,
+	})
+	if err != nil {
+		return fmt.Errorf("github: marshal labels: %w", err)
+	}
+	path := fmt.Sprintf("/repos/%s/issues/%d/labels", repo, number)
+	resp, err := c.doWithBody("POST", path, "application/vnd.github+json", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("github: add labels: %w", err)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("github: add labels %s#%d: status %d: %s", repo, number, resp.StatusCode, safeTruncate(string(body), maxErrBodyLen))
+	}
+	return nil
+}
+
+// SetAssignees sets assignees on an issue or pull request.
+func (c *Client) SetAssignees(repo string, number int, assignees []string) error {
+	if repo == "" || number == 0 || len(assignees) == 0 {
+		return nil
+	}
+	payload, err := json.Marshal(map[string]any{
+		"assignees": assignees,
+	})
+	if err != nil {
+		return fmt.Errorf("github: marshal assignees: %w", err)
+	}
+	path := fmt.Sprintf("/repos/%s/issues/%d/assignees", repo, number)
+	resp, err := c.doWithBody("POST", path, "application/vnd.github+json", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("github: set assignees: %w", err)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("github: set assignees %s#%d: status %d: %s", repo, number, resp.StatusCode, safeTruncate(string(body), maxErrBodyLen))
+	}
+	return nil
+}
