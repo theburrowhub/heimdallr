@@ -4,15 +4,17 @@ import { writable, type Writable } from 'svelte/store';
 // On first read, if localStorage has a stored value it is parsed; otherwise
 // `initial` is used. On every write, the new value is persisted.
 export function persistedBoolean(key: string, initial: boolean): Writable<boolean> {
-  const start = read(key, initial, (raw) => (raw === 'true' ? true : raw === 'false' ? false : null));
+  const start = read(key, initial, (raw) =>
+    raw === 'true' ? true : raw === 'false' ? false : null
+  );
   const store = writable<boolean>(start);
   store.subscribe((v) => write(key, String(v)));
   return store;
 }
 
-export function persistedString<T extends string = string>(key: string, initial: T): Writable<T> {
-  const start = read<T>(key, initial, (raw) => raw as T);
-  const store = writable<T>(start);
+export function persistedString(key: string, initial: string): Writable<string> {
+  const start = read<string>(key, initial, (raw) => raw);
+  const store = writable<string>(start);
   store.subscribe((v) => write(key, v));
   return store;
 }
