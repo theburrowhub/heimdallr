@@ -1,0 +1,31 @@
+import { writable, type Writable } from 'svelte/store';
+
+// SSR-safe. Returns a writable<boolean> backed by localStorage under `key`.
+// On first read, if localStorage has a stored value it is parsed; otherwise
+// `initial` is used. On every write, the new value is persisted.
+export function persistedBoolean(key: string, initial: boolean): Writable<boolean> {
+  const start = read(key, initial, (raw) => (raw === 'true' ? true : raw === 'false' ? false : null));
+  const store = writable<boolean>(start);
+  store.subscribe((v) => write(key, String(v)));
+  return store;
+}
+
+export function persistedString<T extends string = string>(key: string, initial: T): Writable<T> {
+  const start = read<T>(key, initial, (raw) => raw as T);
+  const store = writable<T>(start);
+  store.subscribe((v) => write(key, v));
+  return store;
+}
+
+function read<T>(key: string, fallback: T, parse: (raw: string) => T | null): T {
+  if (typeof localStorage === 'undefined') return fallback;
+  const raw = localStorage.getItem(key);
+  if (raw == null) return fallback;
+  const parsed = parse(raw);
+  return parsed == null ? fallback : parsed;
+}
+
+function write(key: string, value: string): void {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(key, value);
+}
