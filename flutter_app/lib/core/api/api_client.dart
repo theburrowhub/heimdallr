@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/pr.dart';
 import '../models/review.dart';
+import '../models/tracked_issue.dart';
 
 class ApiClient {
   final http.Client _client;
@@ -166,6 +167,59 @@ class ApiClient {
     }
   }
 
+  // ── Issues ────────────────────────────────────────────────────────────
+
+  Future<List<TrackedIssue>> fetchIssues() async {
+    final resp = await _client.get(_uri('/issues'), headers: await _authHeaders());
+    if (resp.statusCode != 200) {
+      throw ApiException('GET /issues failed: ${resp.statusCode}');
+    }
+    final list = jsonDecode(resp.body) as List<dynamic>;
+    return list
+        .map((e) => TrackedIssue.fromJson(_parseIssueMap(e as Map<String, dynamic>)))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> fetchIssue(int id) async {
+    final resp = await _client.get(_uri('/issues/$id'), headers: await _authHeaders());
+    if (resp.statusCode != 200) {
+      throw ApiException('GET /issues/$id failed: ${resp.statusCode}');
+    }
+    final body = jsonDecode(resp.body) as Map<String, dynamic>;
+    final issue = TrackedIssue.fromJson(
+        _parseIssueMap(body['issue'] as Map<String, dynamic>));
+    final reviewsRaw = body['reviews'] as List<dynamic>? ?? [];
+    final reviews = reviewsRaw
+        .map((r) => TrackedIssueReview.fromJson(
+            _parseIssueReviewMap(r as Map<String, dynamic>)))
+        .toList();
+    return {'issue': issue, 'reviews': reviews};
+  }
+
+  Future<void> triggerIssueReview(int issueId) async {
+    final resp = await _client.post(_uri('/issues/$issueId/review'),
+        headers: await _authHeaders());
+    if (resp.statusCode != 202) {
+      throw ApiException('POST /issues/$issueId/review failed: ${resp.statusCode}');
+    }
+  }
+
+  Future<void> dismissIssue(int issueId) async {
+    final resp = await _client.post(_uri('/issues/$issueId/dismiss'),
+        headers: await _authHeaders());
+    if (resp.statusCode != 200) {
+      throw ApiException('POST /issues/$issueId/dismiss failed: ${resp.statusCode}');
+    }
+  }
+
+  Future<void> undismissIssue(int issueId) async {
+    final resp = await _client.post(_uri('/issues/$issueId/undismiss'),
+        headers: await _authHeaders());
+    if (resp.statusCode != 200) {
+      throw ApiException('POST /issues/$issueId/undismiss failed: ${resp.statusCode}');
+    }
+  }
+
   PR _parsePRWithReview(Map<String, dynamic> json) {
     if (json['latest_review'] != null) {
       json = Map.from(json);
@@ -188,6 +242,28 @@ class ApiClient {
       result['suggestions'] = jsonDecode(result['suggestions'] as String);
     }
     result['issues'] ??= <dynamic>[];
+    result['suggestions'] ??= <dynamic>[];
+    return result;
+  }
+
+  Map<String, dynamic> _parseIssueMap(Map<String, dynamic> json) {
+    final result = Map<String, dynamic>.from(json);
+    if (result['latest_review'] != null) {
+      result['latest_review'] = _parseIssueReviewMap(
+          result['latest_review'] as Map<String, dynamic>);
+    }
+    return result;
+  }
+
+  Map<String, dynamic> _parseIssueReviewMap(Map<String, dynamic> json) {
+    final result = Map<String, dynamic>.from(json);
+    if (result['triage'] is String) {
+      result['triage'] = jsonDecode(result['triage'] as String);
+    }
+    if (result['suggestions'] is String) {
+      result['suggestions'] = jsonDecode(result['suggestions'] as String);
+    }
+    result['triage'] ??= <String, dynamic>{};
     result['suggestions'] ??= <dynamic>[];
     return result;
   }
