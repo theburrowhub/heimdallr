@@ -1,50 +1,153 @@
 <script lang="ts">
   import { browser } from '$app/environment';
-  import { fetchStats } from '$lib/api.js';
-  import type { Stats } from '$lib/types.js';
-  import { getContext, onMount } from 'svelte';
-  import type { Readable } from 'svelte/store';
+  import CollapseHeader from '$lib/components/CollapseHeader.svelte';
+  import ConnectionPill from '$lib/components/ConnectionPill.svelte';
+  import IssueTile from '$lib/components/IssueTile.svelte';
+  import PRTile from '$lib/components/PRTile.svelte';
+  import StatsCards from '$lib/components/StatsCards.svelte';
+  import { fetchIssues, fetchMe, fetchPRs, fetchStats } from '$lib/api.js';
+  import { persistedBoolean, persistedString } from '$lib/persisted.js';
+  import { severityOrder } from '$lib/severity.js';
+  import { issueListRefresh, prListRefresh } from '$lib/stores.js';
+  import type { Issue, PR, Stats } from '$lib/types.js';
 
-  const connected = getContext<Readable<boolean>>('sse-connected');
+  let prs: PR[] = $state([]);
+  let issues: Issue[] = $state([]);
+  let stats: Stats | null = $state(null);
+  let me: string = $state('');
+  let err: string | null = $state(null);
 
-  let stats = $state<Stats | null>(null);
-  let statsError = $state<string | null>(null);
-
-  onMount(async () => {
+  $effect(() => {
+    void $prListRefresh;
     if (!browser) return;
-    try {
-      stats = await fetchStats();
-    } catch (e) {
-      statsError = e instanceof Error ? e.message : String(e);
-    }
+    fetchPRs()
+      .then((r) => (prs = r))
+      .catch((e: unknown) => (err = e instanceof Error ? e.message : String(e)));
+    fetchStats()
+      .then((r) => (stats = r))
+      .catch(() => {});
   });
 
-  const pillClass = $derived(
-    $connected ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+  $effect(() => {
+    void $issueListRefresh;
+    if (!browser) return;
+    fetchIssues()
+      .then((r) => (issues = r))
+      .catch(() => {});
+  });
+
+  $effect(() => {
+    if (!browser) return;
+    fetchMe()
+      .then((r) => (me = r.login))
+      .catch(() => {});
+  });
+
+  const sort = persistedString('dashboard.sort', 'priority');
+  const reviewsExpanded = persistedBoolean('dashboard.reviewsExpanded', true);
+  const prsExpanded = persistedBoolean('dashboard.prsExpanded', true);
+  const issuesExpanded = persistedBoolean('dashboard.issuesExpanded', true);
+
+  function byUpdated(a: PR, b: PR): number {
+    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+  }
+  function byPriority(a: PR, b: PR): number {
+    const d =
+      severityOrder(b.latest_review?.severity ?? '') -
+      severityOrder(a.latest_review?.severity ?? '');
+    return d !== 0 ? d : byUpdated(a, b);
+  }
+
+  const sorter: (a: PR, b: PR) => number = $derived($sort === 'priority' ? byPriority : byUpdated);
+
+  const meLower = $derived(me.toLowerCase());
+
+  const myReviews: PR[] = $derived(
+    prs.filter((p) => !p.dismissed && p.author.toLowerCase() !== meLower).sort(sorter)
   );
-  const pillLabel = $derived($connected ? 'connected' : 'disconnected');
+  const myPRs: PR[] = $derived(
+    prs.filter((p) => !p.dismissed && p.author.toLowerCase() === meLower).sort(sorter)
+  );
+  const trackedIssues: Issue[] = $derived(issues.filter((i) => !i.dismissed));
+
+  const empty = $derived(prs.length === 0 && issues.length === 0);
 </script>
 
-<section class="flex items-center gap-3">
-  <h1 class="text-3xl font-bold">Heimdallm</h1>
-  <span class="rounded-full px-2 py-0.5 text-xs font-medium {pillClass}" data-testid="sse-pill">
-    {pillLabel}
-  </span>
+<section class="mb-6 flex items-center gap-3">
+  <h1 class="text-3xl font-bold">Dashboard</h1>
+  <ConnectionPill />
 </section>
 
-<p class="mt-1 text-sm text-gray-500">v0.1 scaffold — dashboard lands in #31.</p>
+<StatsCards {stats} />
 
-<section class="mt-8 grid grid-cols-2 gap-4 md:grid-cols-4">
-  {#each [{ label: 'Total reviews', value: stats?.total_reviews }, { label: 'Avg findings / review', value: stats?.avg_issues_per_review?.toFixed(1) }, { label: 'Median time (s)', value: stats?.review_timing?.median_seconds?.toFixed(1) }, { label: 'High-severity', value: stats?.by_severity?.HIGH ?? stats?.by_severity?.high ?? stats?.by_severity?.High ?? 0 }] as cell (cell.label)}
-    <div class="rounded-lg border border-gray-200 bg-white p-4">
-      <dt class="text-xs uppercase tracking-wide text-gray-500">{cell.label}</dt>
-      <dd class="mt-1 text-2xl font-semibold">
-        {cell.value ?? '—'}
-      </dd>
-    </div>
-  {/each}
+<section class="mt-6 mb-3 flex items-center gap-2">
+  <span class="text-xs text-gray-500">Sort:</span>
+  <button
+    type="button"
+    class="rounded px-2 py-1 text-xs font-medium {$sort === 'priority'
+      ? 'bg-indigo-100 text-indigo-700'
+      : 'text-gray-600 hover:bg-gray-100'}"
+    onclick={() => sort.set('priority')}
+  >
+    Priority
+  </button>
+  <button
+    type="button"
+    class="rounded px-2 py-1 text-xs font-medium {$sort === 'newest'
+      ? 'bg-indigo-100 text-indigo-700'
+      : 'text-gray-600 hover:bg-gray-100'}"
+    onclick={() => sort.set('newest')}
+  >
+    Newest
+  </button>
 </section>
 
-{#if statsError}
-  <p class="mt-4 text-sm text-red-600">Could not load stats: {statsError}</p>
+{#if err}
+  <p class="text-sm text-red-600">Could not load: {err}</p>
+{:else if empty}
+  <p class="mt-6 text-center text-sm text-gray-500">No activity yet.</p>
+{:else}
+  <div class="overflow-hidden rounded-md border border-gray-200 bg-white">
+    {#if myReviews.length > 0}
+      <CollapseHeader
+        title="My Reviews"
+        count={myReviews.length}
+        expanded={$reviewsExpanded}
+        onToggle={() => reviewsExpanded.update((v) => !v)}
+      />
+      {#if $reviewsExpanded}
+        {#each myReviews as pr (pr.id)}
+          <PRTile {pr} />
+        {/each}
+      {/if}
+    {/if}
+
+    {#if myPRs.length > 0}
+      <CollapseHeader
+        title="My PRs"
+        count={myPRs.length}
+        expanded={$prsExpanded}
+        onToggle={() => prsExpanded.update((v) => !v)}
+      />
+      {#if $prsExpanded}
+        {#each myPRs as pr (pr.id)}
+          <PRTile {pr} />
+        {/each}
+      {/if}
+    {/if}
+
+    {#if trackedIssues.length > 0}
+      <CollapseHeader
+        title="Tracked Issues"
+        count={trackedIssues.length}
+        expanded={$issuesExpanded}
+        onToggle={() => issuesExpanded.update((v) => !v)}
+      />
+      {#if $issuesExpanded}
+        {#each trackedIssues as issue (issue.id)}
+          <IssueTile {issue} />
+        {/each}
+      {/if}
+    {/if}
+  </div>
 {/if}
