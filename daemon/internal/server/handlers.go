@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/heimdallm/daemon/internal/config"
 	"github.com/heimdallm/daemon/internal/executor"
 	"github.com/heimdallm/daemon/internal/pipeline"
 	"github.com/heimdallm/daemon/internal/sse"
@@ -291,13 +292,16 @@ func (srv *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // to write via PUT /config. Any key outside this set is rejected with HTTP 400
 // to prevent arbitrary data injection into the configs table (security issue #4).
 var validConfigKeys = map[string]struct{}{
-	"server_port":    {},
-	"poll_interval":  {},
-	"repositories":   {},
-	"ai_primary":     {},
-	"ai_fallback":    {},
-	"review_mode":    {},
-	"retention_days": {},
+	"server_port":        {},
+	"poll_interval":      {},
+	"repositories":       {},
+	"ai_primary":         {},
+	"ai_fallback":        {},
+	"review_mode":        {},
+	"retention_days":     {},
+	"discovery_topic":    {},
+	"discovery_orgs":     {},
+	"discovery_interval": {},
 }
 
 // validPollIntervals is the allowlist of permitted poll_interval values.
@@ -312,6 +316,15 @@ var validPollIntervals = map[string]struct{}{
 var validReviewModes = map[string]struct{}{
 	"single": {},
 	"multi":  {},
+}
+
+// validDiscoveryIntervals is the allowlist of permitted discovery_interval values.
+var validDiscoveryIntervals = map[string]struct{}{
+	"1m":  {},
+	"5m":  {},
+	"15m": {},
+	"30m": {},
+	"1h":  {},
 }
 
 func (srv *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
@@ -363,6 +376,32 @@ func (srv *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		if _, valid := validReviewModes[s]; !valid {
 			http.Error(w, "review_mode must be one of: single, multi", http.StatusBadRequest)
 			return
+		}
+	}
+	if v, ok := body["discovery_topic"]; ok {
+		s, isStr := v.(string)
+		if !isStr {
+			http.Error(w, "discovery_topic must be a string", http.StatusBadRequest)
+			return
+		}
+		if s != "" {
+			if err := config.ValidateTopic(s); err != nil {
+				http.Error(w, fmt.Sprintf("invalid discovery_topic: %v", err), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	if v, ok := body["discovery_interval"]; ok {
+		s, isStr := v.(string)
+		if !isStr {
+			http.Error(w, "discovery_interval must be a string", http.StatusBadRequest)
+			return
+		}
+		if s != "" {
+			if _, valid := validDiscoveryIntervals[s]; !valid {
+				http.Error(w, "discovery_interval must be one of: 1m, 5m, 15m, 30m, 1h", http.StatusBadRequest)
+				return
+			}
 		}
 	}
 

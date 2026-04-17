@@ -275,6 +275,26 @@ func TestHandlerPutConfigValueValidation(t *testing.T) {
 			body:       `{"review_mode":"batch"}`,
 			wantStatus: http.StatusBadRequest,
 		},
+		{
+			name:       "valid discovery_topic heimdallm-review",
+			body:       `{"discovery_topic":"heimdallm-review"}`,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "invalid discovery_topic uppercase",
+			body:       `{"discovery_topic":"Heimdallm-Review"}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "valid discovery_interval 15m",
+			body:       `{"discovery_interval":"15m"}`,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "invalid discovery_interval 10m",
+			body:       `{"discovery_interval":"10m"}`,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tc := range cases {
