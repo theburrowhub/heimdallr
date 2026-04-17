@@ -776,7 +776,9 @@ const DAEMON_URL = (process.env.HEIMDALLM_API_URL ?? 'http://127.0.0.1:7842').re
 export const GET: RequestHandler = async ({ request }) => {
   const token = await loadToken();
   if (!token) {
-    error(503, { message: 'daemon token missing' });
+    error(503, {
+      message: 'daemon token missing: set HEIMDALLM_API_TOKEN or mount /data/api_token'
+    });
   }
 
   const upstream = await fetch(`${DAEMON_URL}/events`, {
@@ -788,7 +790,7 @@ export const GET: RequestHandler = async ({ request }) => {
   });
 
   if (!upstream.ok || !upstream.body) {
-    error(upstream.status || 502, `daemon /events failed: ${upstream.status}`);
+    error(upstream.status ?? 502, { message: `daemon /events failed: ${upstream.status}` });
   }
 
   return new Response(upstream.body, {
