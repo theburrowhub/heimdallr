@@ -684,18 +684,14 @@ Forwards any HTTP method + path to the daemon, injects `X-Heimdallm-Token`, stre
 import { loadToken } from '$lib/server/token.js';
 import { error, type RequestHandler } from '@sveltejs/kit';
 
-const DAEMON_URL = process.env.HEIMDALLM_API_URL ?? 'http://127.0.0.1:7842';
+const DAEMON_URL = (process.env.HEIMDALLM_API_URL ?? 'http://127.0.0.1:7842').replace(/\/+$/, '');
 
 const handle: RequestHandler = async ({ params, request, url, fetch: _fetch }) => {
   const token = await loadToken();
   if (!token) {
-    error(
-      503,
-      JSON.stringify({
-        message:
-          'daemon token missing: set HEIMDALLM_API_TOKEN or mount /data/api_token'
-      })
-    );
+    error(503, {
+      message: 'daemon token missing: set HEIMDALLM_API_TOKEN or mount /data/api_token'
+    });
   }
 
   const target = new URL(`${DAEMON_URL}/${params.path ?? ''}`);
@@ -775,12 +771,12 @@ Opens an upstream streaming fetch to the daemon's `/events`, pipes the `Readable
 import { loadToken } from '$lib/server/token.js';
 import { error, type RequestHandler } from '@sveltejs/kit';
 
-const DAEMON_URL = process.env.HEIMDALLM_API_URL ?? 'http://127.0.0.1:7842';
+const DAEMON_URL = (process.env.HEIMDALLM_API_URL ?? 'http://127.0.0.1:7842').replace(/\/+$/, '');
 
 export const GET: RequestHandler = async ({ request }) => {
   const token = await loadToken();
   if (!token) {
-    error(503, 'daemon token missing');
+    error(503, { message: 'daemon token missing' });
   }
 
   const upstream = await fetch(`${DAEMON_URL}/events`, {
