@@ -328,8 +328,23 @@ func ValidateWorkDir(dir string) error {
 	return nil
 }
 
-// Execute runs the AI CLI with the given prompt and options, returning the parsed result.
+// Execute runs the AI CLI with the given prompt and options, returning the
+// parsed PR review result. Callers that need a different output schema (e.g.
+// the issue-tracking pipeline) should use ExecuteRaw + StripToJSON instead of
+// re-implementing the subprocess plumbing.
 func (e *Executor) Execute(cli, prompt string, opts ExecOptions) (*ReviewResult, error) {
+	raw, err := e.ExecuteRaw(cli, prompt, opts)
+	if err != nil {
+		return nil, err
+	}
+	return parseResult(raw)
+}
+
+// ExecuteRaw runs the AI CLI and returns stdout unchanged. Used by pipelines
+// that parse a schema other than ReviewResult (issue triage, auto_implement
+// output, etc.). Callers should pass the bytes through StripToJSON before
+// json.Unmarshal — CLIs routinely wrap JSON in code fences or surrounding text.
+func (e *Executor) ExecuteRaw(cli, prompt string, opts ExecOptions) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), executionTimeout)
 	defer cancel()
 
@@ -370,7 +385,7 @@ func (e *Executor) Execute(cli, prompt string, opts ExecOptions) (*ReviewResult,
 		return nil, fmt.Errorf("executor: run %s: %w (output: %s)", cli, err, errDetail)
 	}
 
-	return parseResult(stdout.Bytes())
+	return stdout.Bytes(), nil
 }
 
 // buildArgs constructs the CLI argument list based on the CLI name and options.
@@ -477,26 +492,31 @@ func enrichEnvWithLoginPath() []string {
 	return loginPathEnv
 }
 
-func parseResult(data []byte) (*ReviewResult, error) {
+// StripToJSON strips common LLM output wrappers (leading/trailing whitespace,
+// markdown code fences, prose surrounding the JSON object) and returns the
+// inner JSON bytes. Exported so downstream pipelines (issue triage, etc.)
+// can reuse the same cleanup without duplicating it.
+func StripToJSON(data []byte) []byte {
 	s := strings.TrimSpace(string(data))
-	// Strip potential markdown code fences
 	if strings.HasPrefix(s, "```") {
 		lines := strings.Split(s, "\n")
 		if len(lines) > 2 {
 			s = strings.Join(lines[1:len(lines)-1], "\n")
 		}
 	}
-
-	// Find first { to last } in case there's surrounding text
 	start := strings.Index(s, "{")
 	end := strings.LastIndex(s, "}")
 	if start >= 0 && end > start {
 		s = s[start : end+1]
 	}
+	return []byte(s)
+}
 
+func parseResult(data []byte) (*ReviewResult, error) {
+	clean := StripToJSON(data)
 	var result ReviewResult
-	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		return nil, fmt.Errorf("executor: parse JSON result: %w (raw: %.200s)", err, s)
+	if err := json.Unmarshal(clean, &result); err != nil {
+		return nil, fmt.Errorf("executor: parse JSON result: %w (raw: %.200s)", err, clean)
 	}
 	if result.Severity == "" {
 		result.Severity = "low"
