@@ -98,7 +98,11 @@ func main() {
 	}
 
 	p := pipeline.New(s, ghClient, exec, &notifyWithSSE{notifier: notifier})
-	issuePipe := issuepipeline.New(s, ghClient, exec, broker, &notifyWithSSE{notifier: notifier})
+	// GitExec drives the auto_implement flow (#27): branch, commit, push, PR.
+	// Wired unconditionally — the pipeline guards against running git ops on
+	// an issue that is classified as review_only, so this dep is harmless
+	// when auto_implement is not in use.
+	issuePipe := issuepipeline.New(s, ghClient, exec, issuepipeline.NewGitExec(), broker, &notifyWithSSE{notifier: notifier})
 	srv := server.New(s, broker, p, apiToken)
 
 	// cfgMu protects cfg, sched and the discovery loop so reload is safe from any goroutine.
@@ -529,7 +533,7 @@ func main() {
 		slog.Info("trigger issue review: running pipeline",
 			"store_issue_id", issueID, "repo", iss.Repo, "number", iss.Number)
 
-		_, err = issuePipe.Run(ghIssue, opts)
+		_, err = issuePipe.Run(context.Background(), ghIssue, opts)
 		if err != nil {
 			broker.Publish(sse.Event{Type: sse.EventIssueReviewError, Data: sseData(map[string]any{
 				"issue_id": issueID, "repo": iss.Repo, "error": err.Error(),
