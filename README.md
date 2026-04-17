@@ -138,11 +138,19 @@ make dev
 ### Other targets
 
 ```bash
-make test          # Run Go + Flutter test suites
+make test          # Run Go + Flutter test suites on the host
+make test-docker   # Run Go tests inside a pinned Docker image (EDR-safe)
 make dev-daemon    # Run daemon only (debug API at localhost:7842)
 make dev-stop      # Stop the running daemon
 make release-local # Build signed + notarized DMG and publish GitHub release
 ```
+
+> **Working on a laptop with corporate EDR (Elastic Security, CrowdStrike, …)?**
+> Use `make test-docker` instead of `make test` for the Go suite. `go test`
+> compiles ephemeral `*.test` binaries that EDR heuristics flag as malware;
+> running inside Docker keeps those artefacts in the container's tmpfs.
+> See [`AGENTS.md`](AGENTS.md) for the full rationale and the hardening
+> details to share with your security team.
 
 ### Project structure
 
