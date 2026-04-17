@@ -131,7 +131,7 @@ export default defineConfig({
     "sourceMap": true,
     "strict": true,
     "moduleResolution": "bundler",
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals", "node"]
   }
 }
 ```
