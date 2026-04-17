@@ -212,6 +212,9 @@ type RepoAI struct {
 
 // PRMetadataConfig holds global defaults for PR creation metadata,
 // used as fallback when per-repo config is not set.
+// Only Reviewers and Labels have global defaults — Assignee and Draft are
+// per-repo only because assignee is team-specific and draft mode depends
+// on the repo's workflow (some repos auto-merge non-drafts).
 type PRMetadataConfig struct {
 	Reviewers []string `toml:"reviewers"`
 	Labels    []string `toml:"labels"`

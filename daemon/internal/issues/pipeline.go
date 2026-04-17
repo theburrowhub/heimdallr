@@ -579,6 +579,7 @@ func parseIssueResult(data []byte) (*IssueReviewResult, error) {
 // separation lets a single issue accumulate multiple reviews across mode
 // changes (e.g. initial review_only → later auto_implement in #27) without
 // losing the history.
+
 // applyPRMetadata sets reviewers, labels, and assignees on a newly created PR.
 // All operations are best-effort — failures are logged but do not affect the
 // pipeline result. The PR is already public at this point.
