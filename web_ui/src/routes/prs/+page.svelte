@@ -5,6 +5,7 @@
   import FilterBar from '$lib/components/FilterBar.svelte';
   import PRTile from '$lib/components/PRTile.svelte';
   import { fetchPRs } from '$lib/api.js';
+  import { filterPRs } from '$lib/filters.js';
   import { byUpdated } from '$lib/sort.js';
   import { prListRefresh, reviewingPRs } from '$lib/stores.js';
   import type { PR } from '$lib/types.js';
@@ -34,18 +35,9 @@
 
   const repos: string[] = $derived(Array.from(new Set(prs.map((p: PR) => p.repo))).sort());
 
-  const filtered = $derived.by(() => {
-    const list = prs.filter((p: PR) => {
-      if (repo && p.repo !== repo) return false;
-      if (prState !== 'all' && p.state?.toLowerCase() !== prState) return false;
-      if (severity !== 'any') {
-        const s = p.latest_review?.severity?.toLowerCase() ?? '';
-        if (s !== severity) return false;
-      }
-      return true;
-    });
-    return list.sort(byUpdated);
-  });
+  const filtered = $derived.by<PR[]>(() =>
+    filterPRs(prs, { repo, severity, state: prState }).slice().sort(byUpdated)
+  );
 
   function applyFilters(next: { repo: string; severity: string; state?: string }): void {
     const params = new URLSearchParams();

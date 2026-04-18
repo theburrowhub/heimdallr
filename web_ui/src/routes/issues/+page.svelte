@@ -5,6 +5,7 @@
   import FilterBar from '$lib/components/FilterBar.svelte';
   import IssueTile from '$lib/components/IssueTile.svelte';
   import { fetchIssues } from '$lib/api.js';
+  import { filterIssues } from '$lib/filters.js';
   import { desc } from '$lib/sort.js';
   import { issueListRefresh, reviewingIssues } from '$lib/stores.js';
   import type { Issue } from '$lib/types.js';
@@ -32,22 +33,9 @@
 
   const repos: string[] = $derived(Array.from(new Set(issues.map((i: Issue) => i.repo))).sort());
 
-  const filtered = $derived.by<Issue[]>(() => {
-    const list = issues.filter((i) => {
-      if (i.dismissed) return false;
-      if (repo && i.repo !== repo) return false;
-      if (severity !== 'any') {
-        const triage = i.latest_review?.triage as { severity?: string } | undefined;
-        const s = triage?.severity?.toLowerCase() ?? '';
-        if (s !== severity) return false;
-      }
-      if (mode !== 'all') {
-        if (!i.labels.includes(mode)) return false;
-      }
-      return true;
-    });
-    return list.sort(desc<Issue>('fetched_at'));
-  });
+  const filtered = $derived.by<Issue[]>(() =>
+    filterIssues(issues, { repo, severity, mode }).slice().sort(desc<Issue>('fetched_at'))
+  );
 
   function applyFilters(next: { repo: string; severity: string; mode?: string }): void {
     const params = new URLSearchParams();
