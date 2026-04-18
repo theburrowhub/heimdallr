@@ -110,6 +110,21 @@ function parseIssue(raw: unknown): Issue {
   return i as unknown as Issue;
 }
 
+// Daemon's `by_severity` map uses whatever case the SQL GROUP BY returned —
+// which is lowercase in practice (pipelines store "high"/"medium"/"low"/"critical").
+// Normalize to uppercase here so consumers can index with a stable canonical form.
+function parseStats(raw: unknown): Stats {
+  const s = { ...(raw as Record<string, unknown>) };
+  const rawBy = (s.by_severity ?? {}) as Record<string, number>;
+  const normalized: Record<string, number> = {};
+  for (const [k, v] of Object.entries(rawBy)) {
+    const key = k.toUpperCase();
+    normalized[key] = (normalized[key] ?? 0) + v;
+  }
+  s.by_severity = normalized;
+  return s as unknown as Stats;
+}
+
 // ─── Health ─────────────────────────────────────────────────────────────
 export function checkHealth(): Promise<boolean> {
   return fetch('/api/health')
@@ -200,6 +215,7 @@ export function fetchMe(): Promise<Me> {
   return request<Me>('GET', '/api/me');
 }
 
-export function fetchStats(): Promise<Stats> {
-  return request<Stats>('GET', '/api/stats');
+export async function fetchStats(): Promise<Stats> {
+  const raw = await request<unknown>('GET', '/api/stats');
+  return parseStats(raw);
 }

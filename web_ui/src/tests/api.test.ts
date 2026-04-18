@@ -125,6 +125,60 @@ describe('api.ts', () => {
     expect(stats.review_timing.median_seconds).toBe(42);
   });
 
+  it('fetchStats normalizes by_severity keys to uppercase (handles lowercase daemon output)', async () => {
+    fetchMock.mockResolvedValue(
+      okJson({
+        total_reviews: 10,
+        by_severity: { high: 3, low: 5, medium: 2 },
+        by_cli: {},
+        top_repos: [],
+        reviews_last_7_days: [],
+        avg_issues_per_review: 1.0,
+        review_timing: {
+          sample_count: 0,
+          avg_seconds: 0,
+          median_seconds: 0,
+          min_seconds: 0,
+          max_seconds: 0,
+          bucket_fast: 0,
+          bucket_medium: 0,
+          bucket_slow: 0,
+          bucket_very_slow: 0
+        }
+      })
+    );
+    const stats = await fetchStats();
+    expect(stats.by_severity.HIGH).toBe(3);
+    expect(stats.by_severity.LOW).toBe(5);
+    expect(stats.by_severity.MEDIUM).toBe(2);
+  });
+
+  it('fetchStats folds mixed-case keys into a single uppercase bucket', async () => {
+    fetchMock.mockResolvedValue(
+      okJson({
+        total_reviews: 5,
+        by_severity: { high: 2, HIGH: 1, High: 1 },
+        by_cli: {},
+        top_repos: [],
+        reviews_last_7_days: [],
+        avg_issues_per_review: 0,
+        review_timing: {
+          sample_count: 0,
+          avg_seconds: 0,
+          median_seconds: 0,
+          min_seconds: 0,
+          max_seconds: 0,
+          bucket_fast: 0,
+          bucket_medium: 0,
+          bucket_slow: 0,
+          bucket_very_slow: 0
+        }
+      })
+    );
+    const stats = await fetchStats();
+    expect(stats.by_severity.HIGH).toBe(4);
+  });
+
   it('fetchIssue parses stringified assignees/labels/triage/suggestions', async () => {
     fetchMock.mockResolvedValue(
       okJson({
