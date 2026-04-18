@@ -114,6 +114,30 @@ func TestCreatePR_Success(t *testing.T) {
 	}
 }
 
+func TestCreatePR_Draft(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &capturedBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"number": 99})
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake", gh.WithBaseURL(srv.URL))
+	num, err := client.CreatePR("org/repo", "draft PR", "body", "branch", "main", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if num != 99 {
+		t.Errorf("got %d, want 99", num)
+	}
+	draft, ok := capturedBody["draft"].(bool)
+	if !ok || !draft {
+		t.Errorf("expected draft=true in request body, got %v", capturedBody["draft"])
+	}
+}
+
 func TestCreatePR_MissingFields(t *testing.T) {
 	client := gh.NewClient("fake")
 	cases := []struct{ repo, title, head, base string }{
