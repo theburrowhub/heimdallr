@@ -1,7 +1,7 @@
 import { get, writable } from 'svelte/store';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { issueListRefresh, prListRefresh, reviewingIssues, reviewingPRs } from '../lib/stores.js';
-import { initSseBridge } from '../lib/sseBridge.js';
+import { initSseBridge, watchReconnectAndSweep } from '../lib/sseBridge.js';
 import type { SseEvent } from '../lib/types.js';
 
 function makeEvents() {
@@ -90,5 +90,50 @@ describe('initSseBridge', () => {
     events.set(null);
     expect(get(prListRefresh)).toBe(0);
     expect(get(issueListRefresh)).toBe(0);
+  });
+});
+
+describe('watchReconnectAndSweep', () => {
+  it('clears reviewingPRs and reviewingIssues on false→true transition', () => {
+    const connected = writable(false);
+    watchReconnectAndSweep({ subscribe: connected.subscribe });
+
+    // Prime both sets.
+    reviewingPRs.set(new Set([1, 2]));
+    reviewingIssues.set(new Set([3]));
+
+    // No transition yet — sets should be untouched.
+    expect(get(reviewingPRs).size).toBe(2);
+    expect(get(reviewingIssues).size).toBe(1);
+
+    // Still disconnected — no sweep.
+    connected.set(false);
+    expect(get(reviewingPRs).size).toBe(2);
+
+    // First connect — counts as reconnect (false → true).
+    connected.set(true);
+    expect(get(reviewingPRs).size).toBe(0);
+    expect(get(reviewingIssues).size).toBe(0);
+  });
+
+  it('does not sweep on the very first emission if it is true', () => {
+    const connected = writable(true);
+    reviewingPRs.set(new Set([99]));
+    watchReconnectAndSweep({ subscribe: connected.subscribe });
+    expect(get(reviewingPRs).size).toBe(1);
+  });
+
+  it('sweeps on every subsequent false→true transition', () => {
+    const connected = writable(false);
+    watchReconnectAndSweep({ subscribe: connected.subscribe });
+
+    reviewingPRs.set(new Set([1]));
+    connected.set(true);
+    expect(get(reviewingPRs).size).toBe(0);
+
+    reviewingPRs.set(new Set([2]));
+    connected.set(false);
+    connected.set(true);
+    expect(get(reviewingPRs).size).toBe(0);
   });
 });

@@ -2,6 +2,33 @@ import type { Readable } from 'svelte/store';
 import { issueListRefresh, prListRefresh, reviewingIssues, reviewingPRs } from './stores.js';
 import type { SseEvent } from './types.js';
 
+// Clears the in-flight review sets whenever the SSE connection transitions
+// from disconnected to connected. Rationale: if the daemon emitted
+// `review_completed` or `issue_review_completed` while we were offline, we
+// won't know — and the tile would otherwise show "reviewing…" forever.
+// Accepts brief UI inaccuracy (an active review appears not-in-flight until
+// the daemon re-emits `review_started`) in exchange for eventual consistency.
+//
+// Does NOT sweep on the very first emission to avoid clearing a legitimate
+// in-flight set populated by an optimistic client-side update before the
+// first SSE connection even opens.
+export function watchReconnectAndSweep(connected: Readable<boolean>): () => void {
+  let seen = false;
+  let previous = false;
+  return connected.subscribe((now) => {
+    if (!seen) {
+      seen = true;
+      previous = now;
+      return;
+    }
+    if (now && !previous) {
+      reviewingPRs.set(new Set());
+      reviewingIssues.set(new Set());
+    }
+    previous = now;
+  });
+}
+
 type SetStore = typeof reviewingPRs;
 
 function mutateSet(store: SetStore, mutate: (s: Set<number>) => void): void {
