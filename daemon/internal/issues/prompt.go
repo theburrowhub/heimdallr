@@ -171,6 +171,10 @@ func buildDefaultPrompt(ctx PromptContext, customInstructions string) string {
 // When both are empty, falls back to the built-in default template.
 func BuildImplementPromptWithProfile(ctx PromptContext, customTemplate, customInstructions string) string {
 	if customTemplate != "" {
+		if customInstructions != "" {
+			slog.Debug("implement prompt: custom template set, discarding customInstructions",
+				"repo", ctx.Repo, "issue", ctx.Number)
+		}
 		return applyPlaceholders(customTemplate, ctx)
 	}
 	return buildDefaultImplementPrompt(ctx, customInstructions)
