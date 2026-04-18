@@ -155,12 +155,34 @@ func buildDefaultPrompt(ctx PromptContext, customInstructions string) string {
 	return sb.String()
 }
 
-// BuildImplementPrompt formats the LLM prompt for an auto_implement run.
-// In this mode the agent is expected to modify files in the working tree
-// directly; the outer pipeline picks up whatever it leaves behind with
-// `git add -A && git commit`. There is no JSON schema for the output — the
-// filesystem state is the output.
+// BuildImplementPromptWithProfile formats the LLM prompt for an auto_implement
+// run, applying customisations from Agent profiles when set:
+//   - customTemplate non-empty: replaces the entire default template with
+//     placeholder substitution ({repo}, {number}, {title}, {author}, {labels},
+//     {body}, {comments}, {assignees}). The custom template is responsible
+//     for preserving whatever safety rules + escape-hatch the caller cares
+//     about — the pipeline relies on `git status` to detect a no-op run,
+//     so the agent MUST still be able to leave the tree untouched when it
+//     cannot implement the issue.
+//   - customInstructions non-empty: injects the text into the default
+//     template between the safety rules and the escape hatch so the rules
+//     still apply when the maintainer only wants to nudge style / tooling.
+//
+// When both are empty, falls back to the built-in default template.
+func BuildImplementPromptWithProfile(ctx PromptContext, customTemplate, customInstructions string) string {
+	if customTemplate != "" {
+		return applyPlaceholders(customTemplate, ctx)
+	}
+	return buildDefaultImplementPrompt(ctx, customInstructions)
+}
+
+// BuildImplementPrompt is the zero-config entry point — no agent profile, no
+// custom instructions. Equivalent to BuildImplementPromptWithProfile(ctx, "", "").
 func BuildImplementPrompt(ctx PromptContext) string {
+	return buildDefaultImplementPrompt(ctx, "")
+}
+
+func buildDefaultImplementPrompt(ctx PromptContext, customInstructions string) string {
 	var sb strings.Builder
 
 	sb.WriteString("You are Heimdallm, an engineering agent implementing a GitHub issue.\n")
@@ -196,6 +218,14 @@ func BuildImplementPrompt(ctx PromptContext) string {
 	sb.WriteString("- Follow the existing code style; do not reformat unrelated files.\n")
 	sb.WriteString("- If tests exist for the area you are changing, extend them.\n")
 	sb.WriteString("- Do not commit secrets, credentials, or files outside the repository.\n")
+
+	if customInstructions != "" {
+		sb.WriteString("\nAdditional implementation instructions from the repository maintainer:\n")
+		sb.WriteString(strings.TrimSpace(customInstructions))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("\n")
 	sb.WriteString("- Leave the working tree in the final state you want committed — the outer pipeline will run `git add -A && git commit` over whatever you change.\n")
 	sb.WriteString("- If you cannot implement the issue (insufficient information, risky change, requires a human decision), leave the tree untouched. A review-only comment will be posted instead.\n")
 
