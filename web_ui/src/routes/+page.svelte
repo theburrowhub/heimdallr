@@ -5,16 +5,15 @@
   import IssueTile from '$lib/components/IssueTile.svelte';
   import PRTile from '$lib/components/PRTile.svelte';
   import StatsCards from '$lib/components/StatsCards.svelte';
-  import { fetchIssues, fetchMe, fetchPRs, fetchStats } from '$lib/api.js';
+  import { fetchIssues, fetchPRs, fetchStats } from '$lib/api.js';
   import { persistedBoolean, persistedString } from '$lib/persisted.js';
   import { severityOrder } from '$lib/severity.js';
-  import { issueListRefresh, prListRefresh } from '$lib/stores.js';
+  import { auth, issueListRefresh, prListRefresh } from '$lib/stores.js';
   import type { Issue, PR, Stats } from '$lib/types.js';
 
   let prs: PR[] = $state([]);
   let issues: Issue[] = $state([]);
   let stats: Stats | null = $state(null);
-  let me: string = $state('');
   let err: string | null = $state(null);
   let loading = $state(true);
 
@@ -39,13 +38,6 @@
       .catch(() => {});
   });
 
-  $effect(() => {
-    if (!browser) return;
-    fetchMe()
-      .then((r) => (me = r.login))
-      .catch(() => {});
-  });
-
   const sort = persistedString('dashboard.sort', 'priority');
   const reviewsExpanded = persistedBoolean('dashboard.reviewsExpanded', true);
   const prsExpanded = persistedBoolean('dashboard.prsExpanded', true);
@@ -63,13 +55,20 @@
 
   const sorter: (a: PR, b: PR) => number = $derived($sort === 'priority' ? byPriority : byUpdated);
 
-  const meLower = $derived(me.toLowerCase());
+  const meLower = $derived(($auth.login ?? '').toLowerCase());
+  const hasLogin = $derived(meLower !== '');
 
+  const activePRs: PR[] = $derived(prs.filter((p) => !p.dismissed));
+
+  // When login is unknown (fetchMe failed / daemon has no meFn), fall back
+  // to a single "PRs" bucket so the dashboard isn't silently wrong.
   const myReviews: PR[] = $derived(
-    prs.filter((p) => !p.dismissed && p.author.toLowerCase() !== meLower).sort(sorter)
+    hasLogin
+      ? activePRs.filter((p) => p.author.toLowerCase() !== meLower).sort(sorter)
+      : activePRs.sort(sorter)
   );
   const myPRs: PR[] = $derived(
-    prs.filter((p) => !p.dismissed && p.author.toLowerCase() === meLower).sort(sorter)
+    hasLogin ? activePRs.filter((p) => p.author.toLowerCase() === meLower).sort(sorter) : []
   );
   const trackedIssues: Issue[] = $derived(issues.filter((i) => !i.dismissed));
 
@@ -119,7 +118,7 @@
   <div class="overflow-hidden rounded-md border border-gray-200 bg-white">
     {#if myReviews.length > 0}
       <CollapseHeader
-        title="My Reviews"
+        title={hasLogin ? 'My Reviews' : 'Pull Requests'}
         count={myReviews.length}
         expanded={$reviewsExpanded}
         onToggle={() => reviewsExpanded.update((v) => !v)}
