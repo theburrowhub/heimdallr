@@ -32,6 +32,7 @@ func TestBuildImplementPrompt_DefaultTemplateContainsSafetyRules(t *testing.T) {
 		"Issue: #42 — Panic on startup",
 		"Author: @alice",
 		"Labels: bug, regression",
+		"Assignees: bob",
 		"Implement what the issue asks for",
 		"Keep the change minimal",
 		"leave the tree untouched",

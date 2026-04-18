@@ -588,6 +588,11 @@ func main() {
 		}
 
 		issuePrompt, issueInstructions := resolveIssuePrompt(s, aiCfg.IssuePrompt, agentCfg.PromptID)
+		// ImplementPrompt/ImplementInstructions are populated for completeness
+		// but are ignored by this path: ghIssue.Mode is forced to review_only
+		// above, so runReviewOnly runs and never consults the Implement* fields.
+		// Kept in sync with the poll path so the two RunOptions literals stay
+		// visually identical and future changes propagate without skew.
 		implPrompt, implInstructions := resolveImplementPrompt(s, aiCfg.ImplementPrompt, agentCfg.PromptID)
 
 		opts := issuepipeline.RunOptions{

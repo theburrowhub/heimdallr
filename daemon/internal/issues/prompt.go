@@ -194,6 +194,9 @@ func buildDefaultImplementPrompt(ctx PromptContext, customInstructions string) s
 	if len(ctx.Labels) > 0 {
 		sb.WriteString("Labels: " + strings.Join(ctx.Labels, ", ") + "\n")
 	}
+	if len(ctx.Assignees) > 0 {
+		sb.WriteString("Assignees: " + strings.Join(ctx.Assignees, ", ") + "\n")
+	}
 	sb.WriteString("\n")
 
 	body := strings.TrimSpace(ctx.Body)
