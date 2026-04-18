@@ -699,6 +699,54 @@ func (g *contextCheckingGit) DeleteRemoteBranch(ctx context.Context, dir, repo, 
 	return nil
 }
 
+func TestPipeline_AutoImplementUsesCustomPromptOverride(t *testing.T) {
+	gh := &fakeGH{defaultBranch: "main", createPRNumber: 123}
+	exec := &fakeExec{detectCLI: "claude", rawOutput: []byte("done")}
+	git := &fakeGit{hasChanges: true}
+	p := issues.New(&fakeStore{}, gh, exec, git, &fakeBroker{}, nil)
+
+	opts := autoImplementRunOptions()
+	opts.ImplementPromptOverride = "Custom impl template for {repo} issue {number}"
+
+	if _, err := p.Run(context.Background(), newIssue(config.IssueModeDevelop), opts); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(exec.lastPrompt, "Custom impl template for org/repo issue 7") {
+		t.Errorf("custom template not applied: %q", exec.lastPrompt)
+	}
+	// The default preamble must NOT appear when a full custom template is set.
+	if strings.Contains(exec.lastPrompt, "You are Heimdallm, an engineering agent") {
+		t.Errorf("default preamble leaked through override: %q", exec.lastPrompt)
+	}
+}
+
+func TestPipeline_AutoImplementInjectsCustomInstructions(t *testing.T) {
+	gh := &fakeGH{defaultBranch: "main", createPRNumber: 123}
+	exec := &fakeExec{detectCLI: "claude", rawOutput: []byte("done")}
+	git := &fakeGit{hasChanges: true}
+	p := issues.New(&fakeStore{}, gh, exec, git, &fakeBroker{}, nil)
+
+	opts := autoImplementRunOptions()
+	opts.ImplementInstructions = "ALWAYS run go vet before finishing."
+
+	if _, err := p.Run(context.Background(), newIssue(config.IssueModeDevelop), opts); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(exec.lastPrompt, "ALWAYS run go vet before finishing.") {
+		t.Errorf("instructions not injected: %q", exec.lastPrompt)
+	}
+	// Default rules AND escape hatch must remain; instructions must not
+	// displace the safety floor.
+	for _, want := range []string{
+		"Keep the change minimal",
+		"leave the tree untouched",
+	} {
+		if !strings.Contains(exec.lastPrompt, want) {
+			t.Errorf("instructions injection dropped default rule %q: %s", want, exec.lastPrompt)
+		}
+	}
+}
+
 // ── sanitizeTitle unit tests ─────────────────────────────────────────────────
 
 // tokenSniffingGit is a GitOps that records the token it was pushed with.

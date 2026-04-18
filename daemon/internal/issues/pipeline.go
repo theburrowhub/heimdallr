@@ -127,10 +127,16 @@ type RunOptions struct {
 	ExecOpts    executor.ExecOptions
 	GitHubToken string
 
-	// Issue prompt customization (resolved by caller from agent profiles).
+	// Issue triage prompt customization (resolved by caller from agent profiles).
 	// Priority: IssuePromptOverride (full template) > IssueInstructions (injected into default) > built-in default.
 	IssuePromptOverride string // full custom template from repo-level agent
 	IssueInstructions   string // plain text injected into default template
+
+	// Auto_implement prompt customization (same resolution shape as the
+	// triage pair above, but consulted only on the runAutoImplement path).
+	// Priority: ImplementPromptOverride > ImplementInstructions > built-in default.
+	ImplementPromptOverride string
+	ImplementInstructions   string
 }
 
 // Pipeline runs a single issue triage or implementation end-to-end.
@@ -386,12 +392,18 @@ func (p *Pipeline) runAutoImplement(ctx context.Context, issue *github.Issue, is
 		return nil, fmt.Errorf("issues pipeline: detect CLI: %w", err)
 	}
 
-	prompt := BuildImplementPrompt(PromptContext{
-		Repo: issue.Repo, Number: issue.Number,
-		Title: issue.Title, Author: issue.User.Login,
-		Labels: issue.LabelNames(), Body: issue.Body,
-		Comments: comments, HasLocalDir: true,
-	})
+	// Agent profile customization: ImplementPromptOverride replaces the entire
+	// template; ImplementInstructions injects into the default template.
+	prompt := BuildImplementPromptWithProfile(
+		PromptContext{
+			Repo: issue.Repo, Number: issue.Number,
+			Title: issue.Title, Author: issue.User.Login,
+			Labels: issue.LabelNames(), Assignees: issue.AssigneeLogins(),
+			Body: issue.Body, Comments: comments, HasLocalDir: true,
+		},
+		opts.ImplementPromptOverride,
+		opts.ImplementInstructions,
+	)
 	if _, err := p.executor.ExecuteRaw(cli, prompt, opts.ExecOpts); err != nil {
 		p.publishError(issueID, issue, fmt.Errorf("execute %s: %w", cli, err))
 		return nil, fmt.Errorf("issues pipeline: execute %s: %w", cli, err)

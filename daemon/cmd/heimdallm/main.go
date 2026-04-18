@@ -295,6 +295,7 @@ func main() {
 					}
 
 					issuePrompt, issueInstructions := resolveIssuePrompt(s, aiCfg.IssuePrompt, agentCfg.PromptID)
+					implPrompt, implInstructions := resolveImplementPrompt(s, aiCfg.ImplementPrompt, agentCfg.PromptID)
 
 					return issuepipeline.RunOptions{
 						Primary:  aiCfg.Primary,
@@ -311,8 +312,10 @@ func main() {
 							DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
 							NoSessionPersistence: agentCfg.NoSessionPersistence,
 						},
-						IssuePromptOverride: issuePrompt,
-						IssueInstructions:   issueInstructions,
+						IssuePromptOverride:     issuePrompt,
+						IssueInstructions:       issueInstructions,
+						ImplementPromptOverride: implPrompt,
+						ImplementInstructions:   implInstructions,
 					}
 				}
 
@@ -585,6 +588,12 @@ func main() {
 		}
 
 		issuePrompt, issueInstructions := resolveIssuePrompt(s, aiCfg.IssuePrompt, agentCfg.PromptID)
+		// ImplementPrompt/ImplementInstructions are populated for completeness
+		// but are ignored by this path: ghIssue.Mode is forced to review_only
+		// above, so runReviewOnly runs and never consults the Implement* fields.
+		// Kept in sync with the poll path so the two RunOptions literals stay
+		// visually identical and future changes propagate without skew.
+		implPrompt, implInstructions := resolveImplementPrompt(s, aiCfg.ImplementPrompt, agentCfg.PromptID)
 
 		opts := issuepipeline.RunOptions{
 			Primary:  aiCfg.Primary,
@@ -601,8 +610,10 @@ func main() {
 				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
 				NoSessionPersistence: agentCfg.NoSessionPersistence,
 			},
-			IssuePromptOverride: issuePrompt,
-			IssueInstructions:   issueInstructions,
+			IssuePromptOverride:     issuePrompt,
+			IssueInstructions:       issueInstructions,
+			ImplementPromptOverride: implPrompt,
+			ImplementInstructions:   implInstructions,
 		}
 
 		slog.Info("trigger issue review: running pipeline",
@@ -754,54 +765,77 @@ func loadOrCreateAPIToken(dir string) (string, error) {
 	return tok, nil
 }
 
-// resolveIssuePrompt looks up the Agent profile for issue triage using the
-// same 3-level priority as PR reviews:
-//  1. repoPromptID — repo-level override (from [ai.repos."org/repo"] issue_prompt)
+// resolveAgentByPriority returns the Agent selected by the 3-level priority
+// that every prompt-customisation feature in this daemon uses:
+//
+//  1. repoPromptID — repo-level override (from [ai.repos."org/repo"] *_prompt)
 //  2. agentPromptID — agent-level override (from [ai.agents.<cli>] prompt)
 //  3. global default agent (is_default = true)
 //
-// Returns (customTemplate, customInstructions). Both empty = use built-in default.
-func resolveIssuePrompt(s *store.Store, repoPromptID, agentPromptID string) (string, string) {
+// Returns nil when nothing matches (or when ListAgents errors — the caller
+// should treat this as "use the built-in default template"). Each resolver
+// above this function then reads its own field pair from the returned Agent,
+// so adding a third prompt type is a 4-line wrapper rather than a copied
+// 30-line loop.
+func resolveAgentByPriority(s *store.Store, repoPromptID, agentPromptID string) *store.Agent {
 	agents, err := s.ListAgents()
 	if err != nil || len(agents) == 0 {
-		return "", ""
+		return nil
 	}
 
-	var a *store.Agent
 	// 1. Repo-level override
-	for _, ag := range agents {
-		if repoPromptID != "" && ag.ID == repoPromptID {
-			a = ag
-			break
+	if repoPromptID != "" {
+		for _, ag := range agents {
+			if ag.ID == repoPromptID {
+				return ag
+			}
 		}
 	}
 	// 2. Agent-level override
-	if a == nil {
+	if agentPromptID != "" {
 		for _, ag := range agents {
-			if agentPromptID != "" && ag.ID == agentPromptID {
-				a = ag
-				break
+			if ag.ID == agentPromptID {
+				return ag
 			}
 		}
 	}
 	// 3. Global default
-	if a == nil {
-		for _, ag := range agents {
-			if ag.IsDefault {
-				a = ag
-				break
-			}
+	for _, ag := range agents {
+		if ag.IsDefault {
+			return ag
 		}
 	}
+	return nil
+}
+
+// resolveIssuePrompt returns (customTemplate, customInstructions) for the
+// issue-triage prompt. Agent selection follows resolveAgentByPriority;
+// IssuePrompt takes precedence over IssueInstructions (same as Prompt vs
+// Instructions for PR reviews). Both empty = use built-in default template.
+func resolveIssuePrompt(s *store.Store, repoPromptID, agentPromptID string) (string, string) {
+	a := resolveAgentByPriority(s, repoPromptID, agentPromptID)
 	if a == nil {
 		return "", ""
 	}
-
-	// IssuePrompt takes precedence over IssueInstructions (same as Prompt vs Instructions for PRs)
 	if a.IssuePrompt != "" {
 		return a.IssuePrompt, ""
 	}
 	return "", a.IssueInstructions
+}
+
+// resolveImplementPrompt returns (customTemplate, customInstructions) for the
+// auto_implement code-generation prompt. Same selection rules as
+// resolveIssuePrompt; ImplementPrompt takes precedence over
+// ImplementInstructions. Both empty = use built-in default template.
+func resolveImplementPrompt(s *store.Store, repoPromptID, agentPromptID string) (string, string) {
+	a := resolveAgentByPriority(s, repoPromptID, agentPromptID)
+	if a == nil {
+		return "", ""
+	}
+	if a.ImplementPrompt != "" {
+		return a.ImplementPrompt, ""
+	}
+	return "", a.ImplementInstructions
 }
 
 // sseData serializes a map to a compact JSON string for SSE event Data fields.
