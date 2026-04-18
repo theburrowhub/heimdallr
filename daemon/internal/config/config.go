@@ -201,6 +201,10 @@ type RepoAI struct {
 	// IssuePrompt is the ID of an agent profile for issue triage.
 	// Overrides agent-level and global default issue prompts.
 	IssuePrompt string `toml:"issue_prompt"`
+	// ImplementPrompt is the ID of an agent profile whose ImplementPrompt /
+	// ImplementInstructions fields drive the auto_implement code-generation
+	// prompt for this repo. Overrides agent-level and global default.
+	ImplementPrompt string `toml:"implement_prompt"`
 	Fallback    string `toml:"fallback"`
 	ReviewMode  string `toml:"review_mode"` // "" = inherit global
 	LocalDir    string `toml:"local_dir"`   // local repo path for full-repo analysis
