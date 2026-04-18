@@ -392,6 +392,8 @@ func (p *Pipeline) runAutoImplement(ctx context.Context, issue *github.Issue, is
 		return nil, fmt.Errorf("issues pipeline: detect CLI: %w", err)
 	}
 
+	// Agent profile customization: ImplementPromptOverride replaces the entire
+	// template; ImplementInstructions injects into the default template.
 	prompt := BuildImplementPromptWithProfile(
 		PromptContext{
 			Repo: issue.Repo, Number: issue.Number,
