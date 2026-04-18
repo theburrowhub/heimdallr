@@ -66,13 +66,20 @@ describe('initSseBridge', () => {
     expect(get(reviewingIssues).has(8)).toBe(false);
   });
 
-  it('bumps both issueListRefresh and prListRefresh on issue_implemented', () => {
+  it('bumps both refresh counters and clears reviewingIssues on issue_implemented', () => {
     const events = makeEvents();
     initSseBridge({ subscribe: events.subscribe });
+
+    // Simulate the auto_implement sequence: started → implemented (no
+    // review_completed in between — that's the daemon's actual behavior).
+    events.set({ type: 'issue_review_started', data: { issue_id: 7 } });
+    expect(get(reviewingIssues).has(7)).toBe(true);
+
     events.set({
       type: 'issue_implemented',
       data: { issue_id: 7, number: 42, repo: 'o/r', pr_created: 99, branch: 'auto/fix-42' }
     });
+    expect(get(reviewingIssues).has(7)).toBe(false);
     expect(get(issueListRefresh)).toBe(1);
     expect(get(prListRefresh)).toBe(1);
   });

@@ -47,7 +47,12 @@ export function initSseBridge(events: Readable<SseEvent | null>): () => void {
           mutateSet(reviewingIssues, (s) => s.delete(data.issue_id!));
         break;
       case 'issue_implemented':
-        // New issue→PR link: refresh both lists.
+        // New issue→PR link. The daemon emits this instead of
+        // `issue_review_completed` for the auto_implement success path, so
+        // we must also clear the in-flight marker or the tile's
+        // "reviewing…" chip would never go away.
+        if (typeof data.issue_id === 'number')
+          mutateSet(reviewingIssues, (s) => s.delete(data.issue_id!));
         issueListRefresh.update((n) => n + 1);
         prListRefresh.update((n) => n + 1);
         break;
