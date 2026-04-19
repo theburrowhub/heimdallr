@@ -2,6 +2,14 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.1.6](https://github.com/theburrowhub/heimdallm/compare/v0.1.5...v0.1.6) (2026-04-19)
+
+
+### Features
+
+* **github:** add SetPRReviewers, AddLabels, SetAssignees methods ([#56](https://github.com/theburrowhub/heimdallm/issues/56)) ([e8c1937](https://github.com/theburrowhub/heimdallm/commit/e8c1937ce9c8514066d37547395e168bea915711))
+* **web_ui:** scaffold SvelteKit + API/SSE clients ([#30](https://github.com/theburrowhub/heimdallm/issues/30)) ([#60](https://github.com/theburrowhub/heimdallm/issues/60)) ([2ae3049](https://github.com/theburrowhub/heimdallm/commit/2ae30499b67d36cd782419ed1e33e3a37453038e))
+
 ## [0.1.5](https://github.com/theburrowhub/heimdallm/compare/v0.1.4...v0.1.5) (2026-04-18)
 
 
