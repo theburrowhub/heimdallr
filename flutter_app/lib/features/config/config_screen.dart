@@ -379,7 +379,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
-                  value: _issueTracking.filterMode,
+                  initialValue: _issueTracking.filterMode,
                   decoration: const InputDecoration(
                     labelText: 'Filter mode',
                     helperText: 'exclusive = AND, inclusive = OR',
@@ -397,7 +397,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: DropdownButtonFormField<String>(
-                  value: _issueTracking.defaultAction,
+                  initialValue: _issueTracking.defaultAction,
                   decoration: const InputDecoration(
                     labelText: 'Default action',
                     helperText: 'When no label matches',
