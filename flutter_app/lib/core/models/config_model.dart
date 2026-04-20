@@ -133,6 +133,75 @@ String? _nonEmpty(dynamic v) {
   return (s == null || s.isEmpty) ? null : s;
 }
 
+/// Issue tracking pipeline configuration.
+class IssueTrackingConfig {
+  final bool enabled;
+  final String filterMode;      // "exclusive" | "inclusive"
+  final String defaultAction;   // "ignore" | "review_only"
+  final List<String> developLabels;
+  final List<String> reviewOnlyLabels;
+  final List<String> skipLabels;
+  final List<String> organizations;
+  final List<String> assignees;
+
+  const IssueTrackingConfig({
+    this.enabled = false,
+    this.filterMode = 'exclusive',
+    this.defaultAction = 'ignore',
+    this.developLabels = const [],
+    this.reviewOnlyLabels = const [],
+    this.skipLabels = const [],
+    this.organizations = const [],
+    this.assignees = const [],
+  });
+
+  IssueTrackingConfig copyWith({
+    bool? enabled,
+    String? filterMode,
+    String? defaultAction,
+    List<String>? developLabels,
+    List<String>? reviewOnlyLabels,
+    List<String>? skipLabels,
+    List<String>? organizations,
+    List<String>? assignees,
+  }) => IssueTrackingConfig(
+    enabled:          enabled          ?? this.enabled,
+    filterMode:       filterMode       ?? this.filterMode,
+    defaultAction:    defaultAction    ?? this.defaultAction,
+    developLabels:    developLabels    ?? this.developLabels,
+    reviewOnlyLabels: reviewOnlyLabels ?? this.reviewOnlyLabels,
+    skipLabels:       skipLabels       ?? this.skipLabels,
+    organizations:    organizations    ?? this.organizations,
+    assignees:        assignees        ?? this.assignees,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'enabled':            enabled,
+    'filter_mode':        filterMode,
+    'default_action':     defaultAction,
+    'develop_labels':     developLabels,
+    'review_only_labels': reviewOnlyLabels,
+    'skip_labels':        skipLabels,
+    'organizations':      organizations,
+    'assignees':          assignees,
+  };
+
+  factory IssueTrackingConfig.fromJson(Map<String, dynamic> json) =>
+      IssueTrackingConfig(
+        enabled:          (json['enabled']       as bool?)   ?? false,
+        filterMode:       (json['filter_mode']   as String?) ?? 'exclusive',
+        defaultAction:    (json['default_action'] as String?) ?? 'ignore',
+        developLabels:    _stringList(json['develop_labels']),
+        reviewOnlyLabels: _stringList(json['review_only_labels']),
+        skipLabels:       _stringList(json['skip_labels']),
+        organizations:    _stringList(json['organizations']),
+        assignees:        _stringList(json['assignees']),
+      );
+
+  static List<String> _stringList(dynamic v) =>
+      (v as List<dynamic>?)?.cast<String>() ?? [];
+}
+
 class AppConfig {
   final int serverPort;
   final String pollInterval;
@@ -142,6 +211,7 @@ class AppConfig {
   final int retentionDays;
   final Map<String, CLIAgentConfig> agentConfigs; // keyed by CLI name
   final Map<String, RepoConfig> repoConfigs;      // keyed by "org/repo"
+  final IssueTrackingConfig issueTracking;
 
   const AppConfig({
     this.serverPort = 7842,
@@ -152,6 +222,7 @@ class AppConfig {
     this.retentionDays = 90,
     this.agentConfigs = const {},
     this.repoConfigs = const {},
+    this.issueTracking = const IssueTrackingConfig(),
   });
 
   /// Computed list of monitored repos — this is what the daemon uses.
@@ -170,27 +241,30 @@ class AppConfig {
     int? retentionDays,
     Map<String, CLIAgentConfig>? agentConfigs,
     Map<String, RepoConfig>? repoConfigs,
+    IssueTrackingConfig? issueTracking,
   }) {
     return AppConfig(
-      serverPort:   serverPort   ?? this.serverPort,
-      pollInterval: pollInterval ?? this.pollInterval,
-      aiPrimary:    aiPrimary    ?? this.aiPrimary,
-      aiFallback:   aiFallback   ?? this.aiFallback,
-      reviewMode:   reviewMode   ?? this.reviewMode,
+      serverPort:    serverPort    ?? this.serverPort,
+      pollInterval:  pollInterval  ?? this.pollInterval,
+      aiPrimary:     aiPrimary     ?? this.aiPrimary,
+      aiFallback:    aiFallback    ?? this.aiFallback,
+      reviewMode:    reviewMode    ?? this.reviewMode,
       retentionDays: retentionDays ?? this.retentionDays,
-      agentConfigs: agentConfigs ?? this.agentConfigs,
-      repoConfigs:  repoConfigs  ?? this.repoConfigs,
+      agentConfigs:  agentConfigs  ?? this.agentConfigs,
+      repoConfigs:   repoConfigs   ?? this.repoConfigs,
+      issueTracking: issueTracking ?? this.issueTracking,
     );
   }
 
   Map<String, dynamic> toJson() => {
-    'server_port':   serverPort,
-    'poll_interval': pollInterval,
-    'repositories':  repositories,
-    'ai_primary':    aiPrimary,
-    'ai_fallback':   aiFallback,
-    'review_mode':   reviewMode,
+    'server_port':    serverPort,
+    'poll_interval':  pollInterval,
+    'repositories':   repositories,
+    'ai_primary':     aiPrimary,
+    'ai_fallback':    aiFallback,
+    'review_mode':    reviewMode,
     'retention_days': retentionDays,
+    'issue_tracking': issueTracking.toJson(),
   };
 
   factory AppConfig.fromJson(Map<String, dynamic> json) {
@@ -227,15 +301,21 @@ class AppConfig {
             CLIAgentConfig.fromJson(entry.value as Map<String, dynamic>);
       }
     }
+    final itRaw = json['issue_tracking'] as Map<String, dynamic>?;
+    final issueTracking = itRaw != null
+        ? IssueTrackingConfig.fromJson(itRaw)
+        : const IssueTrackingConfig();
+
     return AppConfig(
-      serverPort:   (json['server_port']   as int?)    ?? 7842,
-      pollInterval: (json['poll_interval'] as String?) ?? '5m',
-      aiPrimary:    (json['ai_primary']    as String?) ?? 'claude',
-      aiFallback:   (json['ai_fallback']   as String?) ?? '',
-      reviewMode:   (json['review_mode']   as String?) ?? 'single',
-      retentionDays: (json['retention_days'] as int?)  ?? 90,
-      agentConfigs: agentConfigs,
-      repoConfigs:  configs,
+      serverPort:    (json['server_port']   as int?)    ?? 7842,
+      pollInterval:  (json['poll_interval'] as String?) ?? '5m',
+      aiPrimary:     (json['ai_primary']    as String?) ?? 'claude',
+      aiFallback:    (json['ai_fallback']   as String?) ?? '',
+      reviewMode:    (json['review_mode']   as String?) ?? 'single',
+      retentionDays: (json['retention_days'] as int?)   ?? 90,
+      agentConfigs:  agentConfigs,
+      repoConfigs:   configs,
+      issueTracking: issueTracking,
     );
   }
 }

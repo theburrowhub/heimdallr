@@ -194,6 +194,29 @@ class FirstRunSetup {
     }
     buf.writeln();
 
+    // Issue tracking
+    final it = config.issueTracking;
+    buf.writeln('[github.issue_tracking]');
+    buf.writeln('enabled = ${it.enabled}');
+    buf.writeln('filter_mode = "${_tomlEscapeString(it.filterMode)}"');
+    buf.writeln('default_action = "${_tomlEscapeString(it.defaultAction)}"');
+    if (it.developLabels.isNotEmpty) {
+      buf.writeln('develop_labels = [${it.developLabels.map((l) => '"${_tomlEscapeString(l)}"').join(', ')}]');
+    }
+    if (it.reviewOnlyLabels.isNotEmpty) {
+      buf.writeln('review_only_labels = [${it.reviewOnlyLabels.map((l) => '"${_tomlEscapeString(l)}"').join(', ')}]');
+    }
+    if (it.skipLabels.isNotEmpty) {
+      buf.writeln('skip_labels = [${it.skipLabels.map((l) => '"${_tomlEscapeString(l)}"').join(', ')}]');
+    }
+    if (it.organizations.isNotEmpty) {
+      buf.writeln('organizations = [${it.organizations.map((o) => '"${_tomlEscapeString(o)}"').join(', ')}]');
+    }
+    if (it.assignees.isNotEmpty) {
+      buf.writeln('assignees = [${it.assignees.map((a) => '"${_tomlEscapeString(a)}"').join(', ')}]');
+    }
+    buf.writeln();
+
     buf.writeln('[ai]');
     buf.writeln('primary = "${_tomlEscapeString(config.aiPrimary)}"');
     if (config.aiFallback.isNotEmpty) {

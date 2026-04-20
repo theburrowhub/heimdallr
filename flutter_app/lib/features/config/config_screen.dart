@@ -27,6 +27,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
 
   String _pollInterval = '5m';
   int _retentionDays = 90;
+  IssueTrackingConfig _issueTracking = const IssueTrackingConfig();
 
   // All known repos. Key = "org/repo", Value = per-repo settings.
   Map<String, RepoConfig> _repoConfigs = {};
@@ -74,6 +75,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     _pollInterval = config.pollInterval;
     _retentionDays = config.retentionDays;
     _repoConfigs = Map.from(config.repoConfigs);
+    _issueTracking = config.issueTracking;
   }
 
   /// Auto-discovers repos from the user's PRs. Runs silently on init.
@@ -139,6 +141,8 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
             _pollSection(),
             const SizedBox(height: 20),
             _retentionSection(),
+            const SizedBox(height: 20),
+            _issueTrackingSection(),
             const SizedBox(height: 28),
             _saveButton(context, config, daemonRunning),
           ],
@@ -351,6 +355,141 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     );
   }
 
+  // ── Issue tracking ──────────────────────────────────────────────────────
+
+  Widget _issueTrackingSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _sectionHeaderInline('Issue Tracking'),
+            const Spacer(),
+            Switch(
+              value: _issueTracking.enabled,
+              onChanged: (v) => setState(() {
+                _issueTracking = _issueTracking.copyWith(enabled: v);
+              }),
+            ),
+          ],
+        ),
+        if (_issueTracking.enabled) ...[
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _issueTracking.filterMode,
+                  decoration: const InputDecoration(
+                    labelText: 'Filter mode',
+                    helperText: 'exclusive = AND, inclusive = OR',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  items: ['exclusive', 'inclusive']
+                      .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+                      .toList(),
+                  onChanged: (v) => setState(() {
+                    _issueTracking = _issueTracking.copyWith(filterMode: v);
+                  }),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _issueTracking.defaultAction,
+                  decoration: const InputDecoration(
+                    labelText: 'Default action',
+                    helperText: 'When no label matches',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  items: ['ignore', 'review_only']
+                      .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+                      .toList(),
+                  onChanged: (v) => setState(() {
+                    _issueTracking = _issueTracking.copyWith(defaultAction: v);
+                  }),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _labelListField(
+            label: 'Develop labels (auto_implement)',
+            helper: 'Issues with these labels get a branch + PR',
+            values: _issueTracking.developLabels,
+            onChanged: (v) => setState(() {
+              _issueTracking = _issueTracking.copyWith(developLabels: v);
+            }),
+          ),
+          const SizedBox(height: 12),
+          _labelListField(
+            label: 'Review-only labels',
+            helper: 'Issues with these labels get an AI triage comment',
+            values: _issueTracking.reviewOnlyLabels,
+            onChanged: (v) => setState(() {
+              _issueTracking = _issueTracking.copyWith(reviewOnlyLabels: v);
+            }),
+          ),
+          const SizedBox(height: 12),
+          _labelListField(
+            label: 'Skip labels',
+            helper: 'Issues with these labels are ignored (highest priority)',
+            values: _issueTracking.skipLabels,
+            onChanged: (v) => setState(() {
+              _issueTracking = _issueTracking.copyWith(skipLabels: v);
+            }),
+          ),
+          const SizedBox(height: 12),
+          _labelListField(
+            label: 'Organizations',
+            helper: 'Limit to issues from these orgs (empty = all monitored)',
+            values: _issueTracking.organizations,
+            onChanged: (v) => setState(() {
+              _issueTracking = _issueTracking.copyWith(organizations: v);
+            }),
+          ),
+          const SizedBox(height: 12),
+          _labelListField(
+            label: 'Assignees',
+            helper: 'Only process issues assigned to these users (empty = any)',
+            values: _issueTracking.assignees,
+            onChanged: (v) => setState(() {
+              _issueTracking = _issueTracking.copyWith(assignees: v);
+            }),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _labelListField({
+    required String label,
+    required String helper,
+    required List<String> values,
+    required ValueChanged<List<String>> onChanged,
+  }) {
+    return TextFormField(
+      initialValue: values.join(', '),
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: helper,
+        helperMaxLines: 2,
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+      onChanged: (text) {
+        final parsed = text
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+        onChanged(parsed);
+      },
+    );
+  }
+
   // ── Save button ──────────────────────────────────────────────────────────
 
   Widget _saveButton(BuildContext context, AppConfig base, bool daemonRunning) {
@@ -421,6 +560,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     pollInterval: _pollInterval,
     retentionDays: _retentionDays,
     repoConfigs: Map.from(_repoConfigs),
+    issueTracking: _issueTracking,
     // aiPrimary, aiFallback, reviewMode, agentConfigs managed in Agents tab
   );
 
