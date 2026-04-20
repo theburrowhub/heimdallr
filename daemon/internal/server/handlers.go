@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/heimdallm/daemon/internal/config"
 	"github.com/heimdallm/daemon/internal/executor"
 	"github.com/heimdallm/daemon/internal/pipeline"
 	"github.com/heimdallm/daemon/internal/sse"
@@ -299,17 +300,42 @@ func (srv *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
-// validConfigKeys is the exhaustive allowlist of keys that callers are permitted
-// to write via PUT /config. Any key outside this set is rejected with HTTP 400
-// to prevent arbitrary data injection into the configs table (security issue #4).
+// validConfigKeys is the exhaustive allowlist of keys that callers are
+// permitted to PERSIST via PUT /config. Any key outside this set (and outside
+// readOnlyConfigKeys below) is rejected with HTTP 400 to prevent arbitrary
+// data injection into the configs table (security issue #4).
 var validConfigKeys = map[string]struct{}{
-	"server_port":    {},
 	"poll_interval":  {},
 	"repositories":   {},
 	"ai_primary":     {},
 	"ai_fallback":    {},
 	"review_mode":    {},
 	"retention_days": {},
+	"issue_tracking": {},
+}
+
+// readOnlyConfigKeys are keys that GET /config returns (so the web UI can
+// render them) but that PUT /config must not persist. The SvelteKit page
+// round-trips the entire GET payload as a forward-compat safeguard, so
+// rejecting these would 400 every save. We accept them at the endpoint
+// boundary and drop them before SetConfig — still a strict allowlist, no
+// arbitrary keys permitted.
+//
+// Why each key is here:
+//   - non_monitored : Flutter-UI managed list of disabled repos, not a
+//     web-UI concern.
+//   - repo_overrides: per-repo AI config lives in [ai.repos.<name>] or
+//     the Flutter app; no write-path through this endpoint.
+//   - agent_configs : per-CLI agent tuning lives in [ai.agents.<name>]
+//     or /agents endpoints; no write-path here.
+//   - server_port   : bootstrap-only (changing the listening port mid-
+//     flight would drop every in-flight connection). Its numeric-range
+//     pre-check still runs so clients get feedback on bad values.
+var readOnlyConfigKeys = map[string]struct{}{
+	"non_monitored":  {},
+	"repo_overrides": {},
+	"agent_configs":  {},
+	"server_port":    {},
 }
 
 // validPollIntervals is the allowlist of permitted poll_interval values.
@@ -334,7 +360,9 @@ func (srv *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for k := range body {
-		if _, ok := validConfigKeys[k]; !ok {
+		_, writable := validConfigKeys[k]
+		_, readOnly := readOnlyConfigKeys[k]
+		if !writable && !readOnly {
 			http.Error(w, fmt.Sprintf("unknown config key: %q", k), http.StatusBadRequest)
 			return
 		}
@@ -377,8 +405,33 @@ func (srv *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if v, ok := body["issue_tracking"]; ok {
+		// Round-trip through JSON to decode into the typed struct. This
+		// rejects malformed payloads (e.g. the client sent a string or
+		// array by mistake) before we ever hit the store, so a single bad
+		// request cannot persist a value that breaks the next reload.
+		raw, err := json.Marshal(v)
+		if err != nil {
+			http.Error(w, "issue_tracking must be a JSON object", http.StatusBadRequest)
+			return
+		}
+		var it config.IssueTrackingConfig
+		if err := json.Unmarshal(raw, &it); err != nil {
+			http.Error(w, fmt.Sprintf("issue_tracking: %v", err), http.StatusBadRequest)
+			return
+		}
+		if err := config.ValidateIssueTracking(it); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 
 	for k, v := range body {
+		// Read-only keys were accepted above to avoid 400s on UI saves that
+		// round-trip the GET payload, but they must not land in the store.
+		if _, readOnly := readOnlyConfigKeys[k]; readOnly {
+			continue
+		}
 		var val string
 		switch typed := v.(type) {
 		case string:
@@ -683,19 +736,44 @@ func (srv *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
-// daemonLogPath returns the platform-specific path to the daemon stderr log.
-// macOS: ~/Library/Logs/heimdallm/heimdallm-daemon-error.log (LaunchAgent convention)
-// Linux/other: $XDG_STATE_HOME/heimdallm/heimdallm.log (fallback ~/.local/share/heimdallm/heimdallm.log)
+// DaemonLogFileName is the name of the on-disk log file the daemon writes
+// alongside heimdallm.db inside the resolved data directory. Shared between
+// the writer (cmd/heimdallm setupLogging) and the reader (daemonLogPath
+// below) so the two sides cannot drift.
+const DaemonLogFileName = "heimdallm.log"
+
+// daemonLogPath returns the path to the daemon log file the /logs stream
+// tails. Priority (matches cmd/heimdallm/main.go's dataDir() ordering, which
+// is the directory setupLogging writes to):
+//
+//  1. $HEIMDALLM_DATA_DIR/heimdallm.log — explicit override (native or Docker).
+//  2. /data/heimdallm.log — Docker convention, used when /data exists as a
+//     directory (the compose file mounts the heimdallm-data volume there).
+//  3. macOS: ~/Library/Logs/heimdallm/heimdallm-daemon-error.log — LaunchAgent
+//     convention; the plist redirects stderr there so the file pre-exists
+//     without setupLogging having to write it.
+//  4. Linux/other: $XDG_STATE_HOME/heimdallm/heimdallm.log, fallback
+//     ~/.local/share/heimdallm/heimdallm.log.
+//
+// See #75 — previously (1) and (2) did not exist and the endpoint always
+// returned "file not found" under Docker because stderr was redirected to
+// `docker logs`, never to a file.
 func daemonLogPath() string {
+	if v := os.Getenv("HEIMDALLM_DATA_DIR"); v != "" {
+		return filepath.Join(v, DaemonLogFileName)
+	}
+	if info, err := os.Stat("/data"); err == nil && info.IsDir() {
+		return filepath.Join("/data", DaemonLogFileName)
+	}
 	home, _ := os.UserHomeDir()
 	switch runtime.GOOS {
 	case "darwin":
 		return filepath.Join(home, "Library", "Logs", "heimdallm", "heimdallm-daemon-error.log")
 	default:
 		if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-			return filepath.Join(xdg, "heimdallm", "heimdallm.log")
+			return filepath.Join(xdg, "heimdallm", DaemonLogFileName)
 		}
-		return filepath.Join(home, ".local", "share", "heimdallm", "heimdallm.log")
+		return filepath.Join(home, ".local", "share", "heimdallm", DaemonLogFileName)
 	}
 }
 
@@ -744,6 +822,14 @@ func (srv *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 			f2, err := os.Open(logPath)
 			if err != nil {
 				continue
+			}
+			// Detect rotation: if the on-disk file is now smaller than
+			// our saved offset, the rotator renamed the old file and
+			// re-created a fresh one. Reset to 0 so we stream the new
+			// content from the beginning rather than stalling at an
+			// offset that points past EOF. See #77.
+			if stat, err := f2.Stat(); err == nil && stat.Size() < offset {
+				offset = 0
 			}
 			f2.Seek(offset, io.SeekStart) //nolint:errcheck
 			scanner := bufio.NewScanner(f2)

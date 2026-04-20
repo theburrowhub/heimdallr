@@ -9,11 +9,14 @@
   const severity = $derived(pr.latest_review?.severity ?? null);
 </script>
 
-<a href="/prs/{pr.id}" class="block border-b border-gray-100 px-4 py-3 hover:bg-gray-50">
+<a
+  href="/prs/{pr.id}"
+  class="block border-b border-gray-100 px-4 py-3 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-900"
+>
   <div class="flex items-start gap-3">
     <div class="min-w-0 flex-1">
-      <p class="truncate text-sm font-medium text-gray-900">{pr.title}</p>
-      <p class="mt-0.5 truncate text-xs text-gray-500">
+      <p class="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{pr.title}</p>
+      <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
         <span class="font-mono">{pr.repo}</span>
         · #{pr.number}
         · {pr.author}
@@ -21,7 +24,9 @@
     </div>
     <div class="flex shrink-0 items-center gap-2">
       {#if isReviewing}
-        <span class="text-xs text-indigo-600" data-testid="reviewing-spinner">reviewing…</span>
+        <span class="text-xs text-indigo-600 dark:text-indigo-400" data-testid="reviewing-spinner"
+          >reviewing…</span
+        >
       {/if}
       <SeverityBadge {severity} />
     </div>

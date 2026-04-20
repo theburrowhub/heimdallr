@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -49,7 +51,17 @@ func main() {
 		}
 	}
 
-	setupLogging()
+	// Resolve the data directory first so setupLogging can mirror the
+	// daemon's slog output into <dataDir>/heimdallm.log. The web UI's
+	// /logs stream reads that file; writing only to stderr (as we used
+	// to) left the stream empty under Docker — see #75.
+	logDir := dataDir()
+	logCloser := setupLogging(logDir)
+	if logCloser != nil {
+		// Flush buffered writes on shutdown so the last lines reach
+		// disk even when the daemon is killed mid-log.
+		defer logCloser.Close()
+	}
 
 	cfgPath := configPath()
 	var cfg *config.Config
@@ -77,6 +89,17 @@ func main() {
 		os.Exit(1)
 	}
 	defer s.Close()
+
+	// Merge PUT /config values on top of TOML+env. This is the third and
+	// highest-precedence layer: UI saves win over env vars, env vars win
+	// over TOML. See daemon/internal/config/store.go for the key mapping.
+	//
+	// Bootstrap treats any failure here as a warning: with no previous
+	// in-memory cfg to fall back to, rejecting a startup over a corrupted
+	// configs row would lock the operator out. Reload is stricter (below).
+	if err := cfg.MergeStoreLayer(s); err != nil {
+		slog.Warn("config: store layer not applied, continuing with TOML+env", "err", err)
+	}
 
 	if err := s.PurgeOldReviews(cfg.Retention.MaxDays); err != nil {
 		slog.Warn("retention purge failed", "err", err)
@@ -418,6 +441,7 @@ func main() {
 			"ai_fallback":    c.AI.Fallback,
 			"review_mode":    c.AI.ReviewMode,
 			"retention_days": c.Retention.MaxDays,
+			"issue_tracking": c.GitHub.IssueTracking,
 			"repo_overrides": repoOverrides,
 			"agent_configs":  agentConfigs,
 		}
@@ -450,6 +474,13 @@ func main() {
 	srv.SetReloadFn(func() error {
 		newCfg, err := config.Load(cfgPath)
 		if err != nil {
+			return fmt.Errorf("reload: %w", err)
+		}
+		// On reload we have a working cfg already — a transient DB error or
+		// a corrupted row must NOT silently revert the running daemon to
+		// TOML+env and wipe operator customisations. Propagate the error;
+		// handleReload returns 500 and the in-memory cfg is untouched.
+		if err := newCfg.MergeStoreLayer(s); err != nil {
 			return fmt.Errorf("reload: %w", err)
 		}
 
@@ -657,10 +688,68 @@ func main() {
 	broker.Stop()
 }
 
-func setupLogging() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})))
+// logRotationConfig reads HEIMDALLM_LOG_MAX_MB and HEIMDALLM_LOG_KEEP from
+// the environment, falling back to the package defaults. Invalid values
+// fall back to the default *and* warn to stderr so operators notice typos
+// instead of silently losing the override they thought they had set.
+// Logging is non-critical enough that a bad env var should never take the
+// daemon down.
+func logRotationConfig() (maxBytes int64, keep int) {
+	maxBytes = server.DefaultLogMaxBytes
+	keep = server.DefaultLogKeep
+	if v := os.Getenv("HEIMDALLM_LOG_MAX_MB"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxBytes = int64(n) * 1024 * 1024
+		} else {
+			fmt.Fprintf(os.Stderr, "heimdallm: ignoring invalid HEIMDALLM_LOG_MAX_MB=%q (want positive integer, using default %d MiB)\n",
+				v, server.DefaultLogMaxBytes/(1024*1024))
+		}
+	}
+	if v := os.Getenv("HEIMDALLM_LOG_KEEP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			keep = n
+		} else {
+			fmt.Fprintf(os.Stderr, "heimdallm: ignoring invalid HEIMDALLM_LOG_KEEP=%q (want positive integer, using default %d)\n",
+				v, server.DefaultLogKeep)
+		}
+	}
+	return
+}
+
+// setupLogging configures slog to write to stderr and, when possible, also
+// to <dataDir>/heimdallm.log — the file the web UI's /logs endpoint tails
+// (see #75). Returns an io.Closer so the caller can flush on shutdown;
+// returns nil when we're running stderr-only (either dataDir is empty or
+// the file open failed). The daemon never refuses to start because
+// logging to disk failed; `docker logs` / the host terminal continue to
+// work.
+//
+// The log file is wrapped in a size-based rotator (see #77). MaxBytes
+// and Keep come from HEIMDALLM_LOG_MAX_MB / HEIMDALLM_LOG_KEEP with the
+// server package defaults.
+func setupLogging(dataDir string) io.Closer {
+	handlerOpts := &slog.HandlerOptions{Level: slog.LevelInfo}
+
+	if dataDir == "" {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, handlerOpts)))
+		return nil
+	}
+
+	logPath := filepath.Join(dataDir, server.DaemonLogFileName)
+	maxBytes, keep := logRotationConfig()
+	w, err := server.NewRotatingWriter(logPath, maxBytes, keep)
+	if err != nil {
+		// Warn via a temporary logger that is visible on stderr even
+		// before SetDefault runs below.
+		tmp := slog.New(slog.NewTextHandler(os.Stderr, handlerOpts))
+		tmp.Warn("logging: could not open daemon log file, stderr only",
+			"path", logPath, "err", err)
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, handlerOpts)))
+		return nil
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, w), handlerOpts)))
+	return w
 }
 
 // dataDir resolves the data directory.
@@ -719,10 +808,21 @@ func (n *notifyWithSSE) Notify(title, message string) {
 	n.notifier.Notify(title, message)
 }
 
+// tokenFileMode is the permission mask for <dataDir>/api_token.
+//
+// 0644 (world-readable) is deliberate: the file lives on a Docker volume
+// that is private to the compose stack and is consumed by two services we
+// control (the daemon that writes it and the SvelteKit web UI that reads
+// it). Those services run under different UIDs in their respective images
+// (daemon: heimdallm UID 100; web: node UID 1000), so the previous 0600
+// blocked the web container from reading the token via the shared volume,
+// forcing operators to run `make setup` as a manual workaround. See #71.
+const tokenFileMode = 0644
+
 // loadOrCreateAPIToken reads an existing token from <dataDir>/api_token, or
-// generates a new cryptographically-random one and writes it with mode 0600.
-// The token is used by the HTTP server to authenticate all mutating requests
-// (POST/PUT/DELETE) — see security issue #3.
+// generates a new cryptographically-random one and writes it with
+// tokenFileMode. The token is used by the HTTP server to authenticate all
+// mutating requests (POST/PUT/DELETE) — see security issue #3.
 //
 // SECURITY (M-4): Uses O_CREATE|O_EXCL to create the file atomically. If two
 // daemon instances race, only one will win the exclusive create; the other reads
@@ -736,6 +836,13 @@ func loadOrCreateAPIToken(dir string) (string, error) {
 	if err == nil {
 		tok := strings.TrimSpace(string(data))
 		if len(tok) >= 32 {
+			// Best-effort upgrade for tokens written by older daemons with
+			// mode 0600 — see tokenFileMode comment above. Errors are logged
+			// but non-fatal: the daemon itself can still read the token, and
+			// `make setup` remains a viable fallback.
+			if err := os.Chmod(path, tokenFileMode); err != nil {
+				slog.Warn("api_token: could not upgrade permissions", "path", path, "err", err)
+			}
 			return tok, nil
 		}
 	}
@@ -750,7 +857,7 @@ func loadOrCreateAPIToken(dir string) (string, error) {
 	// Use O_CREATE|O_EXCL for atomic creation: if another process created the
 	// file between our ReadFile and here, os.OpenFile returns an error that
 	// satisfies os.IsExist — we then read the file created by the other process.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, tokenFileMode)
 	if err != nil {
 		if os.IsExist(err) {
 			// Another process created the file first — read their token.
@@ -768,6 +875,12 @@ func loadOrCreateAPIToken(dir string) (string, error) {
 	defer f.Close()
 	if _, err := fmt.Fprintf(f, "%s\n", tok); err != nil {
 		return "", fmt.Errorf("api_token: write %s: %w", path, err)
+	}
+	// os.OpenFile's mode arg is masked by the process umask (typically 0022),
+	// which would leave the file 0644 anyway — but chmod explicitly so the
+	// final mode is deterministic regardless of the daemon's umask at startup.
+	if err := os.Chmod(path, tokenFileMode); err != nil {
+		slog.Warn("api_token: could not set permissions", "path", path, "err", err)
 	}
 	slog.Info("api_token: created new token", "path", path)
 	return tok, nil

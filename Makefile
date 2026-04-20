@@ -17,7 +17,9 @@ else
 endif
 
 .PHONY: build-daemon build-app test test-docker dev dev-daemon dev-stop \
-        release-local package-macos install-service verify-linux run-linux clean
+        release-local package-macos install-service verify-linux run-linux \
+        setup up up-build up-daemon up-build-daemon down logs logs-daemon \
+        ps restart clean _check-docker _check-env
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
@@ -230,6 +232,100 @@ _check-gh:
 
 install-service: build-daemon
 	$(DAEMON_BIN) install
+
+# ── Docker compose setup (seed HEIMDALLM_API_TOKEN) ───────────────────────────
+#
+# The web service reads /data/api_token from the shared volume at startup, so
+# most of the time no env var is needed. This target is the escape hatch: it
+# pulls the token out of the running daemon container and writes it into
+# docker/.env so other tooling (scripts, CI, local curl) can reuse the same
+# value without digging into the volume.
+#
+# Usage:
+#   make up-daemon && make setup
+#
+# Replaces any existing HEIMDALLM_API_TOKEN line rather than appending, so
+# rerunning the target after a daemon reset does not leave stale duplicates.
+
+COMPOSE_FILE := docker/docker-compose.yml
+DOCKER_ENV   := docker/.env
+
+# The setup recipe writes the token into an mktemp'd file inside docker/
+# (same filesystem as the target) so the final `mv` is atomic, and chmod
+# 600's it before writing so an interrupted run leaves no world-readable
+# copy on disk. The trap cleans the temp up on any early exit.
+setup:
+	@command -v docker >/dev/null || { echo "❌  Docker is required."; exit 1; }
+	@test -f $(DOCKER_ENV) || { echo "❌  $(DOCKER_ENV) missing — copy docker/.env.example first."; exit 1; }
+	@docker compose -f $(COMPOSE_FILE) ps --status running --services 2>/dev/null | grep -q '^heimdallm$$' \
+	  || { echo "❌  heimdallm container is not running. Start it with:"; \
+	       echo "     make up-daemon"; exit 1; }
+	@TOKEN=$$(docker compose -f $(COMPOSE_FILE) exec -T heimdallm cat /data/api_token 2>/dev/null | tr -d '\r\n'); \
+	 if [ -z "$$TOKEN" ]; then \
+	   echo "❌  /data/api_token is empty — wait for the daemon's first full startup and retry."; \
+	   exit 1; \
+	 fi; \
+	 TMP=$$(mktemp "$(DOCKER_ENV).XXXXXX"); \
+	 trap 'rm -f "$$TMP"' EXIT; \
+	 chmod 600 "$$TMP"; \
+	 grep -v '^HEIMDALLM_API_TOKEN=' $(DOCKER_ENV) > "$$TMP" || true; \
+	 printf 'HEIMDALLM_API_TOKEN=%s\n' "$$TOKEN" >> "$$TMP"; \
+	 mv "$$TMP" $(DOCKER_ENV); \
+	 trap - EXIT; \
+	 echo "✓  HEIMDALLM_API_TOKEN written to $(DOCKER_ENV)"
+
+# ── Docker compose wrappers ───────────────────────────────────────────────────
+#
+# Thin shortcuts around `docker compose -f $(COMPOSE_FILE)`. They exist so the
+# README can point newcomers at `make up` / `make logs` / `make down` instead
+# of the longer compose invocation — and so the invocation stays in one place
+# if the compose path changes.
+#
+# `up` brings both services (daemon + web) online. `up-daemon` is the escape
+# hatch for operators who do not want the web UI.
+#
+# `make up` also validates `docker/.env` exists — the most common first-run
+# mistake is forgetting to copy `.env.example`.
+
+_check-docker:
+	@command -v docker >/dev/null || { echo "❌  Docker is required. Install from https://docs.docker.com/get-docker/"; exit 1; }
+
+_check-env: _check-docker
+	@test -f $(DOCKER_ENV) || { \
+	  echo "❌  $(DOCKER_ENV) missing."; \
+	  echo "    Copy the template and fill in GITHUB_TOKEN + your AI API key:"; \
+	  echo "    cp docker/.env.example $(DOCKER_ENV)"; \
+	  exit 1; \
+	}
+
+up: _check-env
+	docker compose -f $(COMPOSE_FILE) up -d
+
+# Like `up` but rebuilds images from local source (use after `git pull` on main).
+up-build: _check-env
+	docker compose -f $(COMPOSE_FILE) up -d --build --pull always
+
+up-daemon: _check-env
+	docker compose -f $(COMPOSE_FILE) up -d heimdallm
+
+# Like `up-daemon` but rebuilds the daemon image from local source.
+up-build-daemon: _check-env
+	docker compose -f $(COMPOSE_FILE) up -d --build --pull always heimdallm
+
+down: _check-docker
+	docker compose -f $(COMPOSE_FILE) down
+
+logs: _check-docker
+	docker compose -f $(COMPOSE_FILE) logs -f
+
+logs-daemon: _check-docker
+	docker compose -f $(COMPOSE_FILE) logs -f heimdallm
+
+ps: _check-docker
+	docker compose -f $(COMPOSE_FILE) ps
+
+restart: _check-docker
+	docker compose -f $(COMPOSE_FILE) restart
 
 # ── CI packaging (used by GitHub Actions) ─────────────────────────────────────
 

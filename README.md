@@ -1,6 +1,6 @@
 # Heimdallm
 
-> AI-powered GitHub PR review agent for macOS and Linux — reviews your pull requests automatically using Claude, Gemini or Codex, posts the review directly to GitHub, and keeps you informed via native notifications.
+> AI-powered GitHub automation for macOS and Linux — reviews your pull requests, triages your issues, and can even open implementation PRs for you. Uses Claude, Gemini, Codex, or OpenCode under the hood, posts everything back as your GitHub account, and keeps you informed via a native menu-bar app or a SvelteKit web UI.
 
 ![Heimdallm dashboard](assets/icon.png)
 
@@ -8,15 +8,29 @@
 
 ## What it does
 
-Heimdallm runs silently in your menu bar. It watches the GitHub PRs where you're requested as a reviewer, runs an AI code review using Claude, Gemini, Codex, or OpenCode, and submits the review back to GitHub — no copy-pasting, no manual prompting.
+Heimdallm runs in the background and does three things, in parallel, at your configured poll interval:
 
-- **Automatic reviews** — polls `review-requested:@me` on GitHub and submits reviews as your GitHub account
-- **Configurable prompts** — general review, security audit, performance, architecture, or your own custom instructions with `{diff}` `{title}` `{author}` placeholders
-- **Two feedback modes** — *single* (one consolidated review) or *multi* (one GitHub comment per issue + summary review), configurable globally and per repo
+### 1. PR reviews
+Watches the PRs where you're requested as a reviewer, runs an AI code review, and submits it to GitHub as your account. No copy-pasting, no manual prompting.
+
+### 2. Issue triage & auto-implement
+Fetches issues from monitored repos, classifies them by label (`review_only` vs `auto_implement` vs `skip`), and for the develop-track ones optionally **creates a branch, commits the change, and opens a PR** against your default branch — fully autonomous on the issues you mark for it.
+
+### 3. Self-monitoring UI
+A SvelteKit web dashboard (`:3000`) with Dashboard, PR list, Issue list, prompt/agent editor, live config editor, and a live log stream. Opens alongside the daemon in Docker mode.
+
+### Headline features
+
+- **Automatic reviews** — polls `review-requested:@me` on GitHub and submits reviews as your account
+- **Issue pipeline** — label-driven triage + optional auto-implement with branch/commit/PR cycle
+- **Configurable prompts** — general review, security audit, performance, architecture, or your own with `{diff}` `{title}` `{author}` `{comments}` placeholders, managed from the web UI at `/agents`
+- **Two feedback modes** — *single* (one consolidated review) or *multi* (one GitHub comment per issue + summary), globally and per repo
 - **Per-repo overrides** — different AI agent, prompt, and feedback mode per repository
+- **Topic-based auto-discovery** — tag repos with a GitHub topic and Heimdallm monitors them without editing config
 - **Severity gating** — only `high` severity triggers `REQUEST_CHANGES`; everything else approves with informational notes
-- **Native desktop** — menu bar icon (macOS), system notifications, dark mode, no Electron
-- **Docker mode** — runs headless as a Docker container for server/CI deployments
+- **Native desktop** — macOS menu-bar app, system notifications, dark mode, no Electron
+- **Web UI** — SvelteKit dashboard with system / light / dark theme toggle, live SSE updates
+- **Docker mode** — single `make up` spins up daemon + web UI for server/team deployments
 
 ---
 
@@ -50,23 +64,158 @@ Installs to `/opt/heimdallm/` with a desktop entry and `/usr/bin/heimdallm` syml
 
 ### Docker
 
-For headless/server deployment, Heimdallm runs as a Docker container with all four AI CLIs bundled.
+For headless/server deployment, Heimdallm runs as a Docker container with all four AI CLIs bundled. The repository ships Make wrappers around `docker compose` so you don't have to remember the compose path.
+
+#### 1. Prerequisites
+
+- **Docker Desktop** (or Docker Engine + compose plugin) running.
+- A **GitHub token** with `repo` scope (or `public_repo` for public-only). Two options:
+  - If you already use `gh` CLI: just run `gh auth token` to print the token you already have — no need to create a new PAT.
+  - Otherwise: create one at https://github.com/settings/tokens.
+- **Credentials for your chosen AI provider** (at least one):
+  - **Claude — subscription (Max / Pro / Team)**: run `claude setup-token` on your host (interactive — opens a browser) and copy the `sk-ant-oat…` token it prints. This becomes `CLAUDE_CODE_OAUTH_TOKEN`. No billing setup required if your Anthropic subscription covers Claude Code.
+  - **Claude — pay-as-you-go API key**: create one at https://console.anthropic.com/settings/keys. This becomes `ANTHROPIC_API_KEY`.
+  - **Gemini**: https://aistudio.google.com/apikey → `GEMINI_API_KEY`. Or reuse your host's browser OAuth — see [Reusing your host's AI authentication](#reusing-your-hosts-ai-authentication).
+  - **OpenAI / Codex**: https://platform.openai.com/api-keys → `OPENAI_API_KEY` or `CODEX_API_KEY`.
+  - **OpenRouter** (for OpenCode): https://openrouter.ai/keys → `OPENROUTER_API_KEY`.
+
+#### 2. Configure
 
 ```bash
-# 1. Set up configuration
-cd docker
-cp .env.example .env
-# Edit .env — set GITHUB_TOKEN, HEIMDALLM_REPOSITORIES, and AI API key(s)
+cp docker/.env.example docker/.env
 
-# 2. Start the service
-docker compose up -d
-
-# 3. Verify
-curl http://localhost:7842/health
-# {"status":"ok"}
+# Quick-fill GITHUB_TOKEN from your existing gh auth (skip if you made a PAT):
+echo "GITHUB_TOKEN=$(gh auth token)" >> docker/.env
 ```
 
-The Docker image is published to `ghcr.io/theburrowhub/heimdallm:latest` on every release. See [`docker/.env.example`](docker/.env.example) for all configuration options.
+Then open `docker/.env` in your editor and set at minimum:
+- `HEIMDALLM_AI_PRIMARY` — `claude` | `gemini` | `codex` | `opencode`
+- The credential matching that primary (see below)
+- `HEIMDALLM_REPOSITORIES` — `owner/repo1,owner/repo2` (or leave empty if using `HEIMDALLM_DISCOVERY_TOPIC`)
+
+**Filling in the Claude credential:**
+
+- **Subscription (recommended if you have Claude Max / Pro / Team):**
+  1. On your host, run **interactively** (not inside `$(...)`):
+     ```bash
+     claude setup-token
+     ```
+     It opens a browser, prints some ANSI text, and finally emits a line that starts with `sk-ant-oat…`.
+  2. Copy only that `sk-ant-oat…` line and paste it manually into `docker/.env`:
+     ```
+     CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...
+     ```
+  3. Leave `ANTHROPIC_API_KEY` empty. Do **not** set `bare = true` in `config.toml` — it disables OAuth.
+
+  > **Why you can't inline this:** `claude setup-token` is interactive and writes prompts + colour codes to stdout. `$(claude setup-token)` captures all of it and corrupts `.env`.
+
+- **API key (pay-as-you-go):** paste your Anthropic key directly:
+  ```
+  ANTHROPIC_API_KEY=sk-ant-...
+  ```
+  Leave `CLAUDE_CODE_OAUTH_TOKEN` empty.
+
+For non-Claude providers see [Reusing your host's AI authentication](#reusing-your-hosts-ai-authentication) (Gemini OAuth reuse) or just set the relevant `*_API_KEY` variable from the Prerequisites list.
+
+See [`docker/.env.example`](docker/.env.example) for every supported variable including issue-tracking, topic-based discovery, and web UI settings.
+
+#### 3. Start the stack
+
+```bash
+make up                # daemon + web UI (recommended)
+# or:
+make up-daemon         # daemon only, no web UI
+# after `git pull` on main:
+make up-build          # same as `make up` but rebuilds from local source
+make up-build-daemon   # same as `make up-daemon` but rebuilds from local source
+```
+
+`make up` refuses to start if `docker/.env` is missing and prints the exact copy-from-template command. The web container waits for the daemon's healthcheck before accepting traffic, so the first UI request never races a half-initialised daemon.
+
+> **Tracking `main`?** `make up` reuses the last cached image. The published `:latest` on GHCR only refreshes when release-please cuts a tag, so between a PR merge and the next release you'll still be running the old binary. Use `make up-build` to rebuild from your checkout.
+
+> **Port already in use?** If `make up` fails with `bind: address already in use` for port `3000` (common collision: a local Next.js / Vite / Grafana dev server) or `7842`, override the host-side port in `docker/.env` and re-run:
+> ```bash
+> echo "HEIMDALLM_WEB_PORT=3100" >> docker/.env   # for the web UI
+> echo "HEIMDALLM_PORT=7843"      >> docker/.env   # for the daemon
+> make up
+> ```
+> To see what's holding the port: `lsof -iTCP:3000 -sTCP:LISTEN`.
+
+#### 4. Verify
+
+```bash
+make ps                          # show container status
+curl http://localhost:7842/health  # -> {"status":"ok"}
+```
+
+Then open the web UI:
+
+- macOS: `open http://localhost:3000`
+- Linux: `xdg-open http://localhost:3000`
+- Or browse to `http://localhost:3000` manually.
+
+The `web` container reads the daemon's API token from the shared `heimdallm-data` volume automatically — no manual copy needed.
+
+#### 5. Day-to-day commands
+
+```bash
+make logs          # tail logs from daemon + web
+make logs-daemon   # daemon only
+make restart       # restart both containers
+make down          # stop and remove containers (data volume persists)
+make setup         # (optional) copy the daemon API token into docker/.env.
+                   #  Only needed if you want to call the daemon's HTTP API
+                   #  from outside Docker (scripts, CI, `curl` from the host).
+                   #  The web UI does NOT need this — it reads the token from
+                   #  the shared volume automatically.
+```
+
+The Docker image is published to `ghcr.io/theburrowhub/heimdallm:latest` on every release — `make up` pulls it automatically when the `build:` contexts haven't changed locally.
+
+#### Reusing your host's AI authentication
+
+If you already authenticate the AI CLIs on your host, you can reuse those
+credentials inside Docker instead of pasting an API key into `.env`. The
+daemon runs its **own** bundled CLIs inside the container — it never shells
+out to the binaries on your host — but the container can read the same
+OAuth tokens the host CLIs wrote.
+
+**Claude Code (Max / Pro / Team subscription):**
+
+1. On your host, run once:
+   ```bash
+   claude setup-token
+   ```
+   Copy the long-lived token it prints.
+2. Add it to `docker/.env`:
+   ```
+   CLAUDE_CODE_OAUTH_TOKEN=<paste token>
+   ```
+   Leave `ANTHROPIC_API_KEY` empty. `docker-compose.yml` already forwards
+   `CLAUDE_CODE_OAUTH_TOKEN` into the container.
+3. Do **not** set `bare = true` in `config.toml` — it disables OAuth and
+   forces API-key mode.
+
+**Gemini CLI (browser OAuth):**
+
+1. Authenticate `gemini` on your host the normal way. Credentials land in
+   `~/.gemini/`.
+2. In `docker/docker-compose.yml`, uncomment the line under the `heimdallm`
+   service's `volumes:` block:
+   ```yaml
+   - ~/.gemini:/home/heimdallm/.gemini:ro
+   ```
+   The mount is read-only, so the container cannot clobber your host
+   credentials.
+3. Leave `GEMINI_API_KEY` empty in `docker/.env`.
+
+**Codex / OpenCode:** host-auth reuse is not wired up yet — use API keys
+(`OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENROUTER_API_KEY`) in `docker/.env`.
+
+`make up` picks up the changes on the next start. Full reference (including
+Vertex AI service-account mode for Gemini) in
+[`docs/e2e-test-guide.md`](docs/e2e-test-guide.md).
 
 #### Auto-discover repositories by topic
 
@@ -96,21 +245,25 @@ On first launch Heimdallm detects your `gh` CLI token automatically and sets its
 
 ## Architecture
 
+The **Go daemon** (`heimdalld`, port `7842`) is the engine. It polls GitHub for PRs and issues, dispatches work to the configured AI CLI, posts reviews or opens implementation PRs, and broadcasts state to any connected UI over SSE.
+
+Two first-party UIs talk to it over HTTP:
+
+- **Flutter desktop app** — macOS menu-bar + dashboard, system notifications. Ships inside the `.dmg` / Linux packages.
+- **SvelteKit web UI** — browser dashboard on port `3000`, ships as a second Docker container alongside the daemon.
+
 ```
-Heimdallm.app/
-├── Heimdallm          ← Flutter macOS UI
-└── heimdalld          ← Go daemon (background service)
+Flutter app ─┐
+             ├──→ HTTP / SSE ──→  heimdalld  ──→  GitHub API
+Web UI     ──┘                       │
+                                     ├──→  PR review pipeline   ──→  POST /reviews
+                                     ├──→  Issue triage pipeline
+                                     └──→  Auto-implement       ──→  branch + commits + PR
+                                                 │
+                                      claude / gemini / codex / opencode CLI
 ```
 
-The **Go daemon** (`heimdalld`) runs as a background process on port `7842`. It polls GitHub, runs the AI CLI, posts reviews, and broadcasts events over SSE. The **Flutter app** is a thin UI client — it talks to the daemon over HTTP and shows a menu bar icon, dashboard, and notifications.
-
-```
-Flutter app  ←→  HTTP/SSE  ←→  heimdalld  ←→  GitHub API
-                                     ↓
-                              claude / gemini / codex CLI
-```
-
-In **Docker mode**, the daemon runs standalone without the Flutter UI. Configuration is via environment variables (`HEIMDALLM_*`) or a mounted `config.toml`.
+In **Docker mode** the daemon runs standalone with the web UI container as an optional-but-recommended companion (brought up by default with `make up`). Configuration is via environment variables (`HEIMDALLM_*`) or a mounted `config.toml`, and can be edited live from the web UI at `/config`.
 
 ---
 
@@ -125,15 +278,29 @@ In **Docker mode**, the daemon runs standalone without the Flutter UI. Configura
 
 ### Running locally
 
+Two workflows — pick based on what you're changing:
+
+**Flutter desktop app or daemon Go code** — native toolchain:
 ```bash
-# Clone
 git clone https://github.com/theburrowhub/heimdallm && cd heimdallm
-
-# Run (builds daemon + launches app in debug mode)
-make dev
+make dev          # builds daemon + launches Flutter app in debug mode
 ```
+`make dev` compiles the daemon, embeds it, and launches the Flutter app with `HEIMDALLM_DAEMON_PATH` pointing to the local binary. First run detects your `gh` token and writes `~/.config/heimdallm/config.toml`.
 
-`make dev` compiles the daemon, embeds it, and launches the Flutter app with `HEIMDALLM_DAEMON_PATH` pointing to the local binary. On first run the app detects your `gh` token and creates `~/.config/heimdallm/config.toml`.
+**Web UI or Docker deployment** — containerised:
+```bash
+cp docker/.env.example docker/.env    # fill in GITHUB_TOKEN + provider key
+make up                                # daemon + web UI
+make logs                              # follow both services
+```
+For iterating on the SvelteKit code with HMR against a running daemon:
+```bash
+cd web_ui
+npm install
+HEIMDALLM_API_URL=http://localhost:7842 \
+HEIMDALLM_API_TOKEN=$(docker compose -f ../docker/docker-compose.yml exec -T heimdallm cat /data/api_token) \
+npm run dev
+```
 
 ### Other targets
 
@@ -142,6 +309,15 @@ make test          # Run Go + Flutter test suites on the host
 make test-docker   # Run Go tests inside a pinned Docker image (EDR-safe)
 make dev-daemon    # Run daemon only (debug API at localhost:7842)
 make dev-stop      # Stop the running daemon
+make up                # Docker: bring up daemon + web UI
+make up-build          # Docker: same as `up`, rebuild from local source (use on main)
+make up-daemon         # Docker: daemon only
+make up-build-daemon   # Docker: same as `up-daemon`, rebuild from local source
+make down          # Docker: stop and remove containers
+make logs          # Docker: follow all services
+make restart       # Docker: bounce both containers
+make ps            # Docker: container status
+make setup         # Docker: copy daemon API token into docker/.env (optional)
 make release-local # Build signed + notarized DMG and publish GitHub release
 ```
 
@@ -156,14 +332,18 @@ make release-local # Build signed + notarized DMG and publish GitHub release
 
 ```
 heimdallm/
-├── daemon/                  Go background service
+├── daemon/                  Go background service (port 7842)
 │   └── internal/
-│       ├── github/          GitHub API client (PRs, diffs, submit reviews)
-│       ├── executor/        AI CLI runner (claude, gemini, codex)
-│       ├── pipeline/        Review orchestration
-│       ├── store/           SQLite (prs, reviews, agents)
-│       └── server/          HTTP + SSE API
-├── flutter_app/             macOS UI
+│       ├── github/          GitHub API client (PRs, issues, diffs, reviews)
+│       ├── executor/        AI CLI runner (claude, gemini, codex, opencode)
+│       ├── pipeline/        PR-review orchestration (fase 1)
+│       ├── issues/          Issue triage + auto-implement (fase 2)
+│       ├── discovery/       Topic-based repo auto-discovery
+│       ├── store/           SQLite (prs, issues, reviews, agents)
+│       ├── scheduler/       Poll loop, grace windows
+│       ├── server/          HTTP + SSE API
+│       └── keychain/        Host credential storage
+├── flutter_app/             macOS / Linux desktop UI
 │   └── lib/
 │       ├── features/
 │       │   ├── dashboard/   Reviews tab (My Reviews / My PRs)
@@ -173,18 +353,22 @@ heimdallm/
 │       └── core/
 │           ├── api/         HTTP + SSE client
 │           └── setup/       First-run setup, token detection
+├── web_ui/                  SvelteKit web dashboard (port 3000)
+│   ├── src/
+│   │   ├── routes/          /, /prs, /prs/[id], /issues, /issues/[id],
+│   │   │                    /agents, /config, /logs
+│   │   ├── lib/components/  PRTile, IssueTile, SeverityBadge, FilterBar…
+│   │   └── lib/             api client, SSE client, theme helper
+│   ├── Dockerfile           Node 22-alpine, multi-stage
+│   └── package.json         Svelte 5 + Tailwind v4 + Vitest
 ├── docker/                  Docker deployment
-│   ├── Dockerfile           Multi-stage build (Go + Node.js + 4 AI CLIs)
-│   ├── docker-compose.yml   Production deployment
+│   ├── Dockerfile           Daemon image (Go + Node + 4 AI CLIs)
+│   ├── docker-compose.yml   daemon + web UI services
 │   ├── .env.example         Environment variable reference
 │   └── scripts/             Local test runner (smoke/github/e2e)
-├── .github/workflows/
-│   ├── tests.yml            CI: Go + Flutter tests on PR/main
-│   ├── build.yml            CI: build + release on version tags
-│   ├── tag.yml              Manual: compute semver tag from conventional commits
-│   ├── docker-publish.yml   CI: Docker build validation on PRs
-│   └── release.yml          CI: release-please + Docker push to GHCR
-└── Makefile
+├── AGENTS.md                Policy for AI coding agents working on this repo
+├── .github/workflows/       Tests, build, release-please, Docker publish
+└── Makefile                 Both native and Docker workflows
 ```
 
 ---

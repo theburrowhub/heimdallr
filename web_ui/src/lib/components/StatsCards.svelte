@@ -13,9 +13,15 @@
 
 <section class="grid grid-cols-2 gap-4 md:grid-cols-4">
   {#each cells as cell (cell.label)}
-    <div class="rounded-lg border border-gray-200 bg-white p-4">
-      <dt class="text-xs uppercase tracking-wide text-gray-500">{cell.label}</dt>
-      <dd class="mt-1 text-2xl font-semibold">{cell.value ?? '—'}</dd>
+    <div
+      class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900"
+    >
+      <dt class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+        {cell.label}
+      </dt>
+      <dd class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">
+        {cell.value ?? '—'}
+      </dd>
     </div>
   {/each}
 </section>

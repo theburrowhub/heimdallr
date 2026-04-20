@@ -22,12 +22,12 @@
 </script>
 
 <div
-  class="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3"
+  class="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900"
 >
-  <label class="flex items-center gap-1 text-xs text-gray-600">
+  <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
     <span>Repo:</span>
     <select
-      class="rounded border border-gray-300 bg-white px-2 py-1 text-xs"
+      class="rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
       value={filters.repo}
       onchange={(e) => update('repo', (e.currentTarget as HTMLSelectElement).value)}
     >
@@ -38,10 +38,10 @@
     </select>
   </label>
 
-  <label class="flex items-center gap-1 text-xs text-gray-600">
+  <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
     <span>Severity:</span>
     <select
-      class="rounded border border-gray-300 bg-white px-2 py-1 text-xs"
+      class="rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
       value={filters.severity || 'any'}
       onchange={(e) => update('severity', (e.currentTarget as HTMLSelectElement).value)}
     >
@@ -51,10 +51,10 @@
     </select>
   </label>
 
-  <label class="flex items-center gap-1 text-xs text-gray-600">
+  <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
     <span>State:</span>
     <select
-      class="rounded border border-gray-300 bg-white px-2 py-1 text-xs"
+      class="rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
       value={filters.state ?? 'open'}
       onchange={(e) => update('state', (e.currentTarget as HTMLSelectElement).value)}
     >

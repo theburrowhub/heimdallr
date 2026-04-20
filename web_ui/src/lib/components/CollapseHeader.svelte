@@ -12,11 +12,13 @@
 <button
   type="button"
   onclick={onToggle}
-  class="flex w-full items-center gap-2 border-b border-gray-200 bg-gray-50 px-4 py-2 text-left hover:bg-gray-100"
+  class="flex w-full items-center gap-2 border-b border-gray-200 bg-gray-50 px-4 py-2 text-left hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-900 dark:hover:bg-gray-800"
   aria-expanded={expanded}
 >
   <svg
-    class="h-4 w-4 shrink-0 text-gray-500 transition-transform {expanded ? 'rotate-90' : ''}"
+    class="h-4 w-4 shrink-0 text-gray-500 transition-transform dark:text-gray-400 {expanded
+      ? 'rotate-90'
+      : ''}"
     viewBox="0 0 20 20"
     fill="currentColor"
     aria-hidden="true"
@@ -27,6 +29,9 @@
       clip-rule="evenodd"
     />
   </svg>
-  <span class="text-sm font-semibold text-gray-700">{title}</span>
-  <span class="rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-600">{count}</span>
+  <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">{title}</span>
+  <span
+    class="rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+    >{count}</span
+  >
 </button>

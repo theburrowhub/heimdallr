@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/heimdallm/daemon/internal/config"
 	"github.com/heimdallm/daemon/internal/server"
 	"github.com/heimdallm/daemon/internal/sse"
 	"github.com/heimdallm/daemon/internal/store"
@@ -478,6 +479,201 @@ func TestIssueEndpointsRequireAuthWhenTokenSet(t *testing.T) {
 		if w2.Code == http.StatusUnauthorized {
 			t.Errorf("POST %s with valid token: unexpected 401", path)
 		}
+	}
+}
+
+func TestHandlerPutConfig_IssueTracking_Accepted(t *testing.T) {
+	srv, _ := setupServer(t)
+	body := `{"issue_tracking":{"enabled":true,"filter_mode":"exclusive","default_action":"ignore","develop_labels":["feature","bug"],"review_only_labels":["question"],"skip_labels":["wontfix"],"organizations":[],"assignees":[]}}`
+	req := httptest.NewRequest("PUT", "/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerPutConfig_IssueTracking_InvalidFilterMode(t *testing.T) {
+	srv, _ := setupServer(t)
+	// filter_mode "weird" with enabled=true should trip validateIssueTracking.
+	body := `{"issue_tracking":{"enabled":true,"filter_mode":"weird","default_action":"ignore"}}`
+	req := httptest.NewRequest("PUT", "/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerPutConfig_IssueTracking_InvalidDefaultAction(t *testing.T) {
+	srv, _ := setupServer(t)
+	body := `{"issue_tracking":{"enabled":true,"filter_mode":"exclusive","default_action":"delete_the_repo"}}`
+	req := httptest.NewRequest("PUT", "/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerPutConfig_IssueTracking_PersistsAndIsReadable(t *testing.T) {
+	// End-to-end: PUT → ListConfigs → ApplyStore → cfg reflects the change.
+	// This is the scenario that is broken on main today and the reason the
+	// web UI's "Save & reload" silently loses values on refresh.
+	srv, s := setupServer(t)
+	body := `{"issue_tracking":{"enabled":true,"filter_mode":"inclusive","default_action":"review_only","develop_labels":["feature"]}}`
+	req := httptest.NewRequest("PUT", "/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT: expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	rows, err := s.ListConfigs()
+	if err != nil {
+		t.Fatalf("ListConfigs: %v", err)
+	}
+	raw, ok := rows["issue_tracking"]
+	if !ok {
+		t.Fatalf("store: expected issue_tracking row, got keys %v", rows)
+	}
+
+	cfg := newCfgWithPrimary()
+	cfg.GitHub.PollInterval = "5m"
+	if err := cfg.ApplyStore(map[string]string{"issue_tracking": raw}); err != nil {
+		t.Fatalf("ApplyStore: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate after ApplyStore: %v", err)
+	}
+	it := cfg.GitHub.IssueTracking
+	if !it.Enabled || it.FilterMode != config.FilterModeInclusive || it.DefaultAction != "review_only" {
+		t.Errorf("round-trip: got %+v", it)
+	}
+	if len(it.DevelopLabels) != 1 || it.DevelopLabels[0] != "feature" {
+		t.Errorf("DevelopLabels = %v, want [feature]", it.DevelopLabels)
+	}
+}
+
+// newCfgWithPrimary builds a minimal valid Config for tests that want to run
+// cfg.Validate() after ApplyStore (Validate requires ai.primary).
+func newCfgWithPrimary() *config.Config {
+	c := &config.Config{}
+	c.AI.Primary = "claude"
+	return c
+}
+
+// ── read-only round-tripping (#86) ─────────────────────────────────────────
+
+func putConfigRequest(body string) *http.Request {
+	req := httptest.NewRequest("PUT", "/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+func TestHandlerPutConfig_ReadOnlyKeys_Accepted(t *testing.T) {
+	// The web UI round-trips these fields verbatim from GET /config as a
+	// forward-compat safeguard; the handler must accept them (no 400) even
+	// though it won't persist them.
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"non_monitored", `{"non_monitored":["org/archived"]}`},
+		{"repo_overrides", `{"repo_overrides":{"org/a":{"primary":"claude"}}}`},
+		{"agent_configs", `{"agent_configs":{"claude":{"model":"claude-opus-4-7"}}}`},
+		{"server_port", `{"server_port":7842}`},
+		{"all-at-once", `{"non_monitored":[],"repo_overrides":{},"agent_configs":{},"server_port":7842}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := setupServer(t)
+			w := httptest.NewRecorder()
+			srv.Router().ServeHTTP(w, putConfigRequest(tc.body))
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandlerPutConfig_ReadOnlyKeys_NotPersisted(t *testing.T) {
+	// Accepted but never written: the configs table must stay untouched so
+	// reload doesn't have to re-examine them and ApplyStore's
+	// "unknown/bootstrap-only" branches stay dormant.
+	srv, s := setupServer(t)
+	body := `{"non_monitored":["org/x"],"repo_overrides":{"org/a":{"primary":"claude"}},"agent_configs":{"claude":{"model":"x"}},"server_port":7842}`
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, putConfigRequest(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT: expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	rows, err := s.ListConfigs()
+	if err != nil {
+		t.Fatalf("ListConfigs: %v", err)
+	}
+	for _, banned := range []string{"non_monitored", "repo_overrides", "agent_configs", "server_port"} {
+		if _, leaked := rows[banned]; leaked {
+			t.Errorf("read-only key %q was persisted (rows: %v)", banned, rows)
+		}
+	}
+}
+
+func TestHandlerPutConfig_WritableAndReadOnly_Mixed(t *testing.T) {
+	// A realistic save: the Svelte UI sends editable fields next to the
+	// round-tripped read-only ones. Only the editable fields land in the
+	// store — nothing else bleeds in.
+	srv, s := setupServer(t)
+	body := `{"poll_interval":"30m","agent_configs":{"claude":{"model":"x"}},"non_monitored":["org/x"]}`
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, putConfigRequest(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	rows, err := s.ListConfigs()
+	if err != nil {
+		t.Fatalf("ListConfigs: %v", err)
+	}
+	if rows["poll_interval"] != "30m" {
+		t.Errorf("poll_interval = %q, want 30m", rows["poll_interval"])
+	}
+	if _, ok := rows["agent_configs"]; ok {
+		t.Errorf("agent_configs unexpectedly persisted")
+	}
+	if _, ok := rows["non_monitored"]; ok {
+		t.Errorf("non_monitored unexpectedly persisted")
+	}
+}
+
+func TestHandlerPutConfig_UnknownKey_StillRejected(t *testing.T) {
+	// Security regression guard: the read-only escape hatch must NOT become
+	// a catch-all. Keys that are neither writable nor read-only still 400.
+	srv, _ := setupServer(t)
+	body := `{"not_a_real_key":"whatever"}`
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, putConfigRequest(body))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown key, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerPutConfig_ServerPort_RangeStillValidated(t *testing.T) {
+	// server_port moves from writable to read-only, but its numeric-range
+	// pre-check (handlers.go:362) still fires — a client sending a
+	// privileged port is still rejected so the bug-class "validate before
+	// accept" stays intact even for read-only keys.
+	srv, _ := setupServer(t)
+	body := `{"server_port":80}`
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, putConfigRequest(body))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for port 80, got %d (body: %s)", w.Code, w.Body.String())
 	}
 }
 
