@@ -387,7 +387,9 @@ run-linux:
 	@test -n "$$DISPLAY" || { echo "❌  No DISPLAY set — need X11 (or XWayland)."; exit 1; }
 	@docker image inspect heimdallm-verify >/dev/null 2>&1 || \
 	  { echo "❌  Image 'heimdallm-verify' not found. Run 'make verify-linux' first."; exit 1; }
-	@mkdir -p "$$HOME/.config/heimdallm" "$$HOME/.local/share/heimdallm"
+	@mkdir -p "$$HOME/.config/heimdallm" "$$HOME/.local/share/heimdallm" \
+	          "$$HOME/.claude" "$$HOME/.gemini" "$$HOME/.codex" \
+	          "$$HOME/.config/opencode" "$$HOME/.local/share/opencode"
 	@docker rm -f heimdallm-run 2>/dev/null || true
 	@ENV_FILE=$$(mktemp) ; \
 	cleanup() { \
@@ -449,6 +451,11 @@ run-linux:
 	  $$DBUS_ARGS \
 	  -v "$$HOME/.config/heimdallm:$$HOME/.config/heimdallm" \
 	  -v "$$HOME/.local/share/heimdallm:$$HOME/.local/share/heimdallm" \
+	  -v "$$HOME/.claude:$$HOME/.claude" \
+	  -v "$$HOME/.gemini:$$HOME/.gemini" \
+	  -v "$$HOME/.codex:$$HOME/.codex" \
+	  -v "$$HOME/.config/opencode:$$HOME/.config/opencode" \
+	  -v "$$HOME/.local/share/opencode:$$HOME/.local/share/opencode" \
 	  $$GH_CONFIG_ARGS \
 	  $$GPU_ARGS \
 	  --ipc=host \
