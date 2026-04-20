@@ -18,8 +18,8 @@ endif
 
 .PHONY: build-daemon build-app test test-docker dev dev-daemon dev-stop \
         release-local package-macos install-service verify-linux run-linux \
-        setup up up-build up-daemon down logs logs-daemon ps restart clean \
-        _check-docker _check-env
+        setup up up-build up-daemon up-build-daemon down logs logs-daemon \
+        ps restart clean _check-docker _check-env
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
@@ -301,15 +301,16 @@ _check-env: _check-docker
 up: _check-env
 	docker compose -f $(COMPOSE_FILE) up -d
 
-# up-build is the same as `up` but forces a fresh image build from the local
-# source tree. Use after `git pull` on main: the published `:latest` on GHCR
-# only refreshes when release-please cuts a tag, so `make up` alone would
-# silently serve the last cached image.
+# Like `up` but rebuilds images from local source (use after `git pull` on main).
 up-build: _check-env
-	docker compose -f $(COMPOSE_FILE) up -d --build
+	docker compose -f $(COMPOSE_FILE) up -d --build --pull always
 
 up-daemon: _check-env
 	docker compose -f $(COMPOSE_FILE) up -d heimdallm
+
+# Like `up-daemon` but rebuilds the daemon image from local source.
+up-build-daemon: _check-env
+	docker compose -f $(COMPOSE_FILE) up -d --build --pull always heimdallm
 
 down: _check-docker
 	docker compose -f $(COMPOSE_FILE) down

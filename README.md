@@ -122,11 +122,12 @@ See [`docker/.env.example`](docker/.env.example) for every supported variable in
 #### 3. Start the stack
 
 ```bash
-make up            # daemon + web UI (recommended)
+make up                # daemon + web UI (recommended)
 # or:
-make up-daemon     # daemon only, no web UI
+make up-daemon         # daemon only, no web UI
 # after `git pull` on main:
-make up-build      # same as `make up` but rebuilds from local source
+make up-build          # same as `make up` but rebuilds from local source
+make up-build-daemon   # same as `make up-daemon` but rebuilds from local source
 ```
 
 `make up` refuses to start if `docker/.env` is missing and prints the exact copy-from-template command. The web container waits for the daemon's healthcheck before accepting traffic, so the first UI request never races a half-initialised daemon.
@@ -308,9 +309,10 @@ make test          # Run Go + Flutter test suites on the host
 make test-docker   # Run Go tests inside a pinned Docker image (EDR-safe)
 make dev-daemon    # Run daemon only (debug API at localhost:7842)
 make dev-stop      # Stop the running daemon
-make up            # Docker: bring up daemon + web UI
-make up-build      # Docker: same as `up`, rebuild from local source (use on main)
-make up-daemon     # Docker: daemon only
+make up                # Docker: bring up daemon + web UI
+make up-build          # Docker: same as `up`, rebuild from local source (use on main)
+make up-daemon         # Docker: daemon only
+make up-build-daemon   # Docker: same as `up-daemon`, rebuild from local source
 make down          # Docker: stop and remove containers
 make logs          # Docker: follow all services
 make restart       # Docker: bounce both containers
