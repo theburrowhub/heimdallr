@@ -125,9 +125,13 @@ See [`docker/.env.example`](docker/.env.example) for every supported variable in
 make up            # daemon + web UI (recommended)
 # or:
 make up-daemon     # daemon only, no web UI
+# after `git pull` on main:
+make up-build      # same as `make up` but rebuilds from local source
 ```
 
 `make up` refuses to start if `docker/.env` is missing and prints the exact copy-from-template command. The web container waits for the daemon's healthcheck before accepting traffic, so the first UI request never races a half-initialised daemon.
+
+> **Tracking `main`?** `make up` reuses the last cached image. The published `:latest` on GHCR only refreshes when release-please cuts a tag, so between a PR merge and the next release you'll still be running the old binary. Use `make up-build` to rebuild from your checkout.
 
 > **Port already in use?** If `make up` fails with `bind: address already in use` for port `3000` (common collision: a local Next.js / Vite / Grafana dev server) or `7842`, override the host-side port in `docker/.env` and re-run:
 > ```bash
@@ -305,6 +309,7 @@ make test-docker   # Run Go tests inside a pinned Docker image (EDR-safe)
 make dev-daemon    # Run daemon only (debug API at localhost:7842)
 make dev-stop      # Stop the running daemon
 make up            # Docker: bring up daemon + web UI
+make up-build      # Docker: same as `up`, rebuild from local source (use on main)
 make up-daemon     # Docker: daemon only
 make down          # Docker: stop and remove containers
 make logs          # Docker: follow all services
