@@ -48,6 +48,12 @@ func PromoteReady(ctx context.Context, c PromoteIssueClient, cfg config.IssueTra
 
 	blockedSet := lowerSet(cfg.BlockedLabels)
 	promoted := 0
+	// issueCache is scoped to this PromoteReady pass. When two blocked
+	// issues declare the same dependency (common: a shared schema
+	// migration blocking both API and UI), we'd otherwise hit GetIssue
+	// twice for the same ref. The cache is tiny (one *github.Issue per
+	// unique ref) and lasts milliseconds.
+	issueCache := make(map[string]*github.Issue)
 
 	for _, repo := range repos {
 		if err := ctx.Err(); err != nil {
@@ -60,6 +66,12 @@ func PromoteReady(ctx context.Context, c PromoteIssueClient, cfg config.IssueTra
 		}
 
 		for _, issue := range issues {
+			// Per-issue cancellation check. A daemon shutdown mid-repo
+			// should not churn through every blocked issue just because
+			// we already entered the repo loop.
+			if err := ctx.Err(); err != nil {
+				return promoted, err
+			}
 			blockedOnIssue := intersectLabels(issue.LabelNames(), blockedSet)
 			if len(blockedOnIssue) == 0 {
 				continue
@@ -71,16 +83,16 @@ func PromoteReady(ctx context.Context, c PromoteIssueClient, cfg config.IssueTra
 				// operator likely wants to unblock manually.
 				continue
 			}
-			ready, err := allDepsClosed(c, deps)
+			states, err := checkDeps(c, deps, issueCache)
 			if err != nil {
 				slog.Warn("issues promote: dep check failed",
 					"repo", repo, "issue", issue.Number, "err", err)
 				continue
 			}
-			if !ready {
+			if !allClosed(states) {
 				continue
 			}
-			if err := applyPromotion(c, issue, blockedOnIssue, promoteTo); err != nil {
+			if err := applyPromotion(c, issue, blockedOnIssue, promoteTo, states); err != nil {
 				slog.Warn("issues promote: apply failed",
 					"repo", repo, "issue", issue.Number, "err", err)
 				continue
@@ -94,49 +106,88 @@ func PromoteReady(ctx context.Context, c PromoteIssueClient, cfg config.IssueTra
 	return promoted, nil
 }
 
-// allDepsClosed returns true only when EVERY referenced issue/PR is in
-// state "closed". A closed PR with state "merged" is reported by GitHub
-// with state == "closed" too (merged is a sub-state exposed through
-// pull_request.merged_at which we don't need to inspect — "closed" is
-// sufficient for "this work has landed one way or another").
+// depState records a dependency reference paired with the GitHub state
+// observed at check time. Rendered into the audit comment so operators can
+// diagnose a TOCTOU edge case (a dep reopened between the check and the
+// label flip) without spelunking logs.
+type depState struct {
+	Ref   IssueRef
+	State string
+}
+
+// checkDeps resolves the state of every dep, sharing results through
+// `cache` so a blocker referenced by multiple blocked issues in the same
+// PromoteReady pass costs one GetIssue call, not one per referrer. A
+// closed PR with state "merged" is reported by GitHub as state == "closed"
+// too (merged is a sub-state we don't need to inspect — "closed" covers
+// "this work has landed one way or another").
 //
-// Any non-fatal error returns (false, err) so the caller can log and
-// skip — a transient API failure is retried on the next poll cycle.
-func allDepsClosed(c PromoteIssueClient, deps []IssueRef) (bool, error) {
+// On any GitHub call failure the function returns (nil, err) — the
+// caller logs and skips this issue, the next cycle retries.
+func checkDeps(c PromoteIssueClient, deps []IssueRef, cache map[string]*github.Issue) ([]depState, error) {
+	out := make([]depState, 0, len(deps))
 	for _, d := range deps {
-		got, err := c.GetIssue(d.Repo, d.Number)
-		if err != nil {
-			return false, fmt.Errorf("dep %s#%d: %w", d.Repo, d.Number, err)
+		key := fmt.Sprintf("%s#%d", d.Repo, d.Number)
+		got, ok := cache[key]
+		if !ok {
+			fetched, err := c.GetIssue(d.Repo, d.Number)
+			if err != nil {
+				return nil, fmt.Errorf("dep %s: %w", key, err)
+			}
+			cache[key] = fetched
+			got = fetched
 		}
-		if got.State != "closed" {
-			return false, nil
+		out = append(out, depState{Ref: d, State: got.State})
+	}
+	return out, nil
+}
+
+// allClosed reports whether every recorded state is "closed".
+func allClosed(states []depState) bool {
+	for _, s := range states {
+		if s.State != "closed" {
+			return false
 		}
 	}
-	return true, nil
+	return true
 }
 
 // applyPromotion flips the blocked label(s) to the promote-to label and
-// leaves an audit comment. Calls are ordered remove → add → comment: if
-// add fails we've already removed, which is less bad than the reverse
-// (double-labelled, in both states at once).
-func applyPromotion(c PromoteIssueClient, issue *github.Issue, blockedLabels []string, promoteTo string) error {
+// leaves an audit comment listing the dep states as observed at check
+// time. Calls are ordered remove → add → comment: if add fails we've
+// already removed, which is less bad than the reverse (double-labelled,
+// in both states at once). The comment payload includes the dep states
+// so a TOCTOU race (a dep reopening between check and flip) is diagnosable
+// from the GitHub timeline alone.
+func applyPromotion(c PromoteIssueClient, issue *github.Issue, blockedLabels []string, promoteTo string, states []depState) error {
 	if err := c.RemoveLabels(issue.Repo, issue.Number, blockedLabels); err != nil {
 		return fmt.Errorf("remove blocked: %w", err)
 	}
 	if err := c.AddLabels(issue.Repo, issue.Number, []string{promoteTo}); err != nil {
 		return fmt.Errorf("add promote-to: %w", err)
 	}
-	body := fmt.Sprintf(
-		"All declared dependencies are closed, promoting to `%s`.\n\n---\n*Promoted by Heimdallm*",
-		promoteTo,
-	)
-	if err := c.PostComment(issue.Repo, issue.Number, body); err != nil {
+	if err := c.PostComment(issue.Repo, issue.Number, auditCommentBody(promoteTo, states)); err != nil {
 		// Comment failure is non-fatal — labels already flipped, the
 		// next poll cycle will process the issue normally. Log only.
 		slog.Warn("issues promote: audit comment failed (labels already flipped)",
 			"repo", issue.Repo, "issue", issue.Number, "err", err)
 	}
 	return nil
+}
+
+// auditCommentBody renders the Markdown posted on successful promotion.
+// Lists each dep + state so operators can diagnose premature promotions
+// without reading daemon logs.
+func auditCommentBody(promoteTo string, states []depState) string {
+	var sb strings.Builder
+	sb.WriteString("All declared dependencies are closed, promoting to `")
+	sb.WriteString(promoteTo)
+	sb.WriteString("`.\n\n**Dependency states at promotion time:**\n")
+	for _, s := range states {
+		sb.WriteString(fmt.Sprintf("- `%s#%d`: %s\n", s.Ref.Repo, s.Ref.Number, s.State))
+	}
+	sb.WriteString("\n---\n*Promoted by Heimdallm*")
+	return sb.String()
 }
 
 func lowerSet(xs []string) map[string]struct{} {

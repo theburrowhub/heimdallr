@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/heimdallm/daemon/internal/config"
@@ -270,6 +271,83 @@ func (f *failingPromoteClient) RemoveLabels(repo string, n int, ls []string) err
 }
 func (f *failingPromoteClient) PostComment(repo string, n int, body string) error {
 	return f.inner.PostComment(repo, n, body)
+}
+
+func TestPromoteReady_CachesGetIssueAcrossBlockedIssues(t *testing.T) {
+	// Two blocked issues share the same blocker #5. GetIssue on "org/r#5"
+	// must fire ONCE, not twice — the in-pass cache reuses the first
+	// result across later blocked issues that reference it.
+	blockedA := mkIssue("org/r", 10, "open", "## Depends on\n- #5\n", "blocked")
+	blockedB := mkIssue("org/r", 11, "open", "## Depends on\n- #5\n- #6\n", "blocked")
+	counting := &countingPromoteClient{
+		inner: &fakePromoteClient{
+			open: map[string][]*github.Issue{"org/r": {blockedA, blockedB}},
+			byRef: map[string]*github.Issue{
+				"org/r#5": mkIssue("org/r", 5, "closed", ""),
+				"org/r#6": mkIssue("org/r", 6, "closed", ""),
+			},
+		},
+	}
+
+	n, err := PromoteReady(context.Background(), counting, baseCfg(), []string{"org/r"})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("n = %d, want 2", n)
+	}
+	// Three unique dep refs expected: #5 (shared, cached on second use),
+	// #6. That's 2 distinct GetIssue calls — one per unique ref.
+	if counting.getIssueCalls != 2 {
+		t.Errorf("GetIssue calls = %d, want 2 (cache should dedup shared dep #5)", counting.getIssueCalls)
+	}
+}
+
+func TestPromoteReady_AuditCommentIncludesDepStates(t *testing.T) {
+	blocked := mkIssue("org/r", 10, "open", "## Depends on\n- #5\n- other/r#9\n", "blocked")
+	fake := &fakePromoteClient{
+		open: map[string][]*github.Issue{"org/r": {blocked}},
+		byRef: map[string]*github.Issue{
+			"org/r#5":   mkIssue("org/r", 5, "closed", ""),
+			"other/r#9": mkIssue("other/r", 9, "closed", ""),
+		},
+	}
+	if _, err := PromoteReady(context.Background(), fake, baseCfg(), []string{"org/r"}); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(fake.comments) != 1 {
+		t.Fatalf("expected 1 audit comment, got %d", len(fake.comments))
+	}
+	body := fake.comments[0].Body
+	for _, needle := range []string{"org/r#5", "other/r#9", "closed", "ready"} {
+		if !strings.Contains(body, needle) {
+			t.Errorf("audit body missing %q: %s", needle, body)
+		}
+	}
+}
+
+// countingPromoteClient wraps a fake and counts GetIssue calls, so tests
+// can assert on caching behaviour without reaching into internals.
+type countingPromoteClient struct {
+	inner         *fakePromoteClient
+	getIssueCalls int
+}
+
+func (c *countingPromoteClient) ListOpenIssues(repo string) ([]*github.Issue, error) {
+	return c.inner.ListOpenIssues(repo)
+}
+func (c *countingPromoteClient) GetIssue(repo string, n int) (*github.Issue, error) {
+	c.getIssueCalls++
+	return c.inner.GetIssue(repo, n)
+}
+func (c *countingPromoteClient) AddLabels(repo string, n int, ls []string) error {
+	return c.inner.AddLabels(repo, n, ls)
+}
+func (c *countingPromoteClient) RemoveLabels(repo string, n int, ls []string) error {
+	return c.inner.RemoveLabels(repo, n, ls)
+}
+func (c *countingPromoteClient) PostComment(repo string, n int, body string) error {
+	return c.inner.PostComment(repo, n, body)
 }
 
 func TestPromoteReady_MissingPromoteTarget_ReturnsError(t *testing.T) {

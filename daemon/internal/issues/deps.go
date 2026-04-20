@@ -55,8 +55,12 @@ func ParseDependencies(body, defaultRepo string) []IssueRef {
 			continue
 		}
 
-		// Leaving the section on any subsequent heading.
-		if nextHeading.MatchString(line) && !dependsHeading.MatchString(lower) {
+		// Leaving the section on any subsequent heading. Both checks run
+		// on the lower-cased line so the "exclude re-entering our own
+		// heading" branch is comparing apples to apples — `#` is ASCII
+		// so the case fold is a no-op for the heading markers but makes
+		// the intent obvious.
+		if nextHeading.MatchString(lower) && !dependsHeading.MatchString(lower) {
 			break
 		}
 
