@@ -719,10 +719,21 @@ func (n *notifyWithSSE) Notify(title, message string) {
 	n.notifier.Notify(title, message)
 }
 
+// tokenFileMode is the permission mask for <dataDir>/api_token.
+//
+// 0644 (world-readable) is deliberate: the file lives on a Docker volume
+// that is private to the compose stack and is consumed by two services we
+// control (the daemon that writes it and the SvelteKit web UI that reads
+// it). Those services run under different UIDs in their respective images
+// (daemon: heimdallm UID 100; web: node UID 1000), so the previous 0600
+// blocked the web container from reading the token via the shared volume,
+// forcing operators to run `make setup` as a manual workaround. See #71.
+const tokenFileMode = 0644
+
 // loadOrCreateAPIToken reads an existing token from <dataDir>/api_token, or
-// generates a new cryptographically-random one and writes it with mode 0600.
-// The token is used by the HTTP server to authenticate all mutating requests
-// (POST/PUT/DELETE) — see security issue #3.
+// generates a new cryptographically-random one and writes it with
+// tokenFileMode. The token is used by the HTTP server to authenticate all
+// mutating requests (POST/PUT/DELETE) — see security issue #3.
 //
 // SECURITY (M-4): Uses O_CREATE|O_EXCL to create the file atomically. If two
 // daemon instances race, only one will win the exclusive create; the other reads
@@ -736,6 +747,13 @@ func loadOrCreateAPIToken(dir string) (string, error) {
 	if err == nil {
 		tok := strings.TrimSpace(string(data))
 		if len(tok) >= 32 {
+			// Best-effort upgrade for tokens written by older daemons with
+			// mode 0600 — see tokenFileMode comment above. Errors are logged
+			// but non-fatal: the daemon itself can still read the token, and
+			// `make setup` remains a viable fallback.
+			if err := os.Chmod(path, tokenFileMode); err != nil {
+				slog.Warn("api_token: could not upgrade permissions", "path", path, "err", err)
+			}
 			return tok, nil
 		}
 	}
@@ -750,7 +768,7 @@ func loadOrCreateAPIToken(dir string) (string, error) {
 	// Use O_CREATE|O_EXCL for atomic creation: if another process created the
 	// file between our ReadFile and here, os.OpenFile returns an error that
 	// satisfies os.IsExist — we then read the file created by the other process.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, tokenFileMode)
 	if err != nil {
 		if os.IsExist(err) {
 			// Another process created the file first — read their token.
@@ -768,6 +786,12 @@ func loadOrCreateAPIToken(dir string) (string, error) {
 	defer f.Close()
 	if _, err := fmt.Fprintf(f, "%s\n", tok); err != nil {
 		return "", fmt.Errorf("api_token: write %s: %w", path, err)
+	}
+	// os.OpenFile's mode arg is masked by the process umask (typically 0022),
+	// which would leave the file 0644 anyway — but chmod explicitly so the
+	// final mode is deterministic regardless of the daemon's umask at startup.
+	if err := os.Chmod(path, tokenFileMode); err != nil {
+		slog.Warn("api_token: could not set permissions", "path", path, "err", err)
 	}
 	slog.Info("api_token: created new token", "path", path)
 	return tok, nil
