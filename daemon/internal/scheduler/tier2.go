@@ -12,11 +12,18 @@ type Tier2PRFetcher interface {
 	FetchPRsToReview() ([]Tier2PR, error)
 }
 
-// Tier2PR is a minimal PR representation for Tier 2.
+// Tier2PR carries the PR fields that the review pipeline needs.
+// FetchPRsToReview already fetches these from the GitHub Search API;
+// passing them through avoids a per-PR re-fetch and prevents silent
+// zero-value bugs in the pipeline's UpsertPR call.
 type Tier2PR struct {
 	ID        int64
 	Number    int
 	Repo      string
+	Title     string
+	HTMLURL   string
+	Author    string
+	State     string
 	UpdatedAt time.Time
 }
 
