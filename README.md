@@ -72,11 +72,12 @@ For headless/server deployment, Heimdallm runs as a Docker container with all fo
 - A **GitHub token** with `repo` scope (or `public_repo` for public-only). Two options:
   - If you already use `gh` CLI: just run `gh auth token` to print the token you already have — no need to create a new PAT.
   - Otherwise: create one at https://github.com/settings/tokens.
-- An **API key for your chosen AI provider** — at least one of:
-  - Claude: https://console.anthropic.com/settings/keys (or `CLAUDE_CODE_OAUTH_TOKEN` via `claude setup-token`)
-  - Gemini: https://aistudio.google.com/apikey
-  - OpenAI / Codex: https://platform.openai.com/api-keys
-  - OpenRouter (for OpenCode): https://openrouter.ai/keys
+- **Credentials for your chosen AI provider** (at least one):
+  - **Claude — subscription (Max / Pro / Team)**: run `claude setup-token` on your host (interactive — opens a browser) and copy the `sk-ant-oat…` token it prints. This becomes `CLAUDE_CODE_OAUTH_TOKEN`. No billing setup required if your Anthropic subscription covers Claude Code.
+  - **Claude — pay-as-you-go API key**: create one at https://console.anthropic.com/settings/keys. This becomes `ANTHROPIC_API_KEY`.
+  - **Gemini**: https://aistudio.google.com/apikey → `GEMINI_API_KEY`. Or reuse your host's browser OAuth — see [Reusing your host's AI authentication](#reusing-your-hosts-ai-authentication).
+  - **OpenAI / Codex**: https://platform.openai.com/api-keys → `OPENAI_API_KEY` or `CODEX_API_KEY`.
+  - **OpenRouter** (for OpenCode): https://openrouter.ai/keys → `OPENROUTER_API_KEY`.
 
 #### 2. Configure
 
@@ -85,15 +86,36 @@ cp docker/.env.example docker/.env
 
 # Quick-fill GITHUB_TOKEN from your existing gh auth (skip if you made a PAT):
 echo "GITHUB_TOKEN=$(gh auth token)" >> docker/.env
-
-# Then edit docker/.env and set at minimum:
-#   HEIMDALLM_AI_PRIMARY      (claude | gemini | codex | opencode)
-#   <provider>_API_KEY        (matching your primary)
-#   HEIMDALLM_REPOSITORIES    (owner/repo1,owner/repo2 — or leave empty if
-#                              using HEIMDALLM_DISCOVERY_TOPIC)
 ```
 
-> **If you plan to use Claude with `CLAUDE_CODE_OAUTH_TOKEN`**: run `claude setup-token` in a terminal **by itself** (it's interactive — opens a browser, prints instructions + ANSI). Copy only the `sk-ant-oat…` line it produces and paste it into `docker/.env`. Do **not** try to inline it as `$(claude setup-token)`; you'll capture the prompts and break the file.
+Then open `docker/.env` in your editor and set at minimum:
+- `HEIMDALLM_AI_PRIMARY` — `claude` | `gemini` | `codex` | `opencode`
+- The credential matching that primary (see below)
+- `HEIMDALLM_REPOSITORIES` — `owner/repo1,owner/repo2` (or leave empty if using `HEIMDALLM_DISCOVERY_TOPIC`)
+
+**Filling in the Claude credential:**
+
+- **Subscription (recommended if you have Claude Max / Pro / Team):**
+  1. On your host, run **interactively** (not inside `$(...)`):
+     ```bash
+     claude setup-token
+     ```
+     It opens a browser, prints some ANSI text, and finally emits a line that starts with `sk-ant-oat…`.
+  2. Copy only that `sk-ant-oat…` line and paste it manually into `docker/.env`:
+     ```
+     CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat...
+     ```
+  3. Leave `ANTHROPIC_API_KEY` empty. Do **not** set `bare = true` in `config.toml` — it disables OAuth.
+
+  > **Why you can't inline this:** `claude setup-token` is interactive and writes prompts + colour codes to stdout. `$(claude setup-token)` captures all of it and corrupts `.env`.
+
+- **API key (pay-as-you-go):** paste your Anthropic key directly:
+  ```
+  ANTHROPIC_API_KEY=sk-ant-...
+  ```
+  Leave `CLAUDE_CODE_OAUTH_TOKEN` empty.
+
+For non-Claude providers see [Reusing your host's AI authentication](#reusing-your-hosts-ai-authentication) (Gemini OAuth reuse) or just set the relevant `*_API_KEY` variable from the Prerequisites list.
 
 See [`docker/.env.example`](docker/.env.example) for every supported variable including issue-tracking, topic-based discovery, and web UI settings.
 
