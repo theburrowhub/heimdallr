@@ -233,30 +233,14 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
     required ValueChanged<Set<String>> onChanged,
   }) {
     final hasSelection = selected.isNotEmpty;
-    return PopupMenuButton<String>(
-      tooltip: '$label filter',
-      offset: const Offset(0, 36),
-      constraints: const BoxConstraints(maxHeight: 400, maxWidth: 360),
-      itemBuilder: (_) => allValues.map((v) {
-        final checked = selected.contains(v);
-        return PopupMenuItem<String>(
-          value: v,
-          padding: EdgeInsets.zero,
-          child: StatefulBuilder(
-            builder: (ctx, setMenuState) => CheckboxListTile(
-              dense: true,
-              title: Text(displayFn(v), style: const TextStyle(fontSize: 12)),
-              value: checked,
-              onChanged: (val) {
-                final next = Set<String>.from(selected);
-                val == true ? next.add(v) : next.remove(v);
-                onChanged(next);
-                Navigator.of(ctx).pop();
-              },
-            ),
-          ),
-        );
-      }).toList(),
+    return GestureDetector(
+      onTap: () => _showMultiSelectDialog(
+        label: label,
+        allValues: allValues,
+        selected: selected,
+        displayFn: displayFn,
+        onChanged: onChanged,
+      ),
       child: Chip(
         avatar: Icon(icon, size: 14,
             color: hasSelection
@@ -281,6 +265,111 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
         backgroundColor: hasSelection
             ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
             : null,
+      ),
+    );
+  }
+
+  void _showMultiSelectDialog({
+    required String label,
+    required List<String> allValues,
+    required Set<String> selected,
+    required String Function(String) displayFn,
+    required ValueChanged<Set<String>> onChanged,
+  }) {
+    var current = Set<String>.from(selected);
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => Dialog(
+          backgroundColor: Theme.of(context).colorScheme.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: Colors.grey.shade700),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 340, maxHeight: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
+                  child: Row(
+                    children: [
+                      Text('Filter by $label',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      const Spacer(),
+                      if (current.isNotEmpty)
+                        TextButton(
+                          onPressed: () {
+                            setDialogState(() => current = {});
+                          },
+                          child: const Text('Clear', style: TextStyle(fontSize: 12)),
+                        ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                // List
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    itemCount: allValues.length,
+                    itemBuilder: (_, i) {
+                      final v = allValues[i];
+                      final checked = current.contains(v);
+                      return InkWell(
+                        onTap: () {
+                          setDialogState(() {
+                            checked ? current.remove(v) : current.add(v);
+                          });
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(displayFn(v),
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: checked ? Theme.of(context).colorScheme.primary : null,
+                                      fontWeight: checked ? FontWeight.w600 : FontWeight.normal,
+                                    )),
+                              ),
+                              Icon(
+                                checked ? Icons.check_box : Icons.check_box_outline_blank,
+                                size: 20,
+                                color: checked
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Colors.grey.shade600,
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const Divider(height: 1),
+                // Apply button
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () {
+                        onChanged(current);
+                        Navigator.of(ctx).pop();
+                      },
+                      child: Text('Apply${current.isNotEmpty ? ' (${current.length})' : ''}'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
