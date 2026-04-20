@@ -78,32 +78,38 @@ func (q *WatchQueue) PopReady() []*WatchItem {
 }
 
 // ReEnqueue puts an item back with doubled backoff (capped at maxBackoff).
+//
+// Concurrency contract: the caller must own the item exclusively between
+// PopReady and ReEnqueue. The queue lock protects the heap and seen map;
+// item field mutations happen inside the lock to avoid races with concurrent
+// readers (e.g. Tier 3 logging a recently popped item's fields).
 func (q *WatchQueue) ReEnqueue(item *WatchItem) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.seen[item.GithubID] {
+		return
+	}
 	item.Backoff *= 2
 	if item.Backoff > maxBackoff {
 		item.Backoff = maxBackoff
 	}
 	item.NextCheck = time.Now().Add(item.Backoff)
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.seen[item.GithubID] {
-		return
-	}
 	q.seen[item.GithubID] = true
 	heap.Push(&q.items, item)
 }
 
 // ResetBackoff resets an item's backoff to initial and re-enqueues it.
-// Called when activity is detected on the item.
+// Called when activity is detected on the item. Same concurrency contract
+// as ReEnqueue — caller must own the item exclusively.
 func (q *WatchQueue) ResetBackoff(item *WatchItem) {
-	item.Backoff = initialBackoff
-	item.LastSeen = time.Now()
-	item.NextCheck = time.Now().Add(initialBackoff)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.seen[item.GithubID] {
 		return
 	}
+	item.Backoff = initialBackoff
+	item.LastSeen = time.Now()
+	item.NextCheck = time.Now().Add(initialBackoff)
 	q.seen[item.GithubID] = true
 	heap.Push(&q.items, item)
 }
