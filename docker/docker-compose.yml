@@ -69,8 +69,11 @@ services:
   # the default command into a no-op for the web UI and break the AC.
   web:
     build:
-      context: ..
-      dockerfile: web_ui/Dockerfile
+      # The web_ui Dockerfile assumes the build context is rooted at web_ui/
+      # (it does `COPY package.json ./` without any prefix). Point compose at
+      # that directory so the build matches the Dockerfile's expectations.
+      context: ../web_ui
+      dockerfile: Dockerfile
     container_name: heimdallm-web
     restart: unless-stopped
     ports:
