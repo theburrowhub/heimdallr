@@ -563,6 +563,118 @@ func TestClassify_Precedence(t *testing.T) {
 	}
 }
 
+func TestClassify_BlockedPrecedence(t *testing.T) {
+	// Precedence must be: skip > blocked > review_only > develop > default.
+	// Blocked slots in between skip (don't touch it) and review_only (blocked
+	// is cheaper than any processing — we haven't even confirmed we want to
+	// run it yet).
+	cfg := IssueTrackingConfig{
+		SkipLabels:       []string{"wontfix"},
+		BlockedLabels:    []string{"blocked"},
+		ReviewOnlyLabels: []string{"question"},
+		DevelopLabels:    []string{"bug"},
+		DefaultAction:    string(IssueModeIgnore),
+	}
+	cases := []struct {
+		name   string
+		labels []string
+		want   IssueMode
+	}{
+		{"skip wins over blocked", []string{"wontfix", "blocked", "bug"}, IssueModeIgnore},
+		{"blocked wins over review_only", []string{"blocked", "question"}, IssueModeBlocked},
+		{"blocked wins over develop", []string{"blocked", "bug"}, IssueModeBlocked},
+		{"blocked alone", []string{"blocked"}, IssueModeBlocked},
+		{"review_only still wins over develop without blocked", []string{"question", "bug"}, IssueModeReviewOnly},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cfg.Classify(tc.labels); got != tc.want {
+				t.Errorf("Classify(%v) = %q, want %q", tc.labels, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolvePromoteToLabel(t *testing.T) {
+	cases := []struct {
+		name          string
+		cfg           IssueTrackingConfig
+		wantLabel     string
+	}{
+		{
+			name:      "explicit target wins",
+			cfg:       IssueTrackingConfig{PromoteToLabel: "develop", DevelopLabels: []string{"feature"}},
+			wantLabel: "develop",
+		},
+		{
+			name:      "falls back to first develop label",
+			cfg:       IssueTrackingConfig{DevelopLabels: []string{"feature", "bug"}},
+			wantLabel: "feature",
+		},
+		{
+			name:      "empty when neither is set",
+			cfg:       IssueTrackingConfig{},
+			wantLabel: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.ResolvePromoteToLabel(); got != tc.wantLabel {
+				t.Errorf("ResolvePromoteToLabel = %q, want %q", got, tc.wantLabel)
+			}
+		})
+	}
+}
+
+func TestApplyEnvOverrides_IssueTracking_Blocked(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+
+	t.Setenv("HEIMDALLM_ISSUE_BLOCKED_LABELS", "blocked, heimdallm-queued")
+	t.Setenv("HEIMDALLM_ISSUE_PROMOTE_TO_LABEL", "ready")
+
+	cfg.applyEnvOverrides()
+
+	it := cfg.GitHub.IssueTracking
+	if len(it.BlockedLabels) != 2 || it.BlockedLabels[0] != "blocked" || it.BlockedLabels[1] != "heimdallm-queued" {
+		t.Errorf("BlockedLabels = %v, want [blocked heimdallm-queued]", it.BlockedLabels)
+	}
+	if it.PromoteToLabel != "ready" {
+		t.Errorf("PromoteToLabel = %q, want ready", it.PromoteToLabel)
+	}
+}
+
+func TestValidate_BlockedLabelsRequirePromoteTarget(t *testing.T) {
+	// A blocked label dimension without any way to resolve a promote-to
+	// label is a misconfiguration: issues would get stuck in blocked state
+	// forever with no target to promote them to.
+	cfg := &Config{AI: AIConfig{Primary: "claude"}}
+	cfg.GitHub.IssueTracking.Enabled = true
+	cfg.GitHub.IssueTracking.BlockedLabels = []string{"blocked"}
+	cfg.GitHub.IssueTracking.FilterMode = FilterModeExclusive
+	cfg.GitHub.IssueTracking.DefaultAction = string(IssueModeIgnore)
+	// No PromoteToLabel, no DevelopLabels → can't resolve a target.
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate with BlockedLabels and no promote target: expected error, got nil")
+	}
+}
+
+func TestValidate_BlockedLabelsOK_WhenDevelopLabelsSet(t *testing.T) {
+	// BlockedLabels + DevelopLabels is a valid combo — the first develop
+	// label is the implicit promote-to target.
+	cfg := &Config{AI: AIConfig{Primary: "claude"}}
+	cfg.GitHub.IssueTracking.Enabled = true
+	cfg.GitHub.IssueTracking.BlockedLabels = []string{"blocked"}
+	cfg.GitHub.IssueTracking.DevelopLabels = []string{"feature"}
+	cfg.GitHub.IssueTracking.FilterMode = FilterModeExclusive
+	cfg.GitHub.IssueTracking.DefaultAction = string(IssueModeIgnore)
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate(BlockedLabels + DevelopLabels) = %v, want nil", err)
+	}
+}
+
 func TestClassify_CaseInsensitive(t *testing.T) {
 	cfg := IssueTrackingConfig{
 		ReviewOnlyLabels: []string{"Question"},
@@ -660,6 +772,104 @@ func TestAIForRepo_PerRepoInheritsGlobal(t *testing.T) {
 	}
 	if r.ReviewMode != "multi" {
 		t.Errorf("ReviewMode = %q, want global fallback %q", r.ReviewMode, "multi")
+	}
+}
+
+// ── IssueTrackingForRepo ─────────────────────────────────────────────────────
+
+func TestIssueTrackingForRepo_GlobalOnly(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:       true,
+		FilterMode:    FilterModeExclusive,
+		DevelopLabels: []string{"bug", "feature"},
+		SkipLabels:    []string{"wontfix"},
+		DefaultAction: "ignore",
+	}
+	got := c.IssueTrackingForRepo("org/repo")
+	if !got.Enabled || got.FilterMode != FilterModeExclusive {
+		t.Errorf("expected global values, got %+v", got)
+	}
+	if len(got.DevelopLabels) != 2 || got.DevelopLabels[0] != "bug" {
+		t.Errorf("develop_labels = %v, want [bug feature]", got.DevelopLabels)
+	}
+}
+
+func TestIssueTrackingForRepo_PerRepoOverride(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:       true,
+		FilterMode:    FilterModeExclusive,
+		DevelopLabels: []string{"bug", "feature"},
+		SkipLabels:    []string{"wontfix"},
+		DefaultAction: "ignore",
+	}
+	c.AI.Primary = "claude"
+	c.AI.Repos = map[string]RepoAI{
+		"org/secure-repo": {
+			IssueTracking: &IssueTrackingConfig{
+				Enabled:       true, // per-repo Enabled overrides global unconditionally
+				DevelopLabels: []string{"security-fix"},
+				SkipLabels:    []string{"wontfix", "stale"},
+			},
+		},
+	}
+	got := c.IssueTrackingForRepo("org/secure-repo")
+	if len(got.DevelopLabels) != 1 || got.DevelopLabels[0] != "security-fix" {
+		t.Errorf("develop_labels = %v, want [security-fix]", got.DevelopLabels)
+	}
+	if len(got.SkipLabels) != 2 {
+		t.Errorf("skip_labels = %v, want [wontfix stale]", got.SkipLabels)
+	}
+	if got.FilterMode != FilterModeExclusive {
+		t.Errorf("filter_mode = %v, want exclusive (inherited)", got.FilterMode)
+	}
+	if got.DefaultAction != "ignore" {
+		t.Errorf("default_action = %v, want ignore (inherited)", got.DefaultAction)
+	}
+	if !got.Enabled {
+		t.Error("enabled should be true (per-repo override)")
+	}
+}
+
+func TestIssueTrackingForRepo_UnknownRepo(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:    true,
+		SkipLabels: []string{"wontfix"},
+	}
+	got := c.IssueTrackingForRepo("org/unknown")
+	if !got.Enabled || len(got.SkipLabels) != 1 {
+		t.Errorf("unknown repo should return global, got %+v", got)
+	}
+}
+
+func TestIssueTrackingForRepo_PerRepoEnablesWhenGlobalOff(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:       false,
+		DevelopLabels: []string{"bug"},
+	}
+	c.AI.Repos = map[string]RepoAI{
+		"org/active-repo": {
+			IssueTracking: &IssueTrackingConfig{
+				Enabled:       true,
+				DevelopLabels: []string{"feature"},
+			},
+		},
+	}
+	got := c.IssueTrackingForRepo("org/active-repo")
+	if !got.Enabled {
+		t.Error("per-repo should enable issue tracking even when global is off")
+	}
+	if len(got.DevelopLabels) != 1 || got.DevelopLabels[0] != "feature" {
+		t.Errorf("develop_labels = %v, want [feature]", got.DevelopLabels)
+	}
+
+	// Repo without override inherits global (disabled)
+	got2 := c.IssueTrackingForRepo("org/other-repo")
+	if got2.Enabled {
+		t.Error("repo without override should inherit global disabled")
 	}
 }
 

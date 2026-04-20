@@ -14,7 +14,7 @@ Heimdallm runs in the background and does three things, in parallel, at your con
 Watches the PRs where you're requested as a reviewer, runs an AI code review, and submits it to GitHub as your account. No copy-pasting, no manual prompting.
 
 ### 2. Issue triage & auto-implement
-Fetches issues from monitored repos, classifies them by label (`review_only` vs `auto_implement` vs `skip`), and for the develop-track ones optionally **creates a branch, commits the change, and opens a PR** against your default branch — fully autonomous on the issues you mark for it.
+Fetches issues from monitored repos, classifies them by label (`review_only` vs `auto_implement` vs `skip` vs `blocked`), and for the develop-track ones optionally **creates a branch, commits the change, and opens a PR** against your default branch — fully autonomous on the issues you mark for it. Issues can declare dependencies on other issues/PRs; Heimdallm holds them in a `blocked` state until the prerequisites close, then promotes them automatically.
 
 ### 3. Self-monitoring UI
 A SvelteKit web dashboard (`:3000`) with Dashboard, PR list, Issue list, prompt/agent editor, live config editor, and a live log stream. Opens alongside the daemon in Docker mode.
@@ -23,6 +23,7 @@ A SvelteKit web dashboard (`:3000`) with Dashboard, PR list, Issue list, prompt/
 
 - **Automatic reviews** — polls `review-requested:@me` on GitHub and submits reviews as your account
 - **Issue pipeline** — label-driven triage + optional auto-implement with branch/commit/PR cycle
+- **Issue dependencies** — mark downstream work with a `blocked` label; declare deps via a `## Depends on` body section *or* GitHub's native sub-issues; Heimdallm auto-promotes when all blockers close
 - **Configurable prompts** — general review, security audit, performance, architecture, or your own with `{diff}` `{title}` `{author}` `{comments}` placeholders, managed from the web UI at `/agents`
 - **Two feedback modes** — *single* (one consolidated review) or *multi* (one GitHub comment per issue + summary), globally and per repo
 - **Per-repo overrides** — different AI agent, prompt, and feedback mode per repository
@@ -234,6 +235,73 @@ merged into the monitored set on each discovery cycle. Transient Search API
 errors fall back to the last known-good list, so an outage never empties the
 set silently. The static `HEIMDALLM_REPOSITORIES` list keeps working — the
 two sources are merged (deduplicated) at poll time.
+
+#### Dependency-based issue promotion
+
+For multi-step work that must land in order, Heimdallm can hold downstream
+issues out of the pipeline until their prerequisites close, then promote
+them automatically.
+
+**Enable it** by declaring one or more "blocked" labels:
+
+```bash
+HEIMDALLM_ISSUE_BLOCKED_LABELS=blocked
+# optional — defaults to the first HEIMDALLM_ISSUE_DEVELOP_LABELS entry:
+HEIMDALLM_ISSUE_PROMOTE_TO_LABEL=ready
+```
+
+**Declare dependencies** in either (or both) of two ways — Heimdallm
+reads both on every poll and unions the results:
+
+1. **Markdown `## Depends on` section** in the issue body:
+
+    ```markdown
+    ## Depends on
+    - #42
+    - other-org/shared#57
+    ```
+
+    Same-repo refs use `#N`. Cross-repo refs use `owner/repo#N` — works
+    with any repo your `GITHUB_TOKEN` can read (cross-org included). The
+    heading is case-insensitive and accepts an optional trailing colon.
+    Multiple refs per bullet are fine.
+
+2. **GitHub native sub-issues** attached to the parent via the issue UI
+   or REST API. Available since the sub-issues GA; fully same-owner,
+   cross-repo supported (`org/repo-a#1` can have `org/repo-b#2` as a
+   sub-issue — but **not** `other-org/repo#3`, GitHub refuses that).
+   No extra declaration in the body needed.
+
+Either source alone is enough to mark an issue as having dependencies.
+Refs that appear in both are deduped, and the sub-issue's state
+pre-populates the dep cache so Heimdallm spends one fewer GitHub API
+call on shared refs.
+
+**How it runs.** Every poll cycle, for each issue carrying a blocked
+label:
+
+1. Parse the `## Depends on` bullets from the body.
+2. Call GitHub's sub-issues REST endpoint for the same issue.
+3. Union the refs from both sources; dedup.
+4. For each unique ref, fetch state via the GitHub API (cached within
+   the cycle).
+5. If all are `closed` (merged PRs count as closed), remove the blocked
+   label(s), add `HEIMDALLM_ISSUE_PROMOTE_TO_LABEL`, and leave an audit
+   comment listing each dep and its state at check time.
+6. The same poll cycle's fetch pass then classifies the promoted issue
+   normally and dispatches it to triage or auto-implement.
+
+Issues with a blocked label but **no declared deps in either source**
+stay blocked — the daemon won't guess when to unblock them. Remove the
+label manually to opt out. If the sub-issues API errors transiently on
+a given issue, Heimdallm skips that issue for the current cycle rather
+than risk promoting on incomplete information.
+
+Classification precedence is
+`skip > blocked > review_only > develop > default_action`, so an issue
+tagged with both a blocked and a develop label stays blocked until
+promotion. The feature is **opt-in**: leave `HEIMDALLM_ISSUE_BLOCKED_LABELS`
+empty and nothing about the existing pipeline changes.
 
 ### Automated install (for agents / scripts)
 

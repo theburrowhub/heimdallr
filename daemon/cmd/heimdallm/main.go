@@ -64,13 +64,20 @@ func main() {
 	}
 
 	cfgPath := configPath()
-	var cfg *config.Config
-	var err error
+
+	// loadConfig is captured once at startup so the reload path further
+	// down cannot drift: both read the same env-var and select the same
+	// loader. Docker deployments (HEIMDALLM_DATA_DIR set) use LoadOrCreate
+	// so a missing config.toml is not fatal — the daemon rebuilds from env
+	// vars. Desktop deployments use Load; the Flutter app is expected to
+	// have written the TOML before the daemon starts, so ENOENT is a real
+	// error there.
+	loadConfig := config.Load
 	if os.Getenv("HEIMDALLM_DATA_DIR") != "" {
-		cfg, err = config.LoadOrCreate(cfgPath)
-	} else {
-		cfg, err = config.Load(cfgPath)
+		loadConfig = config.LoadOrCreate
 	}
+
+	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		slog.Error("config load failed", "path", cfgPath, "err", err)
 		os.Exit(1)
@@ -121,6 +128,15 @@ func main() {
 	}
 
 	p := pipeline.New(s, ghClient, exec, &notifyWithSSE{notifier: notifier})
+
+	// Resolve bot login for re-review context filtering.
+	if login, err := ghClient.AuthenticatedUser(); err == nil {
+		p.SetBotLogin(login)
+		slog.Info("bot login resolved", "login", login)
+	} else {
+		slog.Warn("could not resolve bot login for re-review context", "err", err)
+	}
+
 	// GitExec drives the auto_implement flow (#27): branch, commit, push, PR.
 	// Wired unconditionally — the pipeline guards against running git ops on
 	// an issue that is classified as review_only, so this dep is harmless
@@ -284,10 +300,20 @@ func main() {
 			p.PublishPending()
 
 			// ── Issue tracking cycle ─────────────────────────────────────
+			// Check if ANY repo has issue tracking enabled (global or per-repo).
 			cfgMu.Lock()
-			itCfg := c.GitHub.IssueTracking
+			globalIT := c.GitHub.IssueTracking
+			anyITEnabled := globalIT.Enabled
+			if !anyITEnabled {
+				for _, r := range c.AI.Repos {
+					if r.IssueTracking != nil && r.IssueTracking.Enabled {
+						anyITEnabled = true
+						break
+					}
+				}
+			}
 			cfgMu.Unlock()
-			if itCfg.Enabled {
+			if anyITEnabled {
 				loginMu.Lock()
 				authUser := cachedLogin
 				loginMu.Unlock()
@@ -346,8 +372,29 @@ func main() {
 					}
 				}
 
+				// Dependency promotion pass: flip issues carrying a
+				// blocked label to the promote-to label once all their
+				// declared `## Depends on` targets have closed. Runs BEFORE
+				// the fetch so a freshly-promoted issue is picked up in the
+				// same poll cycle rather than waiting for the next one.
+				// No-op when BlockedLabels is unset, so default installs
+				// don't pay for the extra calls.
+				if len(globalIT.BlockedLabels) > 0 {
+					if n, err := issuepipeline.PromoteReady(context.Background(), ghClient, globalIT, repos); err != nil {
+						slog.Error("poll: issue promotion failed", "err", err)
+					} else if n > 0 {
+						slog.Info("poll: promoted issues", "count", n)
+					}
+				}
+
 				for _, repo := range repos {
-					n, err := issueFetcher.ProcessRepo(context.Background(), repo, itCfg, authUser, optsFor)
+					cfgMu.Lock()
+					repoIT := c.IssueTrackingForRepo(repo)
+					cfgMu.Unlock()
+					if !repoIT.Enabled {
+						continue
+					}
+					n, err := issueFetcher.ProcessRepo(context.Background(), repo, repoIT, authUser, optsFor)
 					if err != nil {
 						slog.Error("poll: issue fetch failed", "repo", repo, "err", err)
 						continue
@@ -404,18 +451,24 @@ func main() {
 	}()
 
 	// Expose live config for GET /config
+	srv.SetRepoMetaFns(ghClient.FetchLabels, ghClient.FetchCollaborators)
+
 	srv.SetConfigFn(func() map[string]any {
 		cfgMu.Lock()
 		c := cfg
 		cfgMu.Unlock()
-		repoOverrides := make(map[string]map[string]string)
+		repoOverrides := make(map[string]map[string]any)
 		for repo, ai := range c.AI.Repos {
-			repoOverrides[repo] = map[string]string{
+			ro := map[string]any{
 				"primary":     ai.Primary,
 				"fallback":    ai.Fallback,
 				"review_mode": ai.ReviewMode,
 				"local_dir":   ai.LocalDir,
 			}
+			if ai.IssueTracking != nil {
+				ro["issue_tracking"] = ai.IssueTracking
+			}
+			repoOverrides[repo] = ro
 		}
 		agentConfigs := make(map[string]map[string]any)
 		for name, ac := range c.AI.Agents {
@@ -470,9 +523,11 @@ func main() {
 
 	// Wire the reload callback: re-read config from disk, restart scheduler
 	// and the discovery loop so changes to discovery_topic / orgs / interval
-	// take effect without a daemon restart.
+	// take effect without a daemon restart. Reuses the `loadConfig` closure
+	// captured at startup so the two paths cannot drift on which loader
+	// they pick — both see the same HEIMDALLM_DATA_DIR snapshot.
 	srv.SetReloadFn(func() error {
-		newCfg, err := config.Load(cfgPath)
+		newCfg, err := loadConfig(cfgPath)
 		if err != nil {
 			return fmt.Errorf("reload: %w", err)
 		}

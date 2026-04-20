@@ -19,6 +19,26 @@ services:
       - HEIMDALLM_PORT=${HEIMDALLM_PORT:-7842}
       - HEIMDALLM_BIND_ADDR=0.0.0.0
 
+      # ── Issue tracking pipeline ────────────────────────────────────────
+      # All optional. The daemon's applyIssueTrackingEnv reads these at
+      # startup; without forwarding them here the operator's docker/.env
+      # values stay outside the container and silently get defaults.
+      - HEIMDALLM_ISSUE_TRACKING_ENABLED=${HEIMDALLM_ISSUE_TRACKING_ENABLED:-}
+      - HEIMDALLM_ISSUE_FILTER_MODE=${HEIMDALLM_ISSUE_FILTER_MODE:-}
+      - HEIMDALLM_ISSUE_DEFAULT_ACTION=${HEIMDALLM_ISSUE_DEFAULT_ACTION:-}
+      - HEIMDALLM_ISSUE_ORGANIZATIONS=${HEIMDALLM_ISSUE_ORGANIZATIONS:-}
+      - HEIMDALLM_ISSUE_ASSIGNEES=${HEIMDALLM_ISSUE_ASSIGNEES:-}
+      - HEIMDALLM_ISSUE_DEVELOP_LABELS=${HEIMDALLM_ISSUE_DEVELOP_LABELS:-}
+      - HEIMDALLM_ISSUE_REVIEW_ONLY_LABELS=${HEIMDALLM_ISSUE_REVIEW_ONLY_LABELS:-}
+      - HEIMDALLM_ISSUE_SKIP_LABELS=${HEIMDALLM_ISSUE_SKIP_LABELS:-}
+      - HEIMDALLM_ISSUE_BLOCKED_LABELS=${HEIMDALLM_ISSUE_BLOCKED_LABELS:-}
+      - HEIMDALLM_ISSUE_PROMOTE_TO_LABEL=${HEIMDALLM_ISSUE_PROMOTE_TO_LABEL:-}
+
+      # ── Topic-based repository discovery ───────────────────────────────
+      - HEIMDALLM_DISCOVERY_TOPIC=${HEIMDALLM_DISCOVERY_TOPIC:-}
+      - HEIMDALLM_DISCOVERY_ORGS=${HEIMDALLM_DISCOVERY_ORGS:-}
+      - HEIMDALLM_DISCOVERY_INTERVAL=${HEIMDALLM_DISCOVERY_INTERVAL:-}
+
       # ── AI CLI authentication ──────────────────────────────────────────
       # Claude Code CLI (Anthropic)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -40,8 +60,29 @@ services:
     volumes:
       # Persistent data (SQLite DB + API token)
       - heimdallm-data:/data
-      # Configuration (optional — env vars work without this)
-      - ./config:/config
+      # Configuration. Named volume (not a bind mount) so the daemon user
+      # inside the container owns the directory and can persist the
+      # generated config.toml on first boot. A `./config:/config` bind
+      # mount inherits the host directory's ownership (root, since Docker
+      # creates it on demand), which blocked writeConfigTOML and made
+      # POST /reload return 500 whenever config.toml was missing. The
+      # image already declares VOLUME ["/config"] and chowns the path to
+      # heimdallm:heimdallm during build.
+      #
+      # Migration (pre-v0.1.8 -> this): if you had a customised
+      # docker/config/config.toml under the old bind mount, copy it into
+      # the new named volume BEFORE your first `docker compose up` with
+      # this version, otherwise the daemon will regenerate from env vars
+      # and your manual edits are lost silently:
+      #
+      #   docker compose up --no-start heimdallm     # create container
+      #   docker cp docker/config/config.toml heimdallm:/config/config.toml
+      #   docker compose up -d                        # start with the file in place
+      #
+      # Env-driven setups (HEIMDALLM_* in docker/.env) and saves you made
+      # via the web UI Configuration screen are unaffected; both flow
+      # through the store layer and survive the volume swap.
+      - heimdallm-config:/config
       #
       # Gemini OAuth tokens from host (if using browser-based auth):
       # - ~/.gemini:/home/heimdallm/.gemini:ro
@@ -110,4 +151,6 @@ services:
 
 volumes:
   heimdallm-data:
+    driver: local
+  heimdallm-config:
     driver: local

@@ -194,8 +194,12 @@ func (c *Client) fetchByQualifier(username, qualifier string, repos []string) ([
 
 // SubmitReview posts an AI-generated review to GitHub as a PR review.
 // event should be "REQUEST_CHANGES", "COMMENT", or "APPROVE".
-// Returns the GitHub review ID.
-func (c *Client) SubmitReview(repo string, number int, body, event string) (int64, error) {
+// Returns the GitHub review ID and the review state reported by the API —
+// typically "APPROVED", "CHANGES_REQUESTED", or "COMMENTED" depending on the
+// event and on GitHub's server-side rules. We pass the state through to the
+// store so the web UI can show a review-decision badge sourced from GitHub
+// rather than derived locally from severity.
+func (c *Client) SubmitReview(repo string, number int, body, event string) (int64, string, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d/reviews", repo, number)
 
 	payload := map[string]any{
@@ -206,7 +210,7 @@ func (c *Client) SubmitReview(repo string, number int, body, event string) (int6
 	data, _ := json.Marshal(payload)
 	req, err := http.NewRequest("POST", c.baseURL+path, strings.NewReader(string(data)))
 	if err != nil {
-		return 0, fmt.Errorf("github: submit review: %w", err)
+		return 0, "", fmt.Errorf("github: submit review: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -215,22 +219,23 @@ func (c *Client) SubmitReview(repo string, number int, body, event string) (int6
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("github: submit review: %w", err)
+		return 0, "", fmt.Errorf("github: submit review: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != 200 {
 		errBody := safeTruncate(string(respBody), maxErrBodyLen)
-		return 0, fmt.Errorf("github: submit review: status %d: %s", resp.StatusCode, errBody)
+		return 0, "", fmt.Errorf("github: submit review: status %d: %s", resp.StatusCode, errBody)
 	}
 
 	var result struct {
-		ID int64 `json:"id"`
+		ID    int64  `json:"id"`
+		State string `json:"state"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return 0, fmt.Errorf("github: submit review: decode: %w", err)
+		return 0, "", fmt.Errorf("github: submit review: decode: %w", err)
 	}
-	return result.ID, nil
+	return result.ID, result.State, nil
 }
 
 // PostComment posts a general comment on a PR (issue comment).
@@ -494,4 +499,58 @@ func (c *Client) fetchIssueComments(repo string, number int) ([]Comment, error) 
 		}
 	}
 	return comments, nil
+}
+
+// FetchLabels returns the label names for a repository.
+func (c *Client) FetchLabels(repo string) ([]string, error) {
+	if repo == "" {
+		return nil, nil
+	}
+	resp, err := c.do("GET", fmt.Sprintf("/repos/%s/labels?per_page=100", repo), "application/vnd.github+json")
+	if err != nil {
+		return nil, fmt.Errorf("github: fetch labels: %w", err)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github: fetch labels %s: status %d", repo, resp.StatusCode)
+	}
+	var raw []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("github: decode labels: %w", err)
+	}
+	names := make([]string, len(raw))
+	for i, l := range raw {
+		names[i] = l.Name
+	}
+	return names, nil
+}
+
+// FetchCollaborators returns the login names of repository collaborators.
+func (c *Client) FetchCollaborators(repo string) ([]string, error) {
+	if repo == "" {
+		return nil, nil
+	}
+	resp, err := c.do("GET", fmt.Sprintf("/repos/%s/collaborators?per_page=100", repo), "application/vnd.github+json")
+	if err != nil {
+		return nil, fmt.Errorf("github: fetch collaborators: %w", err)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github: fetch collaborators %s: status %d", repo, resp.StatusCode)
+	}
+	var raw []struct {
+		Login string `json:"login"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("github: decode collaborators: %w", err)
+	}
+	logins := make([]string, len(raw))
+	for i, u := range raw {
+		logins[i] = u.Login
+	}
+	return logins, nil
 }

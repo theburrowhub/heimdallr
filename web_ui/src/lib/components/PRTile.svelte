@@ -1,12 +1,14 @@
 <script lang="ts">
   import { reviewingPRs } from '$lib/stores.js';
   import type { PR } from '$lib/types.js';
+  import ReviewDecisionBadge from './ReviewDecisionBadge.svelte';
   import SeverityBadge from './SeverityBadge.svelte';
 
   let { pr }: { pr: PR } = $props();
 
   const isReviewing = $derived($reviewingPRs.has(pr.id));
   const severity = $derived(pr.latest_review?.severity ?? null);
+  const decisionState = $derived(pr.latest_review?.github_review_state ?? null);
 </script>
 
 <a
@@ -28,6 +30,7 @@
           >reviewing…</span
         >
       {/if}
+      <ReviewDecisionBadge state={decisionState} />
       <SeverityBadge {severity} />
     </div>
   </div>

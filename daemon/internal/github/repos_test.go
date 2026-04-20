@@ -270,6 +270,201 @@ func TestAddLabels_Error(t *testing.T) {
 	}
 }
 
+// ── RemoveLabels ──────────────────────────────────────────────────────────────
+
+func TestRemoveLabels(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	if err := c.RemoveLabels("org/repo", 42, []string{"blocked", "heimdallm-queued"}); err != nil {
+		t.Fatalf("RemoveLabels: %v", err)
+	}
+	// GitHub requires one DELETE per label (no bulk endpoint).
+	want := []string{
+		"DELETE /repos/org/repo/issues/42/labels/blocked",
+		"DELETE /repos/org/repo/issues/42/labels/heimdallm-queued",
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("expected %d calls, got %d: %v", len(want), len(calls), calls)
+	}
+	for i, c := range calls {
+		if c != want[i] {
+			t.Errorf("call %d = %q, want %q", i, c, want[i])
+		}
+	}
+}
+
+func TestRemoveLabels_Noop(t *testing.T) {
+	c := gh.NewClient("fake-token")
+	if err := c.RemoveLabels("org/repo", 42, nil); err != nil {
+		t.Fatalf("expected nil for empty labels, got: %v", err)
+	}
+}
+
+func TestRemoveLabels_MissingLabelTolerated(t *testing.T) {
+	// GitHub returns 404 when the label is not on the issue. Trying to
+	// remove a label that was never applied should not fail the whole
+	// promotion — it's the desired end state.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"message":"Label does not exist"}`))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	if err := c.RemoveLabels("org/repo", 42, []string{"phantom"}); err != nil {
+		t.Errorf("expected nil on 404, got: %v", err)
+	}
+}
+
+func TestRemoveLabels_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	if err := c.RemoveLabels("org/repo", 42, []string{"blocked"}); err == nil {
+		t.Fatal("expected error on 5xx, got nil")
+	}
+}
+
+// ── GetIssue ─────────────────────────────────────────────────────────────────
+
+func TestGetIssue(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/repos/org/repo/issues/42" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"number":42,"state":"closed","pull_request":null}`))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	got, err := c.GetIssue("org/repo", 42)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if got.Number != 42 {
+		t.Errorf("Number = %d, want 42", got.Number)
+	}
+	if got.State != "closed" {
+		t.Errorf("State = %q, want closed", got.State)
+	}
+}
+
+func TestGetIssue_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	if _, err := c.GetIssue("org/repo", 42); err == nil {
+		t.Fatal("expected error on 404, got nil")
+	}
+}
+
+// ── ListSubIssues ─────────────────────────────────────────────────────────────
+
+func TestListSubIssues(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/repos/org/repo/issues/10/sub_issues" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[
+			{"number": 1, "state": "closed", "title": "first child"},
+			{"number": 2, "state": "open",   "title": "second child"}
+		]`))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	got, err := c.ListSubIssues("org/repo", 10)
+	if err != nil {
+		t.Fatalf("ListSubIssues: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].Number != 1 || got[0].State != "closed" {
+		t.Errorf("child[0] = %+v, want number=1 state=closed", got[0])
+	}
+	if got[1].Number != 2 || got[1].State != "open" {
+		t.Errorf("child[1] = %+v, want number=2 state=open", got[1])
+	}
+	// Repo must be resolved so downstream consumers can use IssueRef keys.
+	if got[0].Repo != "org/repo" {
+		t.Errorf("Repo = %q, want org/repo", got[0].Repo)
+	}
+}
+
+func TestListSubIssues_Empty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	got, err := c.ListSubIssues("org/repo", 10)
+	if err != nil {
+		t.Fatalf("ListSubIssues: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d, want 0", len(got))
+	}
+}
+
+func TestListSubIssues_NotFound(t *testing.T) {
+	// If the parent issue doesn't exist, the endpoint 404s. That's a real
+	// error, not an empty list — surface it so the caller logs and the
+	// next cycle retries.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	if _, err := c.ListSubIssues("org/repo", 10); err == nil {
+		t.Fatal("expected error on 404, got nil")
+	}
+}
+
+func TestListSubIssues_CrossRepoSameOwner(t *testing.T) {
+	// GitHub's sub-issues endpoint returns the child issue with a
+	// `repository.full_name` that may differ from the parent's repo (same
+	// owner, different repo). The client must resolve Repo to the actual
+	// child repo, not the parent's, so the promoter keys refs correctly.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[
+			{"number": 5, "state": "closed", "repository": {"full_name": "org/other-repo"}}
+		]`))
+	}))
+	defer srv.Close()
+
+	c := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	got, err := c.ListSubIssues("org/parent-repo", 10)
+	if err != nil {
+		t.Fatalf("ListSubIssues: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Repo != "org/other-repo" {
+		t.Errorf("Repo = %q, want org/other-repo (cross-repo same-owner sub-issue)", got[0].Repo)
+	}
+}
+
 // ── SetAssignees ──────────────────────────────────────────────────────────────
 
 func TestSetAssignees(t *testing.T) {

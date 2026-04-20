@@ -77,6 +77,7 @@ type IssueMode string
 
 const (
 	IssueModeIgnore     IssueMode = "ignore"
+	IssueModeBlocked    IssueMode = "blocked"
 	IssueModeDevelop    IssueMode = "develop"
 	IssueModeReviewOnly IssueMode = "review_only"
 )
@@ -128,9 +129,39 @@ type IssueTrackingConfig struct {
 	// Highest precedence.
 	SkipLabels []string `toml:"skip_labels" json:"skip_labels"`
 
+	// BlockedLabels mark issues whose dependencies (declared in the body
+	// under a `## Depends on` section) are still open. An issue carrying
+	// any of these labels is classified as IssueModeBlocked and skipped by
+	// the fetcher; a separate promotion pass flips the label to the
+	// configured PromoteToLabel once all dependencies close. Precedence
+	// sits between SkipLabels and ReviewOnlyLabels.
+	BlockedLabels []string `toml:"blocked_labels" json:"blocked_labels"`
+
+	// PromoteToLabel is the label added when an issue's dependencies all
+	// close. If empty, the first entry in DevelopLabels is used. Must
+	// resolve to a non-empty value when BlockedLabels is set — otherwise
+	// promotion has no target and blocked issues would stick forever.
+	PromoteToLabel string `toml:"promote_to_label" json:"promote_to_label"`
+
 	// DefaultAction is applied when an issue carries no label from any of
 	// the three lists above. Must be "ignore" or "review_only".
 	DefaultAction string `toml:"default_action" json:"default_action"`
+}
+
+// ResolvePromoteToLabel returns the label that should replace the blocked
+// label(s) when all of an issue's dependencies close. Explicit
+// PromoteToLabel wins; otherwise the first configured DevelopLabel is the
+// natural "ready" target (mirrors the user's existing auto_implement
+// convention). Returns "" when neither is configured — Validate refuses
+// this combination when BlockedLabels is set.
+func (c IssueTrackingConfig) ResolvePromoteToLabel() string {
+	if c.PromoteToLabel != "" {
+		return c.PromoteToLabel
+	}
+	if len(c.DevelopLabels) > 0 {
+		return c.DevelopLabels[0]
+	}
+	return ""
 }
 
 // Classify returns the processing mode for an issue given its labels.
@@ -144,6 +175,9 @@ func (c IssueTrackingConfig) Classify(labels []string) IssueMode {
 	}
 	if labelSetIntersects(set, c.SkipLabels) {
 		return IssueModeIgnore
+	}
+	if labelSetIntersects(set, c.BlockedLabels) {
+		return IssueModeBlocked
 	}
 	if labelSetIntersects(set, c.ReviewOnlyLabels) {
 		return IssueModeReviewOnly
@@ -215,6 +249,10 @@ type RepoAI struct {
 	PRAssignee  string   `toml:"pr_assignee"`  // GitHub login to assign the PR to
 	PRLabels    []string `toml:"pr_labels"`    // labels to add to the PR
 	PRDraft     bool     `toml:"pr_draft"`     // create as draft PR
+
+	// Per-repo issue tracking override. When set, non-zero fields replace
+	// the global [github.issue_tracking] values for this repo only.
+	IssueTracking *IssueTrackingConfig `toml:"issue_tracking,omitempty" json:"issue_tracking,omitempty"`
 }
 
 // PRMetadataConfig holds global defaults for PR creation metadata,
@@ -258,6 +296,49 @@ func (c *Config) AIForRepo(repo string) RepoAI {
 		Primary: c.AI.Primary, Fallback: c.AI.Fallback, ReviewMode: c.AI.ReviewMode,
 		PRReviewers: c.AI.PRMetadata.Reviewers, PRLabels: c.AI.PRMetadata.Labels,
 	}
+}
+
+// IssueTrackingForRepo returns the issue tracking config for a specific repo,
+// merging per-repo overrides (field-level) with the global config.
+// Non-zero per-repo fields win; zero/nil fields inherit from global.
+func (c *Config) IssueTrackingForRepo(repo string) IssueTrackingConfig {
+	global := c.GitHub.IssueTracking
+	if c.AI.Repos == nil {
+		return global
+	}
+	r, ok := c.AI.Repos[repo]
+	if !ok || r.IssueTracking == nil {
+		return global
+	}
+	ov := r.IssueTracking
+	merged := global
+	// Enabled is a bool — zero value (false) is meaningful when the per-repo
+	// override exists. If the per-repo section is present, its Enabled field
+	// wins unconditionally, allowing repos to enable issue tracking even when
+	// the global is off (or disable it when global is on).
+	merged.Enabled = ov.Enabled
+	if len(ov.DevelopLabels) > 0 {
+		merged.DevelopLabels = ov.DevelopLabels
+	}
+	if len(ov.ReviewOnlyLabels) > 0 {
+		merged.ReviewOnlyLabels = ov.ReviewOnlyLabels
+	}
+	if len(ov.SkipLabels) > 0 {
+		merged.SkipLabels = ov.SkipLabels
+	}
+	if ov.FilterMode != "" {
+		merged.FilterMode = ov.FilterMode
+	}
+	if ov.DefaultAction != "" {
+		merged.DefaultAction = ov.DefaultAction
+	}
+	if len(ov.Organizations) > 0 {
+		merged.Organizations = ov.Organizations
+	}
+	if len(ov.Assignees) > 0 {
+		merged.Assignees = ov.Assignees
+	}
+	return merged
 }
 
 // AgentConfigFor returns the CLIAgentConfig for a given CLI name, or an empty struct.
@@ -399,6 +480,12 @@ func (c *Config) applyIssueTrackingEnv() {
 	if list, ok := csvEnv("HEIMDALLM_ISSUE_SKIP_LABELS"); ok {
 		c.GitHub.IssueTracking.SkipLabels = list
 	}
+	if list, ok := csvEnv("HEIMDALLM_ISSUE_BLOCKED_LABELS"); ok {
+		c.GitHub.IssueTracking.BlockedLabels = list
+	}
+	if v := os.Getenv("HEIMDALLM_ISSUE_PROMOTE_TO_LABEL"); v != "" {
+		c.GitHub.IssueTracking.PromoteToLabel = strings.TrimSpace(v)
+	}
 }
 
 // csvEnv parses a comma-separated env var into a trimmed, non-empty list.
@@ -487,6 +574,9 @@ func (c *Config) validateIssueTracking() error {
 	case IssueModeIgnore, IssueModeReviewOnly:
 	default:
 		return fmt.Errorf("config: github.issue_tracking.default_action %q is invalid (must be %q or %q)", it.DefaultAction, IssueModeIgnore, IssueModeReviewOnly)
+	}
+	if len(it.BlockedLabels) > 0 && it.ResolvePromoteToLabel() == "" {
+		return fmt.Errorf("config: github.issue_tracking.blocked_labels set but no promote target — set promote_to_label or populate develop_labels")
 	}
 	return nil
 }

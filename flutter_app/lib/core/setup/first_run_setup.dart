@@ -185,12 +185,35 @@ class FirstRunSetup {
     buf.writeln('repositories = [$repos]');
     // Persist non-monitored repos so the UI can display and re-enable them after restart.
     final nonMonitored = config.repoConfigs.entries
-        .where((e) => !e.value.monitored)
+        .where((e) => !e.value.isMonitored)
         .map((e) => e.key)
         .toList()..sort();
     if (nonMonitored.isNotEmpty) {
       final nonMon = nonMonitored.map((r) => '"${_tomlEscapeString(r)}"').join(', ');
       buf.writeln('non_monitored = [$nonMon]');
+    }
+    buf.writeln();
+
+    // Issue tracking
+    final it = config.issueTracking;
+    buf.writeln('[github.issue_tracking]');
+    buf.writeln('enabled = ${it.enabled}');
+    buf.writeln('filter_mode = "${_tomlEscapeString(it.filterMode)}"');
+    buf.writeln('default_action = "${_tomlEscapeString(it.defaultAction)}"');
+    if (it.developLabels.isNotEmpty) {
+      buf.writeln('develop_labels = [${it.developLabels.map((l) => '"${_tomlEscapeString(l)}"').join(', ')}]');
+    }
+    if (it.reviewOnlyLabels.isNotEmpty) {
+      buf.writeln('review_only_labels = [${it.reviewOnlyLabels.map((l) => '"${_tomlEscapeString(l)}"').join(', ')}]');
+    }
+    if (it.skipLabels.isNotEmpty) {
+      buf.writeln('skip_labels = [${it.skipLabels.map((l) => '"${_tomlEscapeString(l)}"').join(', ')}]');
+    }
+    if (it.organizations.isNotEmpty) {
+      buf.writeln('organizations = [${it.organizations.map((o) => '"${_tomlEscapeString(o)}"').join(', ')}]');
+    }
+    if (it.assignees.isNotEmpty) {
+      buf.writeln('assignees = [${it.assignees.map((a) => '"${_tomlEscapeString(a)}"').join(', ')}]');
     }
     buf.writeln();
 
@@ -234,6 +257,35 @@ class FirstRunSetup {
         if (rc.reviewMode != null) buf.writeln('review_mode = "${_tomlEscapeString(rc.reviewMode!)}"');
         if (rc.localDir != null && rc.localDir!.isNotEmpty) {
           buf.writeln('local_dir = "${_tomlEscapeString(rc.localDir!)}"');
+        }
+        // Issue tracking overrides
+        final hasIT = rc.developLabels != null || rc.reviewOnlyLabels != null ||
+            rc.skipLabels != null || rc.issueFilterMode != null ||
+            rc.issueDefaultAction != null || rc.issueOrganizations != null ||
+            rc.issueAssignees != null;
+        if (hasIT) {
+          buf.writeln('[ai.repos."${_tomlEscapeString(repo)}".issue_tracking]');
+          if (rc.developLabels != null && rc.developLabels!.isNotEmpty) {
+            buf.writeln('develop_labels = [${rc.developLabels!.map((l) => '"${_tomlEscapeString(l)}"').join(', ')}]');
+          }
+          if (rc.reviewOnlyLabels != null && rc.reviewOnlyLabels!.isNotEmpty) {
+            buf.writeln('review_only_labels = [${rc.reviewOnlyLabels!.map((l) => '"${_tomlEscapeString(l)}"').join(', ')}]');
+          }
+          if (rc.skipLabels != null && rc.skipLabels!.isNotEmpty) {
+            buf.writeln('skip_labels = [${rc.skipLabels!.map((l) => '"${_tomlEscapeString(l)}"').join(', ')}]');
+          }
+          if (rc.issueFilterMode != null) {
+            buf.writeln('filter_mode = "${_tomlEscapeString(rc.issueFilterMode!)}"');
+          }
+          if (rc.issueDefaultAction != null) {
+            buf.writeln('default_action = "${_tomlEscapeString(rc.issueDefaultAction!)}"');
+          }
+          if (rc.issueOrganizations != null && rc.issueOrganizations!.isNotEmpty) {
+            buf.writeln('organizations = [${rc.issueOrganizations!.map((o) => '"${_tomlEscapeString(o)}"').join(', ')}]');
+          }
+          if (rc.issueAssignees != null && rc.issueAssignees!.isNotEmpty) {
+            buf.writeln('assignees = [${rc.issueAssignees!.map((a) => '"${_tomlEscapeString(a)}"').join(', ')}]');
+          }
         }
         buf.writeln();
       }

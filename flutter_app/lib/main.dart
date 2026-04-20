@@ -222,7 +222,7 @@ class _BootstrapAppState extends State<_BootstrapApp> with WindowListener {
       _setStatus('Setting up…');
       final config = AppConfig(
         repoConfigs: {
-          for (final r in repos) r: const RepoConfig(monitored: true),
+          for (final r in repos) r: const RepoConfig(prEnabled: true),
         },
       );
       await FirstRunSetup.storeToken(token);
