@@ -2,11 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'activity_filters.dart';
 
-/// Sort mode — must match dashboard_screen.dart's _SortMode.
-/// Duplicated here to avoid exposing private enum; the dashboard passes
-/// the current value and a callback.
-enum SortMode { priority, newest }
-
 /// Compact filter bar for the unified Activity view.
 /// Includes sort buttons, type chips, org/repo popups, search, and reset.
 class ActivityFilterBar extends ConsumerStatefulWidget {

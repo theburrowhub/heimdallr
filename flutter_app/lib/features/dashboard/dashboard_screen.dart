@@ -77,16 +77,18 @@ class DashboardScreen extends ConsumerWidget {
 
 // ── Reviews tab ──────────────────────────────────────────────────────────────
 
-enum _SortMode { priority, newest }
+// SortMode is defined in activity_filters.dart (shared with activity_filter_bar)
 
 const _sortPrefKey = 'activity_sort_mode';
 
-/// Notifier that owns both the sort state and its SharedPreferences persistence.
-class _SortNotifier extends Notifier<_SortMode> {
+final reviewsSortProvider =
+    NotifierProvider<SortNotifier, SortMode>(SortNotifier.new);
+
+class SortNotifier extends Notifier<SortMode> {
   @override
-  _SortMode build() {
+  SortMode build() {
     _loadAsync();
-    return _SortMode.priority;
+    return SortMode.priority;
   }
 
   void _loadAsync() async {
@@ -94,14 +96,14 @@ class _SortNotifier extends Notifier<_SortMode> {
       final prefs = await SharedPreferences.getInstance();
       final value = prefs.getString(_sortPrefKey);
       if (value == 'newest') {
-        state = _SortMode.newest;
+        state = SortMode.newest;
       }
     } catch (e) {
       debugPrint('SortNotifier: failed to load preference: $e');
     }
   }
 
-  void set(_SortMode mode) {
+  void set(SortMode mode) {
     state = mode;
     SharedPreferences.getInstance().then((prefs) {
       prefs.setString(_sortPrefKey, mode.name);
@@ -110,9 +112,6 @@ class _SortNotifier extends Notifier<_SortMode> {
     });
   }
 }
-
-final _reviewsSortProvider =
-    NotifierProvider<_SortNotifier, _SortMode>(_SortNotifier.new);
 
 // ── Unified activity item ────────────────────────────────────────────────────
 
@@ -213,15 +212,15 @@ bool _matchesFilters(_ActivityItem item, ActivityFilters filters) {
   return true;
 }
 
-void _sortItems(List<_ActivityItem> items, _SortMode mode) {
+void _sortItems(List<_ActivityItem> items, SortMode mode) {
   switch (mode) {
-    case _SortMode.priority:
+    case SortMode.priority:
       items.sort((a, b) {
         final sev = _itemPriorityKey(a).compareTo(_itemPriorityKey(b));
         if (sev != 0) return sev;
         return _itemDate(b).compareTo(_itemDate(a));
       });
-    case _SortMode.newest:
+    case SortMode.newest:
       items.sort((a, b) => _itemDate(b).compareTo(_itemDate(a)));
   }
 }
@@ -237,7 +236,7 @@ class _ActivityTabState extends ConsumerState<_ActivityTab> {
   Widget build(BuildContext context) {
     final prsAsync    = ref.watch(prsProvider);
     final issuesAsync = ref.watch(issuesProvider);
-    final sort        = ref.watch(_reviewsSortProvider);
+    final sort        = ref.watch(reviewsSortProvider);
     final filters     = ref.watch(activityFiltersProvider);
 
     // Combine loading states
@@ -279,11 +278,8 @@ class _ActivityTabState extends ConsumerState<_ActivityTab> {
         // Sort + Filter bar — single unified row
         ActivityFilterBar(
           allRepos: allRepos,
-          sort: sort == _SortMode.priority ? SortMode.priority : SortMode.newest,
-          onSortChanged: (mode) {
-            final internal = mode == SortMode.priority ? _SortMode.priority : _SortMode.newest;
-            ref.read(_reviewsSortProvider.notifier).set(internal);
-          },
+          sort: sort,
+          onSortChanged: (mode) => ref.read(reviewsSortProvider.notifier).set(mode),
         ),
         // Filtered count when filters are active
         if (filters.hasFilters)

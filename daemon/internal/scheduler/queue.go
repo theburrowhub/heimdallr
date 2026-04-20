@@ -26,6 +26,11 @@ type WatchItem struct {
 }
 
 // WatchQueue is a thread-safe priority queue ordered by NextCheck.
+// The mutex protects the heap and seen map. Item field mutations (Backoff,
+// NextCheck, LastSeen) happen outside the lock in ReEnqueue/ResetBackoff —
+// this is safe because Tier 3 processes items sequentially (single writer).
+// If concurrent callers ever mutate the same item, the fields should be
+// moved inside the lock.
 type WatchQueue struct {
 	mu    sync.Mutex
 	items watchHeap
