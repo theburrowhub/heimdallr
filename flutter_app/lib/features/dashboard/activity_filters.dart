@@ -36,3 +36,7 @@ class ActivityFilters {
 
 final activityFiltersProvider =
     StateProvider<ActivityFilters>((ref) => const ActivityFilters());
+
+/// Sort mode for the Activity view — shared between dashboard_screen
+/// and activity_filter_bar to avoid duplication.
+enum SortMode { priority, newest }

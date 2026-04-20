@@ -910,10 +910,12 @@ func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem)
 // HandleChange implements scheduler.Tier3ItemChecker.
 func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchItem) error {
 	if item.Type == "pr" {
-		// Apply the same dedup gate as Tier 2: skip dismissed PRs and
-		// recently-reviewed PRs. Note: there is a small TOCTOU window
-		// between this check and the actual runReview call — the worst
-		// case is an occasional harmless duplicate review.
+		// Dedup: skip if the PR was already reviewed at or after the last
+		// detected change — mirrors the same check Tier 2 performs.
+		// NOTE (TOCTOU): between this check and the runReview call below, another
+		// goroutine could complete the same review. The impact is a rare harmless
+		// duplicate review; the in-flight guard in runReview prevents concurrent
+		// reviews of the same PR.
 		if a.PRAlreadyReviewed(item.GithubID, item.LastSeen) {
 			slog.Debug("tier3: PR already reviewed, skipping", "pr", item.Number, "repo", item.Repo)
 			return nil
