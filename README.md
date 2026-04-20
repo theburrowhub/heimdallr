@@ -1,6 +1,6 @@
 # Heimdallm
 
-> AI-powered GitHub PR review agent for macOS and Linux — reviews your pull requests automatically using Claude, Gemini or Codex, posts the review directly to GitHub, and keeps you informed via native notifications.
+> AI-powered GitHub automation for macOS and Linux — reviews your pull requests, triages your issues, and can even open implementation PRs for you. Uses Claude, Gemini, Codex, or OpenCode under the hood, posts everything back as your GitHub account, and keeps you informed via a native menu-bar app or a SvelteKit web UI.
 
 ![Heimdallm dashboard](assets/icon.png)
 
@@ -8,15 +8,29 @@
 
 ## What it does
 
-Heimdallm runs silently in your menu bar. It watches the GitHub PRs where you're requested as a reviewer, runs an AI code review using Claude, Gemini, Codex, or OpenCode, and submits the review back to GitHub — no copy-pasting, no manual prompting.
+Heimdallm runs in the background and does three things, in parallel, at your configured poll interval:
 
-- **Automatic reviews** — polls `review-requested:@me` on GitHub and submits reviews as your GitHub account
-- **Configurable prompts** — general review, security audit, performance, architecture, or your own custom instructions with `{diff}` `{title}` `{author}` placeholders
-- **Two feedback modes** — *single* (one consolidated review) or *multi* (one GitHub comment per issue + summary review), configurable globally and per repo
+### 1. PR reviews
+Watches the PRs where you're requested as a reviewer, runs an AI code review, and submits it to GitHub as your account. No copy-pasting, no manual prompting.
+
+### 2. Issue triage & auto-implement
+Fetches issues from monitored repos, classifies them by label (`review_only` vs `auto_implement` vs `skip`), and for the develop-track ones optionally **creates a branch, commits the change, and opens a PR** against your default branch — fully autonomous on the issues you mark for it.
+
+### 3. Self-monitoring UI
+A SvelteKit web dashboard (`:3000`) with Dashboard, PR list, Issue list, prompt/agent editor, live config editor, and a live log stream. Opens alongside the daemon in Docker mode.
+
+### Headline features
+
+- **Automatic reviews** — polls `review-requested:@me` on GitHub and submits reviews as your account
+- **Issue pipeline** — label-driven triage + optional auto-implement with branch/commit/PR cycle
+- **Configurable prompts** — general review, security audit, performance, architecture, or your own with `{diff}` `{title}` `{author}` `{comments}` placeholders, managed from the web UI at `/agents`
+- **Two feedback modes** — *single* (one consolidated review) or *multi* (one GitHub comment per issue + summary), globally and per repo
 - **Per-repo overrides** — different AI agent, prompt, and feedback mode per repository
+- **Topic-based auto-discovery** — tag repos with a GitHub topic and Heimdallm monitors them without editing config
 - **Severity gating** — only `high` severity triggers `REQUEST_CHANGES`; everything else approves with informational notes
-- **Native desktop** — menu bar icon (macOS), system notifications, dark mode, no Electron
-- **Docker mode** — runs headless as a Docker container for server/CI deployments
+- **Native desktop** — macOS menu-bar app, system notifications, dark mode, no Electron
+- **Web UI** — SvelteKit dashboard with system / light / dark theme toggle, live SSE updates
+- **Docker mode** — single `make up` spins up daemon + web UI for server/team deployments
 
 ---
 
@@ -189,21 +203,25 @@ On first launch Heimdallm detects your `gh` CLI token automatically and sets its
 
 ## Architecture
 
+The **Go daemon** (`heimdalld`, port `7842`) is the engine. It polls GitHub for PRs and issues, dispatches work to the configured AI CLI, posts reviews or opens implementation PRs, and broadcasts state to any connected UI over SSE.
+
+Two first-party UIs talk to it over HTTP:
+
+- **Flutter desktop app** — macOS menu-bar + dashboard, system notifications. Ships inside the `.dmg` / Linux packages.
+- **SvelteKit web UI** — browser dashboard on port `3000`, ships as a second Docker container alongside the daemon.
+
 ```
-Heimdallm.app/
-├── Heimdallm          ← Flutter macOS UI
-└── heimdalld          ← Go daemon (background service)
+Flutter app ─┐
+             ├──→ HTTP / SSE ──→  heimdalld  ──→  GitHub API
+Web UI     ──┘                       │
+                                     ├──→  PR review pipeline   ──→  POST /reviews
+                                     ├──→  Issue triage pipeline
+                                     └──→  Auto-implement       ──→  branch + commits + PR
+                                                 │
+                                      claude / gemini / codex / opencode CLI
 ```
 
-The **Go daemon** (`heimdalld`) runs as a background process on port `7842`. It polls GitHub, runs the AI CLI, posts reviews, and broadcasts events over SSE. The **Flutter app** is a thin UI client — it talks to the daemon over HTTP and shows a menu bar icon, dashboard, and notifications.
-
-```
-Flutter app  ←→  HTTP/SSE  ←→  heimdalld  ←→  GitHub API
-                                     ↓
-                              claude / gemini / codex CLI
-```
-
-In **Docker mode**, the daemon runs standalone without the Flutter UI. Configuration is via environment variables (`HEIMDALLM_*`) or a mounted `config.toml`.
+In **Docker mode** the daemon runs standalone with the web UI container as an optional-but-recommended companion (brought up by default with `make up`). Configuration is via environment variables (`HEIMDALLM_*`) or a mounted `config.toml`, and can be edited live from the web UI at `/config`.
 
 ---
 
@@ -218,15 +236,29 @@ In **Docker mode**, the daemon runs standalone without the Flutter UI. Configura
 
 ### Running locally
 
+Two workflows — pick based on what you're changing:
+
+**Flutter desktop app or daemon Go code** — native toolchain:
 ```bash
-# Clone
 git clone https://github.com/theburrowhub/heimdallm && cd heimdallm
-
-# Run (builds daemon + launches app in debug mode)
-make dev
+make dev          # builds daemon + launches Flutter app in debug mode
 ```
+`make dev` compiles the daemon, embeds it, and launches the Flutter app with `HEIMDALLM_DAEMON_PATH` pointing to the local binary. First run detects your `gh` token and writes `~/.config/heimdallm/config.toml`.
 
-`make dev` compiles the daemon, embeds it, and launches the Flutter app with `HEIMDALLM_DAEMON_PATH` pointing to the local binary. On first run the app detects your `gh` token and creates `~/.config/heimdallm/config.toml`.
+**Web UI or Docker deployment** — containerised:
+```bash
+cp docker/.env.example docker/.env    # fill in GITHUB_TOKEN + provider key
+make up                                # daemon + web UI
+make logs                              # follow both services
+```
+For iterating on the SvelteKit code with HMR against a running daemon:
+```bash
+cd web_ui
+npm install
+HEIMDALLM_API_URL=http://localhost:7842 \
+HEIMDALLM_API_TOKEN=$(docker compose -f ../docker/docker-compose.yml exec -T heimdallm cat /data/api_token) \
+npm run dev
+```
 
 ### Other targets
 
@@ -235,6 +267,13 @@ make test          # Run Go + Flutter test suites on the host
 make test-docker   # Run Go tests inside a pinned Docker image (EDR-safe)
 make dev-daemon    # Run daemon only (debug API at localhost:7842)
 make dev-stop      # Stop the running daemon
+make up            # Docker: bring up daemon + web UI
+make up-daemon     # Docker: daemon only
+make down          # Docker: stop and remove containers
+make logs          # Docker: follow all services
+make restart       # Docker: bounce both containers
+make ps            # Docker: container status
+make setup         # Docker: copy daemon API token into docker/.env (optional)
 make release-local # Build signed + notarized DMG and publish GitHub release
 ```
 
@@ -249,14 +288,18 @@ make release-local # Build signed + notarized DMG and publish GitHub release
 
 ```
 heimdallm/
-├── daemon/                  Go background service
+├── daemon/                  Go background service (port 7842)
 │   └── internal/
-│       ├── github/          GitHub API client (PRs, diffs, submit reviews)
-│       ├── executor/        AI CLI runner (claude, gemini, codex)
-│       ├── pipeline/        Review orchestration
-│       ├── store/           SQLite (prs, reviews, agents)
-│       └── server/          HTTP + SSE API
-├── flutter_app/             macOS UI
+│       ├── github/          GitHub API client (PRs, issues, diffs, reviews)
+│       ├── executor/        AI CLI runner (claude, gemini, codex, opencode)
+│       ├── pipeline/        PR-review orchestration (fase 1)
+│       ├── issues/          Issue triage + auto-implement (fase 2)
+│       ├── discovery/       Topic-based repo auto-discovery
+│       ├── store/           SQLite (prs, issues, reviews, agents)
+│       ├── scheduler/       Poll loop, grace windows
+│       ├── server/          HTTP + SSE API
+│       └── keychain/        Host credential storage
+├── flutter_app/             macOS / Linux desktop UI
 │   └── lib/
 │       ├── features/
 │       │   ├── dashboard/   Reviews tab (My Reviews / My PRs)
@@ -266,18 +309,22 @@ heimdallm/
 │       └── core/
 │           ├── api/         HTTP + SSE client
 │           └── setup/       First-run setup, token detection
+├── web_ui/                  SvelteKit web dashboard (port 3000)
+│   ├── src/
+│   │   ├── routes/          /, /prs, /prs/[id], /issues, /issues/[id],
+│   │   │                    /agents, /config, /logs
+│   │   ├── lib/components/  PRTile, IssueTile, SeverityBadge, FilterBar…
+│   │   └── lib/             api client, SSE client, theme helper
+│   ├── Dockerfile           Node 22-alpine, multi-stage
+│   └── package.json         Svelte 5 + Tailwind v4 + Vitest
 ├── docker/                  Docker deployment
-│   ├── Dockerfile           Multi-stage build (Go + Node.js + 4 AI CLIs)
-│   ├── docker-compose.yml   Production deployment
+│   ├── Dockerfile           Daemon image (Go + Node + 4 AI CLIs)
+│   ├── docker-compose.yml   daemon + web UI services
 │   ├── .env.example         Environment variable reference
 │   └── scripts/             Local test runner (smoke/github/e2e)
-├── .github/workflows/
-│   ├── tests.yml            CI: Go + Flutter tests on PR/main
-│   ├── build.yml            CI: build + release on version tags
-│   ├── tag.yml              Manual: compute semver tag from conventional commits
-│   ├── docker-publish.yml   CI: Docker build validation on PRs
-│   └── release.yml          CI: release-please + Docker push to GHCR
-└── Makefile
+├── AGENTS.md                Policy for AI coding agents working on this repo
+├── .github/workflows/       Tests, build, release-please, Docker publish
+└── Makefile                 Both native and Docker workflows
 ```
 
 ---
