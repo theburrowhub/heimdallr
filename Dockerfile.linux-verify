@@ -78,7 +78,7 @@ RUN apt-get update -y \
     && apt-get install -y --no-install-recommends \
        libayatana-appindicator3-1 libnotify4 libsecret-1-0 \
        dbus-x11 libcanberra-gtk3-module mesa-utils \
-       curl gnupg xdg-utils \
+       curl gnupg xdg-utils libglib2.0-bin \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
        | tee /usr/share/keyrings/githubcli-archive-keyring.gpg > /dev/null \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -87,6 +87,24 @@ RUN apt-get update -y \
     && apt-get update -y \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
+
+# Replace xdg-open with a tiny DBus portal shim. Stock xdg-open inside the
+# container has no browser to dispatch to; calling the host's
+# xdg-desktop-portal directly (via gdbus from libglib2.0-bin) opens URIs in
+# whatever browser the host user has configured, with no MIME database or
+# $BROWSER setup required inside the sandbox. Installed at /usr/local/bin so
+# it precedes Ubuntu's stock /usr/bin/xdg-open on PATH. Requires
+# --security-opt apparmor=unconfined on the container (set in run-linux) so
+# the session-bus call is allowed through.
+RUN { \
+      echo '#!/bin/sh'; \
+      echo 'exec gdbus call --session \'; \
+      echo '  --dest org.freedesktop.portal.Desktop \'; \
+      echo '  --object-path /org/freedesktop/portal/desktop \'; \
+      echo '  --method org.freedesktop.portal.OpenURI.OpenURI \'; \
+      echo '  "" "$1" "{}"'; \
+    } > /usr/local/bin/xdg-open \
+    && chmod +x /usr/local/bin/xdg-open
 
 # ── Node.js + AI CLIs ────────────────────────────────────────────────────────
 # The bundled daemon inside this image runs the review pipeline, which shells

@@ -453,6 +453,7 @@ run-linux:
 	  --name heimdallm-run \
 	  --env-file "$$ENV_FILE" \
 	  --user "$$UID_VAL:$$GID_VAL" \
+	  --security-opt apparmor=unconfined \
 	  -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
 	  -v /run/dbus:/run/dbus:ro \
 	  $$DBUS_ARGS \
