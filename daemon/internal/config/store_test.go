@@ -176,6 +176,13 @@ func TestApplyStore_PartialFailure_LeavesCfgUnchanged(t *testing.T) {
 	// Atomicity contract: if ANY row fails to decode, NO row is applied.
 	// Otherwise the caller's "continuing with TOML+env" warning misrepresents
 	// the state and we ship a half-hybrid Config to the scheduler.
+	//
+	// The test is order-independent by design: Go randomises map iteration,
+	// so on some runs poll_interval is decoded first (the valid row would
+	// "land" under a non-atomic implementation) and on others repositories
+	// is decoded first (the failure short-circuits before poll_interval is
+	// seen at all). Both orderings assert the same end state because the
+	// shadow-copy pattern only promotes the batch on full success.
 	cfg := &Config{}
 	cfg.applyDefaults()
 	cfg.GitHub.PollInterval = "5m"

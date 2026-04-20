@@ -51,9 +51,14 @@ func (c *Config) MergeStoreLayer(s StoreLister) error {
 // single malformed row therefore leaves the receiver untouched, so the
 // caller's error-path ("continuing with TOML+env") is truthful.
 //
-// `server_port` is intentionally NOT supported: mutating the listening port
-// at runtime would invalidate every in-flight connection and the web UI has
-// no surface for it. Bootstrap-only.
+// INVARIANT — shallow copy + wholesale replacement: `shadow := *c` is a
+// shallow copy, so `shadow.AI.Agents` and `shadow.AI.Repos` (both maps)
+// still share backing storage with the receiver. Today every case below
+// *replaces the whole field* (slice/struct/string assignment) rather than
+// mutating it in place, so the atomicity guarantee holds. If you ever add
+// a case that writes into an existing map (e.g. `shadow.AI.Agents[k] = v`)
+// you MUST deep-copy that map into the shadow first, or the mutation will
+// leak through to the receiver even when a later row fails.
 func (c *Config) ApplyStore(rows map[string]string) error {
 	shadow := *c
 	for key, raw := range rows {
@@ -84,6 +89,11 @@ func (c *Config) ApplyStore(rows map[string]string) error {
 				return fmt.Errorf("config: apply store key %q: %w", key, err)
 			}
 			shadow.GitHub.IssueTracking = it
+		case "server_port":
+			// Explicitly unsupported (not unknown): mutating the listening
+			// port at runtime would invalidate every in-flight connection
+			// and the web UI has no surface for it. Bootstrap-only.
+			slog.Warn("config: server_port is bootstrap-only, ignoring store override", "key", key)
 		default:
 			slog.Warn("config: unknown store key, skipping", "key", key)
 		}
