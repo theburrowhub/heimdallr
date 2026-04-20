@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Review } from '$lib/types.js';
+  import ReviewDecisionBadge from './ReviewDecisionBadge.svelte';
   import SeverityBadge from './SeverityBadge.svelte';
 
   let { review }: { review: Review } = $props();
@@ -11,6 +12,7 @@
   <header class="mb-2 flex items-center justify-between gap-2">
     <div class="flex items-center gap-2">
       <SeverityBadge severity={review.severity} />
+      <ReviewDecisionBadge state={review.github_review_state} />
       <span class="text-xs text-gray-500 dark:text-gray-400">{review.cli_used}</span>
     </div>
     <time class="text-xs text-gray-400 dark:text-gray-500" datetime={review.created_at}>

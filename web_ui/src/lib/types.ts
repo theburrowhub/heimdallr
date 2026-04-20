@@ -28,6 +28,7 @@ export interface Review {
   severity: string;
   created_at: string;
   github_review_id: number; // 0 = not yet published to GitHub
+  github_review_state: string; // GitHub review state: APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING, or '' if not yet published
 }
 
 export interface PR {
