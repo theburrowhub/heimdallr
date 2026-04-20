@@ -1,7 +1,6 @@
 <script lang="ts">
   import { browser } from '$app/environment';
   import { connectLogs, detectLevel, type LogLevel, type LogsHandle } from '$lib/logs.js';
-  import { onDestroy } from 'svelte';
 
   // How many lines we hold in memory. Enough to scroll back meaningfully
   // without letting a chatty daemon eat a GB of heap after an hour.
@@ -24,6 +23,10 @@
   let linesUnsub: (() => void) | undefined;
   let connUnsub: (() => void) | undefined;
 
+  // $effect owns the full lifecycle: it opens the SSE stream on mount,
+  // returns a teardown that runs before the component is destroyed AND on
+  // each re-run. No separate onDestroy is needed — having both would double
+  // up on idempotent close()/unsub() calls and obscure the lifecycle.
   $effect(() => {
     if (!browser) return;
     logsHandle = connectLogs();
@@ -43,12 +46,6 @@
       connUnsub?.();
       logsHandle?.close();
     };
-  });
-
-  onDestroy(() => {
-    linesUnsub?.();
-    connUnsub?.();
-    logsHandle?.close();
   });
 
   function scrollToBottom(): void {

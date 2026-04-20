@@ -304,8 +304,11 @@
       type="text"
       value={values.join(', ')}
       oninput={(e) => onUpdate(parseCsv((e.currentTarget as HTMLInputElement).value))}
-      placeholder="comma, separated"
+      placeholder="bug, feature, needs-triage"
       class="rounded border border-gray-300 px-2 py-1 font-mono text-xs"
     />
+    <span class="text-xs text-gray-500"
+      >Comma-separated. No quotes or spaces needed around values.</span
+    >
   </label>
 {/snippet}

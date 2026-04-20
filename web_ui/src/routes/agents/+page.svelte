@@ -205,8 +205,14 @@
             bind:value={editor.id}
             placeholder="security-audit"
             required
-            class="rounded border border-gray-300 px-2 py-1 font-mono text-xs"
+            disabled={!!editor.created_at}
+            class="rounded border border-gray-300 px-2 py-1 font-mono text-xs disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
           />
+          {#if editor.created_at}
+            <span class="text-xs text-gray-500">
+              ID is immutable after creation — changing it would orphan the existing agent.
+            </span>
+          {/if}
         </label>
         <label class="flex flex-col gap-1 text-sm">
           Name (human-readable)
