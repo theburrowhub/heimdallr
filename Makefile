@@ -420,6 +420,10 @@ run-linux:
 	else \
 	  echo "⚠  /dev/dri not found — using software rendering (llvmpipe)." ; \
 	fi ; \
+	GH_CONFIG_ARGS="" ; \
+	if [ -d "$$HOME/.config/gh" ]; then \
+	  GH_CONFIG_ARGS="-v $$HOME/.config/gh:$$HOME/.config/gh:ro" ; \
+	fi ; \
 	\
 	echo "▶  Launching Heimdallm (Linux) via Docker..." ; \
 	echo "   Close the app window or press Ctrl-C to stop." ; \
@@ -434,6 +438,7 @@ run-linux:
 	  $$DBUS_ARGS \
 	  -v "$$HOME/.config/heimdallm:$$HOME/.config/heimdallm" \
 	  -v "$$HOME/.local/share/heimdallm:$$HOME/.local/share/heimdallm" \
+	  $$GH_CONFIG_ARGS \
 	  $$GPU_ARGS \
 	  --ipc=host \
 	  --net=host \
