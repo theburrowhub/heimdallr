@@ -90,7 +90,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
       setState(() {
         for (final repo in discovered) {
           // Keep existing toggle state; default new ones to monitored
-          _repoConfigs.putIfAbsent(repo, () => const RepoConfig(monitored: true));
+          _repoConfigs.putIfAbsent(repo, () => const RepoConfig(prEnabled: true));
         }
         _discovering = false;
       });
@@ -242,15 +242,15 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
       margin: const EdgeInsets.only(bottom: 4),
       child: ExpansionTile(
         leading: Switch(
-          value: rc.monitored,
+          value: rc.isMonitored,
           onChanged: (v) => setState(() {
-            _repoConfigs[repo] = rc.copyWith(monitored: v);
+            _repoConfigs[repo] = rc.copyWith(prEnabled: v);
           }),
         ),
         title: Text(repo,
             style: TextStyle(
-              color: rc.monitored ? null : Colors.grey,
-              fontWeight: rc.monitored ? FontWeight.w600 : FontWeight.normal,
+              color: rc.isMonitored ? null : Colors.grey,
+              fontWeight: rc.isMonitored ? FontWeight.w600 : FontWeight.normal,
             )),
         subtitle: rc.hasAiOverride
             ? Text('AI: ${rc.aiPrimary ?? "global"}', style: const TextStyle(fontSize: 12))

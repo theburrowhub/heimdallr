@@ -55,7 +55,7 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
       if (!mounted) return;
       setState(() {
         for (final repo in discovered) {
-          _repoConfigs.putIfAbsent(repo, () => const RepoConfig(monitored: true));
+          _repoConfigs.putIfAbsent(repo, () => const RepoConfig(prEnabled: true));
         }
         _discovering = false;
         if (discovered.isEmpty) _discoverError = 'No active PRs found.';
@@ -101,8 +101,8 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
         // Monitored first, disabled last; both groups sorted alphabetically
         final allRepos = _repoConfigs.keys.toList()
           ..sort((a, b) {
-            final ma = _repoConfigs[a]!.monitored ? 0 : 1;
-            final mb = _repoConfigs[b]!.monitored ? 0 : 1;
+            final ma = _repoConfigs[a]!.isMonitored ? 0 : 1;
+            final mb = _repoConfigs[b]!.isMonitored ? 0 : 1;
             if (ma != mb) return ma.compareTo(mb);
             return a.compareTo(b);
           });
@@ -220,9 +220,9 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
   @override
   Widget build(BuildContext context) {
     final monitored =
-        widget.repos.where((r) => widget.configs[r]!.monitored).toList();
+        widget.repos.where((r) => widget.configs[r]!.isMonitored).toList();
     final disabled =
-        widget.repos.where((r) => !widget.configs[r]!.monitored).toList();
+        widget.repos.where((r) => !widget.configs[r]!.isMonitored).toList();
 
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -359,8 +359,8 @@ class _RepoTile extends StatelessWidget {
           child: Row(
             children: [
               Switch(
-                value: config.monitored,
-                onChanged: (v) => onChanged(config.copyWith(monitored: v)),
+                value: config.isMonitored,
+                onChanged: (v) => onChanged(config.copyWith(prEnabled: v)),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -369,8 +369,8 @@ class _RepoTile extends StatelessWidget {
                   children: [
                     Text(repo,
                         style: TextStyle(
-                          fontWeight: config.monitored ? FontWeight.w600 : FontWeight.normal,
-                          color: config.monitored ? null : Colors.grey,
+                          fontWeight: config.isMonitored ? FontWeight.w600 : FontWeight.normal,
+                          color: config.isMonitored ? null : Colors.grey,
                         )),
                     const SizedBox(height: 2),
                     Row(children: [

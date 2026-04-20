@@ -185,7 +185,7 @@ class FirstRunSetup {
     buf.writeln('repositories = [$repos]');
     // Persist non-monitored repos so the UI can display and re-enable them after restart.
     final nonMonitored = config.repoConfigs.entries
-        .where((e) => !e.value.monitored)
+        .where((e) => !e.value.isMonitored)
         .map((e) => e.key)
         .toList()..sort();
     if (nonMonitored.isNotEmpty) {

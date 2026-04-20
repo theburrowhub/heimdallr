@@ -20,7 +20,7 @@ void main() {
     const config = AppConfig(
       pollInterval: '5m',
       aiPrimary: 'claude',
-      repoConfigs: {'org/repo': RepoConfig(monitored: true)},
+      repoConfigs: {'org/repo': RepoConfig(prEnabled: true)},
     );
 
     final mockApi = MockApiClient();

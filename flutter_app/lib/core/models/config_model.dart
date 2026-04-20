@@ -85,88 +85,135 @@ class CLIAgentConfig {
 
 /// Per-repo AI override. null fields mean "use global default".
 class RepoConfig {
-  final bool monitored;
-  final String? aiPrimary;   // null = use global
-  final String? aiFallback;  // null = use global
-  final String? promptId;    // null = use globally active prompt
-  final String? reviewMode;  // null = use global ("single" | "multi")
-  final String? localDir;    // local repo directory for full-repo analysis
+  // Per-feature activation (null = inherit global behavior)
+  final bool? prEnabled;      // PR auto-review
+  final bool? itEnabled;      // Issue tracking (triage)
+  final bool? devEnabled;     // Develop (auto-implement)
+
+  // General
+  final String? localDir;     // local repo directory for full-repo analysis
+
+  // PR Review config
+  final String? aiPrimary;    // null = use global
+  final String? aiFallback;   // null = use global
+  final String? promptId;     // null = use globally active prompt
+  final String? reviewMode;   // null = use global ("single" | "multi")
 
   // Issue tracking overrides (null = inherit global)
-  final List<String>? developLabels;
   final List<String>? reviewOnlyLabels;
   final List<String>? skipLabels;
   final String? issueFilterMode;
   final String? issueDefaultAction;
   final List<String>? issueOrganizations;
   final List<String>? issueAssignees;
+  final String? issuePromptId;
 
-  // PR metadata (null = inherit global)
+  // Develop overrides (null = inherit global)
+  final List<String>? developLabels;
+  final String? developPromptId;
+
+  // PR metadata applied after auto_implement creates a PR
   final List<String>? prReviewers;
   final String? prAssignee;
   final List<String>? prLabels;
   final bool? prDraft;
 
   const RepoConfig({
-    this.monitored = true,
+    this.prEnabled,
+    this.itEnabled,
+    this.devEnabled,
+    this.localDir,
     this.aiPrimary,
     this.aiFallback,
     this.promptId,
     this.reviewMode,
-    this.localDir,
-    this.developLabels,
     this.reviewOnlyLabels,
     this.skipLabels,
     this.issueFilterMode,
     this.issueDefaultAction,
     this.issueOrganizations,
     this.issueAssignees,
+    this.issuePromptId,
+    this.developLabels,
+    this.developPromptId,
     this.prReviewers,
     this.prAssignee,
     this.prLabels,
     this.prDraft,
   });
 
+  /// True if any feature is actively enabled (per-repo or inherited).
+  /// Used by the repo list to classify monitored vs not-monitored.
+  bool get isMonitored => (prEnabled ?? false) || (itEnabled ?? false) || (devEnabled ?? false);
+
+  /// Legacy getter — repos with any override need to be written to TOML.
   bool get hasAiOverride =>
+      prEnabled != null || itEnabled != null || devEnabled != null ||
       aiPrimary != null || aiFallback != null || promptId != null ||
       reviewMode != null || (localDir != null && localDir!.isNotEmpty) ||
       developLabels != null || reviewOnlyLabels != null || skipLabels != null ||
       issueFilterMode != null || issueDefaultAction != null ||
+      issuePromptId != null || developPromptId != null ||
       prReviewers != null || prAssignee != null || prLabels != null;
 
+  /// LED status for each feature: 'off', 'global', 'repo'
+  String prLedStatus(bool globalMonitored) {
+    if (prEnabled == true) return 'repo';
+    if (prEnabled == false) return 'off';
+    return globalMonitored ? 'global' : 'off';
+  }
+  String itLedStatus(bool globalITEnabled) {
+    if (itEnabled == true) return 'repo';
+    if (itEnabled == false) return 'off';
+    return globalITEnabled ? 'global' : 'off';
+  }
+  String devLedStatus(bool globalITEnabled, bool hasLocalDir) {
+    if (devEnabled == true && hasLocalDir) return 'repo';
+    if (devEnabled == false) return 'off';
+    return (globalITEnabled && hasLocalDir) ? 'global' : 'off';
+  }
+
   RepoConfig copyWith({
-    bool? monitored,
-    Object? aiPrimary         = _sentinel,
-    Object? aiFallback        = _sentinel,
-    Object? promptId          = _sentinel,
-    Object? reviewMode        = _sentinel,
-    Object? localDir          = _sentinel,
-    Object? developLabels     = _sentinel,
-    Object? reviewOnlyLabels  = _sentinel,
-    Object? skipLabels        = _sentinel,
-    Object? issueFilterMode   = _sentinel,
+    Object? prEnabled          = _sentinel,
+    Object? itEnabled          = _sentinel,
+    Object? devEnabled         = _sentinel,
+    Object? localDir           = _sentinel,
+    Object? aiPrimary          = _sentinel,
+    Object? aiFallback         = _sentinel,
+    Object? promptId           = _sentinel,
+    Object? reviewMode         = _sentinel,
+    Object? reviewOnlyLabels   = _sentinel,
+    Object? skipLabels         = _sentinel,
+    Object? issueFilterMode    = _sentinel,
     Object? issueDefaultAction = _sentinel,
     Object? issueOrganizations = _sentinel,
-    Object? issueAssignees    = _sentinel,
-    Object? prReviewers       = _sentinel,
-    Object? prAssignee        = _sentinel,
-    Object? prLabels          = _sentinel,
-    Object? prDraft           = _sentinel,
+    Object? issueAssignees     = _sentinel,
+    Object? issuePromptId      = _sentinel,
+    Object? developLabels      = _sentinel,
+    Object? developPromptId    = _sentinel,
+    Object? prReviewers        = _sentinel,
+    Object? prAssignee         = _sentinel,
+    Object? prLabels           = _sentinel,
+    Object? prDraft            = _sentinel,
   }) {
     return RepoConfig(
-      monitored:          monitored          ?? this.monitored,
+      prEnabled:          prEnabled          == _sentinel ? this.prEnabled          : prEnabled          as bool?,
+      itEnabled:          itEnabled          == _sentinel ? this.itEnabled          : itEnabled          as bool?,
+      devEnabled:         devEnabled         == _sentinel ? this.devEnabled         : devEnabled         as bool?,
+      localDir:           localDir           == _sentinel ? this.localDir           : localDir           as String?,
       aiPrimary:          aiPrimary          == _sentinel ? this.aiPrimary          : aiPrimary          as String?,
       aiFallback:         aiFallback         == _sentinel ? this.aiFallback         : aiFallback         as String?,
       promptId:           promptId           == _sentinel ? this.promptId           : promptId           as String?,
       reviewMode:         reviewMode         == _sentinel ? this.reviewMode         : reviewMode         as String?,
-      localDir:           localDir           == _sentinel ? this.localDir           : localDir           as String?,
-      developLabels:      developLabels      == _sentinel ? this.developLabels      : developLabels      as List<String>?,
       reviewOnlyLabels:   reviewOnlyLabels   == _sentinel ? this.reviewOnlyLabels   : reviewOnlyLabels   as List<String>?,
       skipLabels:         skipLabels         == _sentinel ? this.skipLabels         : skipLabels         as List<String>?,
       issueFilterMode:    issueFilterMode    == _sentinel ? this.issueFilterMode    : issueFilterMode    as String?,
       issueDefaultAction: issueDefaultAction == _sentinel ? this.issueDefaultAction : issueDefaultAction as String?,
       issueOrganizations: issueOrganizations == _sentinel ? this.issueOrganizations : issueOrganizations as List<String>?,
       issueAssignees:     issueAssignees     == _sentinel ? this.issueAssignees     : issueAssignees     as List<String>?,
+      issuePromptId:      issuePromptId      == _sentinel ? this.issuePromptId      : issuePromptId      as String?,
+      developLabels:      developLabels      == _sentinel ? this.developLabels      : developLabels      as List<String>?,
+      developPromptId:    developPromptId    == _sentinel ? this.developPromptId    : developPromptId    as String?,
       prReviewers:        prReviewers        == _sentinel ? this.prReviewers        : prReviewers        as List<String>?,
       prAssignee:         prAssignee         == _sentinel ? this.prAssignee         : prAssignee         as String?,
       prLabels:           prLabels           == _sentinel ? this.prLabels           : prLabels           as List<String>?,
@@ -289,8 +336,9 @@ class AppConfig {
   });
 
   /// Computed list of monitored repos — this is what the daemon uses.
+  /// A repo is monitored if any of its 3 features (PR, IT, Dev) is active.
   List<String> get repositories => (repoConfigs.entries
-      .where((e) => e.value.monitored)
+      .where((e) => e.value.isMonitored)
       .map((e) => e.key)
       .toList()
     ..sort());
@@ -333,12 +381,13 @@ class AppConfig {
   factory AppConfig.fromJson(Map<String, dynamic> json) {
     final repos = (json['repositories'] as List<dynamic>?)?.cast<String>() ?? [];
     final configs = <String, RepoConfig>{
-      for (final r in repos) r: const RepoConfig(monitored: true),
+      // Repos in the monitored list have PR review enabled
+      for (final r in repos) r: const RepoConfig(prEnabled: true),
     };
     // Restore non-monitored repos
     final nonMonitored = (json['non_monitored'] as List<dynamic>?)?.cast<String>() ?? [];
     for (final r in nonMonitored) {
-      configs.putIfAbsent(r, () => const RepoConfig(monitored: false));
+      configs.putIfAbsent(r, () => const RepoConfig());
     }
     // Per-repo overrides (normalize empty strings to null)
     final overrides = json['repo_overrides'] as Map<String, dynamic>?;
@@ -347,19 +396,25 @@ class AppConfig {
         final ov = entry.value as Map<String, dynamic>;
         final existing = configs[entry.key];
         final itRaw = ov['issue_tracking'] as Map<String, dynamic>?;
+        final itEnabled = itRaw?['enabled'] as bool?;
         configs[entry.key] = RepoConfig(
-          monitored:          existing?.monitored ?? configs.containsKey(entry.key),
+          prEnabled:          existing?.prEnabled,
+          itEnabled:          itEnabled,
+          devEnabled:         itRaw?['develop_enabled'] as bool?,
+          localDir:           _nonEmpty(ov['local_dir']),
           aiPrimary:          _nonEmpty(ov['primary']),
           aiFallback:         _nonEmpty(ov['fallback']),
           reviewMode:         _nonEmpty(ov['review_mode']),
-          localDir:           _nonEmpty(ov['local_dir']),
-          developLabels:      itRaw != null ? _nullableStringList(itRaw['develop_labels']) : null,
+          promptId:           _nonEmpty(ov['prompt']),
           reviewOnlyLabels:   itRaw != null ? _nullableStringList(itRaw['review_only_labels']) : null,
           skipLabels:         itRaw != null ? _nullableStringList(itRaw['skip_labels']) : null,
           issueFilterMode:    itRaw != null ? _nonEmpty(itRaw['filter_mode']) : null,
           issueDefaultAction: itRaw != null ? _nonEmpty(itRaw['default_action']) : null,
           issueOrganizations: itRaw != null ? _nullableStringList(itRaw['organizations']) : null,
           issueAssignees:     itRaw != null ? _nullableStringList(itRaw['assignees']) : null,
+          issuePromptId:      itRaw != null ? _nonEmpty(itRaw['issue_prompt']) : null,
+          developLabels:      itRaw != null ? _nullableStringList(itRaw['develop_labels']) : null,
+          developPromptId:    itRaw != null ? _nonEmpty(itRaw['develop_prompt']) : null,
           prReviewers:        _nullableStringList(ov['pr_reviewers']),
           prAssignee:         _nonEmpty(ov['pr_assignee']),
           prLabels:           _nullableStringList(ov['pr_labels']),
