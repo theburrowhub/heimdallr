@@ -775,6 +775,74 @@ func TestAIForRepo_PerRepoInheritsGlobal(t *testing.T) {
 	}
 }
 
+// ── IssueTrackingForRepo ─────────────────────────────────────────────────────
+
+func TestIssueTrackingForRepo_GlobalOnly(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:       true,
+		FilterMode:    FilterModeExclusive,
+		DevelopLabels: []string{"bug", "feature"},
+		SkipLabels:    []string{"wontfix"},
+		DefaultAction: "ignore",
+	}
+	got := c.IssueTrackingForRepo("org/repo")
+	if !got.Enabled || got.FilterMode != FilterModeExclusive {
+		t.Errorf("expected global values, got %+v", got)
+	}
+	if len(got.DevelopLabels) != 2 || got.DevelopLabels[0] != "bug" {
+		t.Errorf("develop_labels = %v, want [bug feature]", got.DevelopLabels)
+	}
+}
+
+func TestIssueTrackingForRepo_PerRepoOverride(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:       true,
+		FilterMode:    FilterModeExclusive,
+		DevelopLabels: []string{"bug", "feature"},
+		SkipLabels:    []string{"wontfix"},
+		DefaultAction: "ignore",
+	}
+	c.AI.Primary = "claude"
+	c.AI.Repos = map[string]RepoAI{
+		"org/secure-repo": {
+			IssueTracking: &IssueTrackingConfig{
+				DevelopLabels: []string{"security-fix"},
+				SkipLabels:    []string{"wontfix", "stale"},
+			},
+		},
+	}
+	got := c.IssueTrackingForRepo("org/secure-repo")
+	if len(got.DevelopLabels) != 1 || got.DevelopLabels[0] != "security-fix" {
+		t.Errorf("develop_labels = %v, want [security-fix]", got.DevelopLabels)
+	}
+	if len(got.SkipLabels) != 2 {
+		t.Errorf("skip_labels = %v, want [wontfix stale]", got.SkipLabels)
+	}
+	if got.FilterMode != FilterModeExclusive {
+		t.Errorf("filter_mode = %v, want exclusive (inherited)", got.FilterMode)
+	}
+	if got.DefaultAction != "ignore" {
+		t.Errorf("default_action = %v, want ignore (inherited)", got.DefaultAction)
+	}
+	if !got.Enabled {
+		t.Error("enabled should be inherited as true")
+	}
+}
+
+func TestIssueTrackingForRepo_UnknownRepo(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:    true,
+		SkipLabels: []string{"wontfix"},
+	}
+	got := c.IssueTrackingForRepo("org/unknown")
+	if !got.Enabled || len(got.SkipLabels) != 1 {
+		t.Errorf("unknown repo should return global, got %+v", got)
+	}
+}
+
 // ── AgentConfigFor ───────────────────────────────────────────────────────────
 
 func TestAgentConfigFor_Found(t *testing.T) {

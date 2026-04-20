@@ -249,6 +249,10 @@ type RepoAI struct {
 	PRAssignee  string   `toml:"pr_assignee"`  // GitHub login to assign the PR to
 	PRLabels    []string `toml:"pr_labels"`    // labels to add to the PR
 	PRDraft     bool     `toml:"pr_draft"`     // create as draft PR
+
+	// Per-repo issue tracking override. When set, non-zero fields replace
+	// the global [github.issue_tracking] values for this repo only.
+	IssueTracking *IssueTrackingConfig `toml:"issue_tracking,omitempty" json:"issue_tracking,omitempty"`
 }
 
 // PRMetadataConfig holds global defaults for PR creation metadata,
@@ -292,6 +296,44 @@ func (c *Config) AIForRepo(repo string) RepoAI {
 		Primary: c.AI.Primary, Fallback: c.AI.Fallback, ReviewMode: c.AI.ReviewMode,
 		PRReviewers: c.AI.PRMetadata.Reviewers, PRLabels: c.AI.PRMetadata.Labels,
 	}
+}
+
+// IssueTrackingForRepo returns the issue tracking config for a specific repo,
+// merging per-repo overrides (field-level) with the global config.
+// Non-zero per-repo fields win; zero/nil fields inherit from global.
+func (c *Config) IssueTrackingForRepo(repo string) IssueTrackingConfig {
+	global := c.GitHub.IssueTracking
+	if c.AI.Repos == nil {
+		return global
+	}
+	r, ok := c.AI.Repos[repo]
+	if !ok || r.IssueTracking == nil {
+		return global
+	}
+	ov := r.IssueTracking
+	merged := global
+	if len(ov.DevelopLabels) > 0 {
+		merged.DevelopLabels = ov.DevelopLabels
+	}
+	if len(ov.ReviewOnlyLabels) > 0 {
+		merged.ReviewOnlyLabels = ov.ReviewOnlyLabels
+	}
+	if len(ov.SkipLabels) > 0 {
+		merged.SkipLabels = ov.SkipLabels
+	}
+	if ov.FilterMode != "" {
+		merged.FilterMode = ov.FilterMode
+	}
+	if ov.DefaultAction != "" {
+		merged.DefaultAction = ov.DefaultAction
+	}
+	if len(ov.Organizations) > 0 {
+		merged.Organizations = ov.Organizations
+	}
+	if len(ov.Assignees) > 0 {
+		merged.Assignees = ov.Assignees
+	}
+	return merged
 }
 
 // AgentConfigFor returns the CLIAgentConfig for a given CLI name, or an empty struct.
