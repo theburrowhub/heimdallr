@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -49,7 +50,17 @@ func main() {
 		}
 	}
 
-	setupLogging()
+	// Resolve the data directory first so setupLogging can mirror the
+	// daemon's slog output into <dataDir>/heimdallm.log. The web UI's
+	// /logs stream reads that file; writing only to stderr (as we used
+	// to) left the stream empty under Docker — see #75.
+	logDir := dataDir()
+	logFile := setupLogging(logDir)
+	if logFile != nil {
+		// Flush buffered writes on shutdown so the last lines reach
+		// disk even when the daemon is killed mid-log.
+		defer logFile.Close()
+	}
 
 	cfgPath := configPath()
 	var cfg *config.Config
@@ -657,10 +668,41 @@ func main() {
 	broker.Stop()
 }
 
-func setupLogging() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})))
+// setupLogging configures slog to write to stderr and, when possible, also
+// to <dataDir>/heimdallm.log — the file the web UI's /logs endpoint tails
+// (see #75). Returns the opened file handle so the caller can Close it on
+// shutdown; returns nil when we're running stderr-only (either dataDir is
+// empty or the file open failed). Either way the daemon never refuses to
+// start because logging to disk failed; `docker logs` / the host terminal
+// continue to work.
+func setupLogging(dataDir string) *os.File {
+	handlerOpts := &slog.HandlerOptions{Level: slog.LevelInfo}
+
+	if dataDir == "" {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, handlerOpts)))
+		return nil
+	}
+
+	// O_APPEND so restarts extend the log rather than truncating it;
+	// 0640 so the web container (different UID, same data volume) could
+	// read via group membership, and the host user keeps full write
+	// access. The web container today reads this over HTTP via the
+	// daemon, not directly, but keeping the mode narrow is still the
+	// right posture.
+	logPath := filepath.Join(dataDir, server.DaemonLogFileName)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
+	if err != nil {
+		// Warn via a temporary logger that is visible on stderr even
+		// before SetDefault runs below.
+		tmp := slog.New(slog.NewTextHandler(os.Stderr, handlerOpts))
+		tmp.Warn("logging: could not open daemon log file, stderr only",
+			"path", logPath, "err", err)
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, handlerOpts)))
+		return nil
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, f), handlerOpts)))
+	return f
 }
 
 // dataDir resolves the data directory.
