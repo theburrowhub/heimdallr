@@ -775,6 +775,104 @@ func TestAIForRepo_PerRepoInheritsGlobal(t *testing.T) {
 	}
 }
 
+// ── IssueTrackingForRepo ─────────────────────────────────────────────────────
+
+func TestIssueTrackingForRepo_GlobalOnly(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:       true,
+		FilterMode:    FilterModeExclusive,
+		DevelopLabels: []string{"bug", "feature"},
+		SkipLabels:    []string{"wontfix"},
+		DefaultAction: "ignore",
+	}
+	got := c.IssueTrackingForRepo("org/repo")
+	if !got.Enabled || got.FilterMode != FilterModeExclusive {
+		t.Errorf("expected global values, got %+v", got)
+	}
+	if len(got.DevelopLabels) != 2 || got.DevelopLabels[0] != "bug" {
+		t.Errorf("develop_labels = %v, want [bug feature]", got.DevelopLabels)
+	}
+}
+
+func TestIssueTrackingForRepo_PerRepoOverride(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:       true,
+		FilterMode:    FilterModeExclusive,
+		DevelopLabels: []string{"bug", "feature"},
+		SkipLabels:    []string{"wontfix"},
+		DefaultAction: "ignore",
+	}
+	c.AI.Primary = "claude"
+	c.AI.Repos = map[string]RepoAI{
+		"org/secure-repo": {
+			IssueTracking: &IssueTrackingConfig{
+				Enabled:       true, // per-repo Enabled overrides global unconditionally
+				DevelopLabels: []string{"security-fix"},
+				SkipLabels:    []string{"wontfix", "stale"},
+			},
+		},
+	}
+	got := c.IssueTrackingForRepo("org/secure-repo")
+	if len(got.DevelopLabels) != 1 || got.DevelopLabels[0] != "security-fix" {
+		t.Errorf("develop_labels = %v, want [security-fix]", got.DevelopLabels)
+	}
+	if len(got.SkipLabels) != 2 {
+		t.Errorf("skip_labels = %v, want [wontfix stale]", got.SkipLabels)
+	}
+	if got.FilterMode != FilterModeExclusive {
+		t.Errorf("filter_mode = %v, want exclusive (inherited)", got.FilterMode)
+	}
+	if got.DefaultAction != "ignore" {
+		t.Errorf("default_action = %v, want ignore (inherited)", got.DefaultAction)
+	}
+	if !got.Enabled {
+		t.Error("enabled should be true (per-repo override)")
+	}
+}
+
+func TestIssueTrackingForRepo_UnknownRepo(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:    true,
+		SkipLabels: []string{"wontfix"},
+	}
+	got := c.IssueTrackingForRepo("org/unknown")
+	if !got.Enabled || len(got.SkipLabels) != 1 {
+		t.Errorf("unknown repo should return global, got %+v", got)
+	}
+}
+
+func TestIssueTrackingForRepo_PerRepoEnablesWhenGlobalOff(t *testing.T) {
+	c := &Config{}
+	c.GitHub.IssueTracking = IssueTrackingConfig{
+		Enabled:       false,
+		DevelopLabels: []string{"bug"},
+	}
+	c.AI.Repos = map[string]RepoAI{
+		"org/active-repo": {
+			IssueTracking: &IssueTrackingConfig{
+				Enabled:       true,
+				DevelopLabels: []string{"feature"},
+			},
+		},
+	}
+	got := c.IssueTrackingForRepo("org/active-repo")
+	if !got.Enabled {
+		t.Error("per-repo should enable issue tracking even when global is off")
+	}
+	if len(got.DevelopLabels) != 1 || got.DevelopLabels[0] != "feature" {
+		t.Errorf("develop_labels = %v, want [feature]", got.DevelopLabels)
+	}
+
+	// Repo without override inherits global (disabled)
+	got2 := c.IssueTrackingForRepo("org/other-repo")
+	if got2.Enabled {
+		t.Error("repo without override should inherit global disabled")
+	}
+}
+
 // ── AgentConfigFor ───────────────────────────────────────────────────────────
 
 func TestAgentConfigFor_Found(t *testing.T) {

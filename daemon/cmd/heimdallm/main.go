@@ -300,10 +300,20 @@ func main() {
 			p.PublishPending()
 
 			// ── Issue tracking cycle ─────────────────────────────────────
+			// Check if ANY repo has issue tracking enabled (global or per-repo).
 			cfgMu.Lock()
-			itCfg := c.GitHub.IssueTracking
+			globalIT := c.GitHub.IssueTracking
+			anyITEnabled := globalIT.Enabled
+			if !anyITEnabled {
+				for _, r := range c.AI.Repos {
+					if r.IssueTracking != nil && r.IssueTracking.Enabled {
+						anyITEnabled = true
+						break
+					}
+				}
+			}
 			cfgMu.Unlock()
-			if itCfg.Enabled {
+			if anyITEnabled {
 				loginMu.Lock()
 				authUser := cachedLogin
 				loginMu.Unlock()
@@ -369,8 +379,8 @@ func main() {
 				// same poll cycle rather than waiting for the next one.
 				// No-op when BlockedLabels is unset, so default installs
 				// don't pay for the extra calls.
-				if len(itCfg.BlockedLabels) > 0 {
-					if n, err := issuepipeline.PromoteReady(context.Background(), ghClient, itCfg, repos); err != nil {
+				if len(globalIT.BlockedLabels) > 0 {
+					if n, err := issuepipeline.PromoteReady(context.Background(), ghClient, globalIT, repos); err != nil {
 						slog.Error("poll: issue promotion failed", "err", err)
 					} else if n > 0 {
 						slog.Info("poll: promoted issues", "count", n)
@@ -378,7 +388,13 @@ func main() {
 				}
 
 				for _, repo := range repos {
-					n, err := issueFetcher.ProcessRepo(context.Background(), repo, itCfg, authUser, optsFor)
+					cfgMu.Lock()
+					repoIT := c.IssueTrackingForRepo(repo)
+					cfgMu.Unlock()
+					if !repoIT.Enabled {
+						continue
+					}
+					n, err := issueFetcher.ProcessRepo(context.Background(), repo, repoIT, authUser, optsFor)
 					if err != nil {
 						slog.Error("poll: issue fetch failed", "repo", repo, "err", err)
 						continue
@@ -435,18 +451,24 @@ func main() {
 	}()
 
 	// Expose live config for GET /config
+	srv.SetRepoMetaFns(ghClient.FetchLabels, ghClient.FetchCollaborators)
+
 	srv.SetConfigFn(func() map[string]any {
 		cfgMu.Lock()
 		c := cfg
 		cfgMu.Unlock()
-		repoOverrides := make(map[string]map[string]string)
+		repoOverrides := make(map[string]map[string]any)
 		for repo, ai := range c.AI.Repos {
-			repoOverrides[repo] = map[string]string{
+			ro := map[string]any{
 				"primary":     ai.Primary,
 				"fallback":    ai.Fallback,
 				"review_mode": ai.ReviewMode,
 				"local_dir":   ai.LocalDir,
 			}
+			if ai.IssueTracking != nil {
+				ro["issue_tracking"] = ai.IssueTracking
+			}
+			repoOverrides[repo] = ro
 		}
 		agentConfigs := make(map[string]map[string]any)
 		for name, ac := range c.AI.Agents {

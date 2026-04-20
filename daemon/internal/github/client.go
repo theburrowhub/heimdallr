@@ -500,3 +500,57 @@ func (c *Client) fetchIssueComments(repo string, number int) ([]Comment, error) 
 	}
 	return comments, nil
 }
+
+// FetchLabels returns the label names for a repository.
+func (c *Client) FetchLabels(repo string) ([]string, error) {
+	if repo == "" {
+		return nil, nil
+	}
+	resp, err := c.do("GET", fmt.Sprintf("/repos/%s/labels?per_page=100", repo), "application/vnd.github+json")
+	if err != nil {
+		return nil, fmt.Errorf("github: fetch labels: %w", err)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github: fetch labels %s: status %d", repo, resp.StatusCode)
+	}
+	var raw []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("github: decode labels: %w", err)
+	}
+	names := make([]string, len(raw))
+	for i, l := range raw {
+		names[i] = l.Name
+	}
+	return names, nil
+}
+
+// FetchCollaborators returns the login names of repository collaborators.
+func (c *Client) FetchCollaborators(repo string) ([]string, error) {
+	if repo == "" {
+		return nil, nil
+	}
+	resp, err := c.do("GET", fmt.Sprintf("/repos/%s/collaborators?per_page=100", repo), "application/vnd.github+json")
+	if err != nil {
+		return nil, fmt.Errorf("github: fetch collaborators: %w", err)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github: fetch collaborators %s: status %d", repo, resp.StatusCode)
+	}
+	var raw []struct {
+		Login string `json:"login"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("github: decode collaborators: %w", err)
+	}
+	logins := make([]string, len(raw))
+	for i, u := range raw {
+		logins[i] = u.Login
+	}
+	return logins, nil
+}
