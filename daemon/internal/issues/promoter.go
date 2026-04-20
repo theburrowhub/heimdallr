@@ -14,6 +14,7 @@ import (
 // uses. Scoped to the minimum so tests can inject an in-memory fake.
 type PromoteIssueClient interface {
 	ListOpenIssues(repo string) ([]*github.Issue, error)
+	ListSubIssues(repo string, number int) ([]*github.Issue, error)
 	GetIssue(repo string, number int) (*github.Issue, error)
 	AddLabels(repo string, number int, labels []string) error
 	RemoveLabels(repo string, number int, labels []string) error
@@ -76,11 +77,38 @@ func PromoteReady(ctx context.Context, c PromoteIssueClient, cfg config.IssueTra
 			if len(blockedOnIssue) == 0 {
 				continue
 			}
+			// Collect deps from BOTH sources: the `## Depends on` body
+			// parser (cross-org-capable) AND GitHub's native sub-issues
+			// REST (same-owner-only). Unioned and deduped so operators
+			// can use either or both without double-counting.
 			deps := ParseDependencies(issue.Body, repo)
+			subIssues, err := c.ListSubIssues(repo, issue.Number)
+			if err != nil {
+				// Can't see native sub-issues this cycle: skip the whole
+				// issue rather than promote on incomplete information.
+				// Body-alone might say "ready" while a native sub-issue
+				// we can't read is still open — worst-case scenario.
+				slog.Warn("issues promote: sub-issues lookup failed, skipping issue this cycle",
+					"repo", repo, "issue", issue.Number, "err", err)
+				continue
+			}
+			for _, si := range subIssues {
+				ref := IssueRef{Repo: si.Repo, Number: si.Number}
+				if !containsRef(deps, ref) {
+					deps = append(deps, ref)
+				}
+				// Pre-populate the cache with the sub-issue's state —
+				// the sub_issues endpoint returns full issue objects,
+				// saving a GetIssue round-trip during checkDeps.
+				cacheKey := fmt.Sprintf("%s#%d", ref.Repo, ref.Number)
+				if _, cached := issueCache[cacheKey]; !cached {
+					issueCache[cacheKey] = si
+				}
+			}
 			if len(deps) == 0 {
-				// Carries a blocked label but no structured deps declared.
-				// We can't know what "ready" means here, so stay out — the
-				// operator likely wants to unblock manually.
+				// Carries a blocked label but no deps declared in either
+				// source. Stay out — operator likely wants to unblock
+				// manually.
 				continue
 			}
 			states, err := checkDeps(c, deps, issueCache)
@@ -188,6 +216,18 @@ func auditCommentBody(promoteTo string, states []depState) string {
 	}
 	sb.WriteString("\n---\n*Promoted by Heimdallm*")
 	return sb.String()
+}
+
+// containsRef reports whether refs already includes target. Cheap linear
+// scan — dep lists are small (single digits in practice), so the map
+// allocation overhead of a set wouldn't pay off.
+func containsRef(refs []IssueRef, target IssueRef) bool {
+	for _, r := range refs {
+		if r.Repo == target.Repo && r.Number == target.Number {
+			return true
+		}
+	}
+	return false
 }
 
 func lowerSet(xs []string) map[string]struct{} {
