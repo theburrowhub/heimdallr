@@ -495,8 +495,22 @@ func main() {
 	// Wire the reload callback: re-read config from disk, restart scheduler
 	// and the discovery loop so changes to discovery_topic / orgs / interval
 	// take effect without a daemon restart.
+	//
+	// Mirrors the startup load logic (line 66 above): in Docker deployments
+	// HEIMDALLM_DATA_DIR is set and we use LoadOrCreate so a missing TOML
+	// is not fatal — the daemon rebuilds from env vars and persists a
+	// fresh config.toml. Without this, `POST /reload` after a deployment
+	// that lost its config volume (or on fresh docker-compose startups
+	// where writeConfigTOML warned but didn't error) returned 500 even
+	// though startup itself had succeeded on the same env vars.
 	srv.SetReloadFn(func() error {
-		newCfg, err := config.Load(cfgPath)
+		var newCfg *config.Config
+		var err error
+		if os.Getenv("HEIMDALLM_DATA_DIR") != "" {
+			newCfg, err = config.LoadOrCreate(cfgPath)
+		} else {
+			newCfg, err = config.Load(cfgPath)
+		}
 		if err != nil {
 			return fmt.Errorf("reload: %w", err)
 		}
