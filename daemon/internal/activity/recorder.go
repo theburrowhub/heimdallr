@@ -67,8 +67,18 @@ func (r *Recorder) handle(ev sse.Event) error {
 	switch ev.Type {
 	case sse.EventReviewCompleted:
 		return r.recordReviewCompleted(ev)
+	case sse.EventReviewError:
+		return r.recordReviewError(ev)
+	case sse.EventIssueReviewCompleted:
+		return r.recordIssueTriage(ev)
+	case sse.EventIssueImplemented:
+		return r.recordIssueImplemented(ev)
+	case sse.EventIssueReviewError:
+		return r.recordIssueReviewError(ev)
+	case sse.EventIssuePromoted:
+		return r.recordIssuePromoted(ev)
 	default:
-		return nil // unknown/ignored
+		return nil
 	}
 }
 
@@ -108,5 +118,118 @@ func (r *Recorder) recordReviewCompleted(ev sse.Event) error {
 	}
 	_, err := r.store.InsertActivity(time.Now(), orgOf(p.Repo), p.Repo, "pr",
 		p.PRNumber, p.PRTitle, "review", p.Severity, details)
+	return err
+}
+
+func (r *Recorder) recordReviewError(ev sse.Event) error {
+	var p struct {
+		Repo     string `json:"repo"`
+		PRNumber int    `json:"pr_number"`
+		PRTitle  string `json:"pr_title"`
+		CLIUsed  string `json:"cli_used"`
+		Error    string `json:"error"`
+	}
+	if err := decode(ev.Data, &p); err != nil {
+		return err
+	}
+	_, err := r.store.InsertActivity(time.Now(), orgOf(p.Repo), p.Repo, "pr",
+		p.PRNumber, p.PRTitle, "error", p.Error, map[string]any{
+			"item_type": "pr",
+			"cli_used":  p.CLIUsed,
+			"error":     p.Error,
+		})
+	return err
+}
+
+func (r *Recorder) recordIssueTriage(ev sse.Event) error {
+	var p struct {
+		Repo         string `json:"repo"`
+		IssueNumber  int    `json:"issue_number"`
+		IssueTitle   string `json:"issue_title"`
+		CLIUsed      string `json:"cli_used"`
+		Severity     string `json:"severity"`
+		Category     string `json:"category"`
+		ChosenAction string `json:"chosen_action"`
+	}
+	if err := decode(ev.Data, &p); err != nil {
+		return err
+	}
+	outcome := p.Severity
+	if outcome == "" {
+		outcome = "ignored"
+	}
+	_, err := r.store.InsertActivity(time.Now(), orgOf(p.Repo), p.Repo, "issue",
+		p.IssueNumber, p.IssueTitle, "triage", outcome, map[string]any{
+			"cli_used":      p.CLIUsed,
+			"category":      p.Category,
+			"chosen_action": p.ChosenAction,
+		})
+	return err
+}
+
+func (r *Recorder) recordIssueImplemented(ev sse.Event) error {
+	var p struct {
+		Repo        string `json:"repo"`
+		IssueNumber int    `json:"issue_number"`
+		IssueTitle  string `json:"issue_title"`
+		CLIUsed     string `json:"cli_used"`
+		PRNumber    float64 `json:"pr_number"`
+		PRURL       string `json:"pr_url"`
+	}
+	if err := decode(ev.Data, &p); err != nil {
+		return err
+	}
+	outcome := "pr_opened"
+	if p.PRNumber == 0 {
+		outcome = "pr_failed"
+	}
+	_, err := r.store.InsertActivity(time.Now(), orgOf(p.Repo), p.Repo, "issue",
+		p.IssueNumber, p.IssueTitle, "implement", outcome, map[string]any{
+			"cli_used":  p.CLIUsed,
+			"pr_number": p.PRNumber,
+			"pr_url":    p.PRURL,
+		})
+	return err
+}
+
+func (r *Recorder) recordIssueReviewError(ev sse.Event) error {
+	var p struct {
+		Repo        string `json:"repo"`
+		IssueNumber int    `json:"issue_number"`
+		IssueTitle  string `json:"issue_title"`
+		CLIUsed     string `json:"cli_used"`
+		Error       string `json:"error"`
+	}
+	if err := decode(ev.Data, &p); err != nil {
+		return err
+	}
+	_, err := r.store.InsertActivity(time.Now(), orgOf(p.Repo), p.Repo, "issue",
+		p.IssueNumber, p.IssueTitle, "error", p.Error, map[string]any{
+			"item_type": "issue",
+			"cli_used":  p.CLIUsed,
+			"error":     p.Error,
+		})
+	return err
+}
+
+func (r *Recorder) recordIssuePromoted(ev sse.Event) error {
+	var p struct {
+		Repo        string `json:"repo"`
+		IssueNumber int    `json:"issue_number"`
+		IssueTitle  string `json:"issue_title"`
+		FromLabel   string `json:"from_label"`
+		ToLabel     string `json:"to_label"`
+		Reason      string `json:"reason"`
+	}
+	if err := decode(ev.Data, &p); err != nil {
+		return err
+	}
+	_, err := r.store.InsertActivity(time.Now(), orgOf(p.Repo), p.Repo, "issue",
+		p.IssueNumber, p.IssueTitle, "promote",
+		p.FromLabel+" → "+p.ToLabel, map[string]any{
+			"from_label": p.FromLabel,
+			"to_label":   p.ToLabel,
+			"reason":     p.Reason,
+		})
 	return err
 }

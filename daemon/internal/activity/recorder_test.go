@@ -96,3 +96,178 @@ func TestRecorder_ReviewCompleted(t *testing.T) {
 		t.Errorf("details: %+v", got.details)
 	}
 }
+
+func TestRecorder_ReviewError(t *testing.T) {
+	_, fs, events := newTestRecorder(t)
+	payload, _ := json.Marshal(map[string]any{
+		"repo":      "acme/api",
+		"pr_number": 7,
+		"pr_title":  "WIP",
+		"cli_used":  "claude",
+		"error":     "cli_not_found",
+	})
+	events <- sse.Event{Type: sse.EventReviewError, Data: string(payload)}
+	waitFor(t, func() bool { return len(fs.inserts) == 1 })
+
+	got := fs.inserts[0]
+	if got.action != "error" || got.outcome != "cli_not_found" {
+		t.Errorf("action/outcome: %s/%s", got.action, got.outcome)
+	}
+	if got.itemType != "pr" {
+		t.Errorf("item_type = %q, want pr", got.itemType)
+	}
+	if got.details["item_type"] != "pr" {
+		t.Errorf("details item_type: %v", got.details["item_type"])
+	}
+}
+
+func TestRecorder_IssueReviewCompleted(t *testing.T) {
+	_, fs, events := newTestRecorder(t)
+	payload, _ := json.Marshal(map[string]any{
+		"repo":          "acme/api",
+		"issue_number":  12,
+		"issue_title":   "Refactor auth",
+		"cli_used":      "claude",
+		"severity":      "major",
+		"category":      "develop",
+		"chosen_action": "auto_implement",
+	})
+	events <- sse.Event{Type: sse.EventIssueReviewCompleted, Data: string(payload)}
+	waitFor(t, func() bool { return len(fs.inserts) == 1 })
+
+	got := fs.inserts[0]
+	if got.itemType != "issue" || got.itemNumber != 12 {
+		t.Errorf("row basics: %+v", got)
+	}
+	if got.action != "triage" || got.outcome != "major" {
+		t.Errorf("action/outcome: %s/%s", got.action, got.outcome)
+	}
+	if got.details["category"] != "develop" || got.details["chosen_action"] != "auto_implement" {
+		t.Errorf("details: %+v", got.details)
+	}
+}
+
+func TestRecorder_IssueTriage_EmptySeverityOutcomeIsIgnored(t *testing.T) {
+	_, fs, events := newTestRecorder(t)
+	payload, _ := json.Marshal(map[string]any{
+		"repo":          "acme/api",
+		"issue_number":  20,
+		"issue_title":   "Noise",
+		"cli_used":      "claude",
+		"severity":      "",
+		"category":      "review_only",
+		"chosen_action": "ignore",
+	})
+	events <- sse.Event{Type: sse.EventIssueReviewCompleted, Data: string(payload)}
+	waitFor(t, func() bool { return len(fs.inserts) == 1 })
+
+	if fs.inserts[0].outcome != "ignored" {
+		t.Errorf("outcome = %q, want ignored", fs.inserts[0].outcome)
+	}
+}
+
+func TestRecorder_IssueImplemented(t *testing.T) {
+	_, fs, events := newTestRecorder(t)
+	payload, _ := json.Marshal(map[string]any{
+		"repo":         "acme/api",
+		"issue_number": 12,
+		"issue_title":  "Refactor auth",
+		"cli_used":     "claude",
+		"pr_number":    99,
+		"pr_url":       "https://github.com/acme/api/pull/99",
+	})
+	events <- sse.Event{Type: sse.EventIssueImplemented, Data: string(payload)}
+	waitFor(t, func() bool { return len(fs.inserts) == 1 })
+
+	got := fs.inserts[0]
+	if got.action != "implement" || got.outcome != "pr_opened" {
+		t.Errorf("action/outcome: %s/%s", got.action, got.outcome)
+	}
+	if got.details["pr_number"] != float64(99) {
+		t.Errorf("details pr_number: %v", got.details["pr_number"])
+	}
+}
+
+func TestRecorder_IssueImplemented_Failed(t *testing.T) {
+	_, fs, events := newTestRecorder(t)
+	payload, _ := json.Marshal(map[string]any{
+		"repo":         "acme/api",
+		"issue_number": 12,
+		"issue_title":  "Refactor auth",
+		"cli_used":     "claude",
+		"pr_number":    0,
+	})
+	events <- sse.Event{Type: sse.EventIssueImplemented, Data: string(payload)}
+	waitFor(t, func() bool { return len(fs.inserts) == 1 })
+
+	if fs.inserts[0].outcome != "pr_failed" {
+		t.Errorf("outcome = %q, want pr_failed", fs.inserts[0].outcome)
+	}
+}
+
+func TestRecorder_IssueReviewError(t *testing.T) {
+	_, fs, events := newTestRecorder(t)
+	payload, _ := json.Marshal(map[string]any{
+		"repo":         "acme/api",
+		"issue_number": 3,
+		"issue_title":  "Bad data",
+		"cli_used":     "claude",
+		"error":        "parse_failed",
+	})
+	events <- sse.Event{Type: sse.EventIssueReviewError, Data: string(payload)}
+	waitFor(t, func() bool { return len(fs.inserts) == 1 })
+
+	got := fs.inserts[0]
+	if got.action != "error" || got.outcome != "parse_failed" {
+		t.Errorf("action/outcome: %s/%s", got.action, got.outcome)
+	}
+	if got.details["item_type"] != "issue" {
+		t.Errorf("details item_type: %v", got.details["item_type"])
+	}
+}
+
+func TestRecorder_IssuePromoted(t *testing.T) {
+	_, fs, events := newTestRecorder(t)
+	payload, _ := json.Marshal(map[string]any{
+		"repo":         "acme/api",
+		"issue_number": 42,
+		"issue_title":  "Schema migration",
+		"from_label":   "blocked",
+		"to_label":     "develop",
+		"reason":       "dependencies closed",
+	})
+	events <- sse.Event{Type: sse.EventIssuePromoted, Data: string(payload)}
+	waitFor(t, func() bool { return len(fs.inserts) == 1 })
+
+	got := fs.inserts[0]
+	if got.action != "promote" || got.outcome != "blocked → develop" {
+		t.Errorf("action/outcome: %s/%s", got.action, got.outcome)
+	}
+	if got.details["reason"] != "dependencies closed" {
+		t.Errorf("details: %+v", got.details)
+	}
+}
+
+func TestRecorder_UnknownEventIsIgnored(t *testing.T) {
+	_, fs, events := newTestRecorder(t)
+	events <- sse.Event{Type: "review_started", Data: "{}"}
+	time.Sleep(50 * time.Millisecond)
+	if len(fs.inserts) != 0 {
+		t.Errorf("expected 0 inserts, got %d", len(fs.inserts))
+	}
+}
+
+func TestRecorder_StoreFailureIsLoggedAndDropped(t *testing.T) {
+	_, fs, events := newTestRecorder(t)
+	fs.failNext = true
+
+	payload, _ := json.Marshal(map[string]any{
+		"repo": "acme/api", "pr_number": 1, "pr_title": "t",
+		"cli_used": "claude", "severity": "minor",
+	})
+	events <- sse.Event{Type: sse.EventReviewCompleted, Data: string(payload)}
+
+	time.Sleep(30 * time.Millisecond)
+	events <- sse.Event{Type: sse.EventReviewCompleted, Data: string(payload)}
+	waitFor(t, func() bool { return len(fs.inserts) == 1 })
+}
