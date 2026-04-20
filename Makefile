@@ -401,6 +401,11 @@ run-linux:
 	echo "HEIMDALLM_DAEMON_PATH=/app/daemon/bin/heimdallm" >> "$$ENV_FILE" ; \
 	if [ -n "$$GITHUB_TOKEN" ]; then \
 	  echo "GITHUB_TOKEN=$$GITHUB_TOKEN" >> "$$ENV_FILE" ; \
+	elif command -v gh >/dev/null 2>&1; then \
+	  GH_TOK=$$(gh auth token 2>/dev/null || true) ; \
+	  if [ -n "$$GH_TOK" ]; then \
+	    echo "GITHUB_TOKEN=$$GH_TOK" >> "$$ENV_FILE" ; \
+	  fi ; \
 	fi ; \
 	UID_VAL=$$(id -u) ; \
 	GID_VAL=$$(id -g) ; \
