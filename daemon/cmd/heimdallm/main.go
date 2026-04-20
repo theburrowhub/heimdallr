@@ -90,6 +90,18 @@ func main() {
 	}
 	defer s.Close()
 
+	// Merge PUT /config values on top of TOML+env. This is the third and
+	// highest-precedence layer: UI saves win over env vars, env vars win
+	// over TOML. See daemon/internal/config/store.go for the key mapping.
+	if rows, lcErr := s.ListConfigs(); lcErr != nil {
+		slog.Warn("config: list store rows failed, continuing with TOML+env", "err", lcErr)
+	} else if asErr := cfg.ApplyStore(rows); asErr != nil {
+		slog.Warn("config: apply store failed, continuing with TOML+env", "err", asErr)
+	} else if vErr := cfg.Validate(); vErr != nil {
+		slog.Error("config invalid after applying store, refusing to start", "err", vErr)
+		os.Exit(1)
+	}
+
 	if err := s.PurgeOldReviews(cfg.Retention.MaxDays); err != nil {
 		slog.Warn("retention purge failed", "err", err)
 	}
@@ -430,6 +442,7 @@ func main() {
 			"ai_fallback":    c.AI.Fallback,
 			"review_mode":    c.AI.ReviewMode,
 			"retention_days": c.Retention.MaxDays,
+			"issue_tracking": c.GitHub.IssueTracking,
 			"repo_overrides": repoOverrides,
 			"agent_configs":  agentConfigs,
 		}
@@ -463,6 +476,13 @@ func main() {
 		newCfg, err := config.Load(cfgPath)
 		if err != nil {
 			return fmt.Errorf("reload: %w", err)
+		}
+		if rows, lcErr := s.ListConfigs(); lcErr != nil {
+			slog.Warn("config: list store rows on reload failed", "err", lcErr)
+		} else if asErr := newCfg.ApplyStore(rows); asErr != nil {
+			return fmt.Errorf("reload: apply store: %w", asErr)
+		} else if vErr := newCfg.Validate(); vErr != nil {
+			return fmt.Errorf("reload: validate after store: %w", vErr)
 		}
 
 		cfgMu.Lock()
