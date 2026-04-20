@@ -106,6 +106,17 @@ RUN { \
     } > /usr/local/bin/xdg-open \
     && chmod +x /usr/local/bin/xdg-open
 
+# /.flatpak-info is glib's sandbox sentinel. If this file exists,
+# g_desktop_app_info_is_sandboxed() returns true and GTK's
+# gtk_show_uri_on_window (which url_launcher_linux calls internally) routes
+# URI opens through org.freedesktop.portal.OpenURI instead of the
+# in-sandbox MIME database. Without this the Flutter app's "Open in GitHub"
+# silently no-ops because glib can't find a handler for https inside the
+# container — the /usr/local/bin/xdg-open shim above only helps code paths
+# that shell out; url_launcher_linux doesn't. Minimal valid keyfile
+# content keeps any downstream parsers that also read this file happy.
+RUN printf '[Application]\nname=heimdallm\n' > /.flatpak-info
+
 # ── Node.js + AI CLIs ────────────────────────────────────────────────────────
 # The bundled daemon inside this image runs the review pipeline, which shells
 # out to whatever AI CLI the user configured as `ai.primary`. Without one on
