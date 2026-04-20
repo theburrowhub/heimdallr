@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -49,7 +50,12 @@ func main() {
 		}
 	}
 
-	setupLogging()
+	// Resolve the data directory first so setupLogging can mirror the
+	// daemon's slog output into <dataDir>/heimdallm.log. The web UI's
+	// /logs stream reads that file; writing only to stderr (as we used
+	// to) left the stream empty under Docker — see #75.
+	logDir := dataDir()
+	setupLogging(logDir)
 
 	cfgPath := configPath()
 	var cfg *config.Config
@@ -657,10 +663,41 @@ func main() {
 	broker.Stop()
 }
 
-func setupLogging() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})))
+// DaemonLogFileName is the name of the on-disk log file the daemon writes
+// alongside stderr. Lives next to heimdallm.db inside the resolved data
+// directory so the web UI's /logs endpoint can tail it from the same
+// volume it already mounts (see #75).
+const DaemonLogFileName = "heimdallm.log"
+
+func setupLogging(dataDir string) {
+	handlerOpts := &slog.HandlerOptions{Level: slog.LevelInfo}
+
+	// Default: stderr-only. If the file open fails we keep going — the
+	// daemon must not refuse to start just because logs cannot be
+	// persisted. `docker logs` / the host terminal still work.
+	var out io.Writer = os.Stderr
+
+	if dataDir != "" {
+		// O_APPEND so restarts extend the log rather than truncating it;
+		// 0640 so the web container (different UID, same data volume)
+		// could read via group membership, and the host user keeps full
+		// write access. The web container today reads this over HTTP via
+		// the daemon, not directly, but keeping the mode narrow is still
+		// the right posture.
+		logPath := filepath.Join(dataDir, DaemonLogFileName)
+		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
+		if err == nil {
+			out = io.MultiWriter(os.Stderr, f)
+		} else {
+			// Emit the warning via a temporary logger so it is visible on
+			// stderr even before SetDefault runs below.
+			tmp := slog.New(slog.NewTextHandler(os.Stderr, handlerOpts))
+			tmp.Warn("logging: could not open daemon log file, stderr only",
+				"path", logPath, "err", err)
+		}
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(out, handlerOpts)))
 }
 
 // dataDir resolves the data directory.
