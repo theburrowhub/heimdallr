@@ -2,6 +2,19 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.4.1](https://github.com/theburrowhub/heimdallm/compare/v0.4.0...v0.4.1) (2026-04-20)
+
+
+### Features
+
+* RepoDetailScreen + per-repo issue tracking config ([#99](https://github.com/theburrowhub/heimdallm/issues/99)) ([ffe7890](https://github.com/theburrowhub/heimdallm/commit/ffe78905adca581411e3c4135deb2202617ad2eb))
+
+
+### Bug Fixes
+
+* make run-linux usable end-to-end (HOME, token, gh CLI) ([#118](https://github.com/theburrowhub/heimdallm/issues/118)) ([53f72ce](https://github.com/theburrowhub/heimdallm/commit/53f72cee799fcfe9957c2aee48c6b647fe281614))
+* per-repo IT implicit enable + LED consistency + PR metadata persistence ([#106](https://github.com/theburrowhub/heimdallm/issues/106)) ([5cb24ad](https://github.com/theburrowhub/heimdallm/commit/5cb24adf4c832890789bd0f89e2144e8fe936047))
+
 ## [0.4.0](https://github.com/theburrowhub/heimdallm/compare/v0.3.0...v0.4.0) (2026-04-20)
 
 
