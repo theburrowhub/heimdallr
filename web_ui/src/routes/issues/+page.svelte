@@ -48,22 +48,26 @@
 </script>
 
 <section class="flex items-center gap-3">
-  <h1 class="text-2xl font-bold">Issues</h1>
+  <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Issues</h1>
   {#if $reviewingIssues.size > 0}
-    <span class="text-xs text-indigo-600">{$reviewingIssues.size} reviewing…</span>
+    <span class="text-xs text-indigo-600 dark:text-indigo-400"
+      >{$reviewingIssues.size} reviewing…</span
+    >
   {/if}
 </section>
 
 <IssueFilterBar filters={{ repo, severity, mode }} {repos} onChange={applyFilters} />
 
 {#if err}
-  <p class="text-sm text-red-600">Could not load issues: {err}</p>
+  <p class="text-sm text-red-600 dark:text-red-400">Could not load issues: {err}</p>
 {:else if loading && issues.length === 0}
-  <p class="text-sm text-gray-500">Loading…</p>
+  <p class="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
 {:else if filtered.length === 0}
-  <p class="text-sm text-gray-500">No issues match the current filters.</p>
+  <p class="text-sm text-gray-500 dark:text-gray-400">No issues match the current filters.</p>
 {:else}
-  <div class="overflow-hidden rounded-md border border-gray-200 bg-white">
+  <div
+    class="overflow-hidden rounded-md border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900"
+  >
     {#each filtered as issue (issue.id)}
       <IssueTile {issue} />
     {/each}

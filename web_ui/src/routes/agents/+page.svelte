@@ -104,16 +104,16 @@
   }
 </script>
 
-<section class="space-y-6">
+<section class="space-y-6 text-gray-900 dark:text-gray-100">
   <header class="flex items-center justify-between gap-4">
     <div>
       <h1 class="text-2xl font-semibold">Agents</h1>
-      <p class="text-sm text-gray-500">
+      <p class="text-sm text-gray-500 dark:text-gray-400">
         Custom review prompts and CLI flags. One entry per reviewer persona.
       </p>
     </div>
     <button
-      class="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500"
+      class="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 dark:bg-indigo-500 dark:hover:bg-indigo-400"
       onclick={startCreate}
       data-testid="new-agent"
     >
@@ -123,7 +123,7 @@
 
   {#if err}
     <div
-      class="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+      class="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
       data-testid="agents-error"
     >
       {err}
@@ -131,7 +131,7 @@
   {/if}
   {#if savedFlash}
     <div
-      class="rounded border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700"
+      class="rounded border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 dark:border-green-900 dark:bg-green-950 dark:text-green-300"
       data-testid="agents-saved"
     >
       {savedFlash}
@@ -139,38 +139,39 @@
   {/if}
 
   {#if loading}
-    <p class="text-gray-500">Loading…</p>
+    <p class="text-gray-500 dark:text-gray-400">Loading…</p>
   {:else if agents.length === 0 && !editor}
-    <p class="text-gray-500">
+    <p class="text-gray-500 dark:text-gray-400">
       No agents yet. The daemon falls back to the built-in template until one is defined.
     </p>
   {:else}
     <ul class="space-y-2" data-testid="agents-list">
       {#each agents as a (a.id)}
         <li
-          class="flex items-center justify-between rounded border border-gray-200 bg-white px-4 py-3"
+          class="flex items-center justify-between rounded border border-gray-200 bg-white px-4 py-3 dark:border-gray-800 dark:bg-gray-900"
         >
           <div>
             <div class="flex items-center gap-2">
               <span class="font-medium">{a.name}</span>
-              <code class="text-xs text-gray-500">({a.id})</code>
+              <code class="text-xs text-gray-500 dark:text-gray-400">({a.id})</code>
               {#if a.is_default}
-                <span class="rounded bg-indigo-100 px-2 py-0.5 text-xs text-indigo-800"
+                <span
+                  class="rounded bg-indigo-100 px-2 py-0.5 text-xs text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300"
                   >default</span
                 >
               {/if}
             </div>
-            <div class="text-xs text-gray-500">CLI: {a.cli}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">CLI: {a.cli}</div>
           </div>
           <div class="flex gap-2">
             <button
-              class="rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50"
+              class="rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800"
               onclick={() => startEdit(a)}
             >
               Edit
             </button>
             <button
-              class="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+              class="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950"
               onclick={() => remove(a)}
             >
               Delete
@@ -183,7 +184,7 @@
 
   {#if editor}
     <form
-      class="space-y-4 rounded border border-gray-200 bg-white p-4"
+      class="space-y-4 rounded border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900"
       onsubmit={(e) => {
         e.preventDefault();
         void save();
@@ -192,7 +193,11 @@
     >
       <header class="flex items-center justify-between">
         <h2 class="text-lg font-semibold">{editor.created_at ? 'Edit agent' : 'New agent'}</h2>
-        <button type="button" class="text-sm text-gray-500 hover:text-gray-700" onclick={cancel}>
+        <button
+          type="button"
+          class="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          onclick={cancel}
+        >
           Cancel
         </button>
       </header>
@@ -206,10 +211,10 @@
             placeholder="security-audit"
             required
             disabled={!!editor.created_at}
-            class="rounded border border-gray-300 px-2 py-1 font-mono text-xs disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
+            class="rounded border border-gray-300 px-2 py-1 font-mono text-xs disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:disabled:bg-gray-900 dark:disabled:text-gray-500"
           />
           {#if editor.created_at}
-            <span class="text-xs text-gray-500">
+            <span class="text-xs text-gray-500 dark:text-gray-400">
               ID is immutable after creation — changing it would orphan the existing agent.
             </span>
           {/if}
@@ -221,12 +226,15 @@
             bind:value={editor.name}
             placeholder="Security audit"
             required
-            class="rounded border border-gray-300 px-2 py-1"
+            class="rounded border border-gray-300 px-2 py-1 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
           />
         </label>
         <label class="flex flex-col gap-1 text-sm">
           CLI
-          <select bind:value={editor.cli} class="rounded border border-gray-300 px-2 py-1">
+          <select
+            bind:value={editor.cli}
+            class="rounded border border-gray-300 px-2 py-1 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+          >
             {#each cliOptions as cli (cli)}
               <option value={cli}>{cli}</option>
             {/each}
@@ -244,7 +252,7 @@
         <textarea
           bind:value={editor.prompt}
           rows="8"
-          class="rounded border border-gray-300 px-2 py-1 font-mono text-xs"
+          class="rounded border border-gray-300 px-2 py-1 font-mono text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
         ></textarea>
       </label>
 
@@ -253,7 +261,7 @@
         <textarea
           bind:value={editor.instructions}
           rows="4"
-          class="rounded border border-gray-300 px-2 py-1 text-sm"
+          class="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
         ></textarea>
       </label>
 
@@ -263,14 +271,14 @@
           type="text"
           bind:value={editor.cli_flags}
           placeholder="--model claude-opus-4-6"
-          class="rounded border border-gray-300 px-2 py-1 font-mono text-xs"
+          class="rounded border border-gray-300 px-2 py-1 font-mono text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
         />
       </label>
 
       <div class="flex items-center justify-between">
         <button
           type="button"
-          class="text-sm text-indigo-600 hover:underline"
+          class="text-sm text-indigo-600 hover:underline dark:text-indigo-400"
           onclick={() => (previewOpen = !previewOpen)}
         >
           {previewOpen ? 'Hide preview' : 'Preview prompt'}
@@ -278,7 +286,7 @@
         <button
           type="submit"
           disabled={saving}
-          class="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          class="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 dark:bg-indigo-500 dark:hover:bg-indigo-400"
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
@@ -286,7 +294,7 @@
 
       {#if previewOpen}
         <pre
-          class="max-h-80 overflow-auto whitespace-pre-wrap rounded border border-gray-200 bg-gray-50 p-3 font-mono text-xs"
+          class="max-h-80 overflow-auto whitespace-pre-wrap rounded border border-gray-200 bg-gray-50 p-3 font-mono text-xs dark:border-gray-800 dark:bg-gray-800 dark:text-gray-100"
           data-testid="agent-preview">{renderPreview(editor.prompt || editor.instructions)}</pre>
       {/if}
     </form>
