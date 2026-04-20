@@ -83,18 +83,24 @@
     </ul>
     <div class="flex items-center gap-3">
       <div
-        role="radiogroup"
         aria-label="Theme"
         class="inline-flex overflow-hidden rounded-md border border-gray-200 text-xs dark:border-gray-700"
       >
+        <!--
+          Not using role="radiogroup" / role="radio": the WAI-ARIA radio
+          pattern requires arrow-key navigation between options, which adds
+          complexity this simple 3-choice toggle does not need. Plain
+          buttons with aria-pressed convey the same state to AT and keep
+          Tab-navigation behaviour unchanged.
+        -->
         {#each themeOptions as opt (opt.value)}
           <button
             type="button"
-            role="radio"
-            aria-checked={themeChoice === opt.value}
+            aria-pressed={themeChoice === opt.value}
             title={opt.title}
             onclick={() => chooseTheme(opt.value)}
-            class="flex items-center justify-center px-2 py-1.5 {themeChoice === opt.value
+            class="flex items-center justify-center px-2 py-1.5 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-inset {themeChoice ===
+            opt.value
               ? 'bg-indigo-600 text-white dark:bg-indigo-500'
               : 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800'}"
           >

@@ -1,5 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetThemeForTests, initTheme, loadThemeChoice, setThemeChoice } from '../lib/theme.js';
+import {
+  STORAGE_KEY,
+  __resetThemeForTests,
+  initTheme,
+  loadThemeChoice,
+  setThemeChoice
+} from '../lib/theme.js';
 
 type MqListener = (event: MediaQueryListEvent) => void;
 
@@ -111,5 +119,16 @@ describe('initTheme', () => {
     const choice = initTheme();
     expect(choice).toBe('dark');
     expect(document.documentElement.classList.contains('dark')).toBe(true);
+  });
+});
+
+describe('STORAGE_KEY', () => {
+  it('stays in sync with the inline pre-paint script in app.html', () => {
+    // src/app.html can't import TypeScript, so its inline script hardcodes
+    // the storage key. If the module constant changes and the HTML isn't
+    // updated, the pre-paint script and the runtime helper disagree and
+    // users see a flash of the wrong theme on first load.
+    const appHtml = readFileSync(resolve(__dirname, '..', 'app.html'), 'utf8');
+    expect(appHtml).toContain(`'${STORAGE_KEY}'`);
   });
 });

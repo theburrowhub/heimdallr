@@ -1,6 +1,10 @@
 export type ThemeChoice = 'system' | 'light' | 'dark';
 
-const STORAGE_KEY = 'heimdallm-theme';
+// Must stay in lockstep with the pre-paint script in src/app.html (the key
+// there is a hardcoded string literal because app.html can't import TS).
+// The theme.test.ts `STORAGE_KEY stays in sync with app.html` case guards
+// against silent drift between the two.
+export const STORAGE_KEY = 'heimdallm-theme';
 const VALID_CHOICES: readonly ThemeChoice[] = ['system', 'light', 'dark'] as const;
 
 function isBrowser(): boolean {
@@ -29,9 +33,21 @@ function saveThemeChoice(choice: ThemeChoice): void {
   }
 }
 
+// Cached MediaQueryList — subscribe/unsubscribe used to call matchMedia()
+// independently, which worked but obscured the fact that both paths must
+// share the same object so removeEventListener matches.
+let darkMediaQuery: MediaQueryList | null = null;
+
+function darkMedia(): MediaQueryList | null {
+  if (!isBrowser() || typeof window.matchMedia !== 'function') return null;
+  if (!darkMediaQuery) {
+    darkMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  }
+  return darkMediaQuery;
+}
+
 function systemPrefersDark(): boolean {
-  if (!isBrowser()) return false;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return darkMedia()?.matches ?? false;
 }
 
 function resolveDark(choice: ThemeChoice): boolean {
@@ -47,17 +63,23 @@ function applyDarkClass(isDark: boolean): void {
 
 // Track the single active media listener so setThemeChoice('system') after
 // setThemeChoice('light') re-subscribes without leaking the previous one.
+//
+// This is module-level mutable state, which is safe here because every
+// caller is browser-only (initTheme short-circuits during SSR via
+// isBrowser()). If this helper ever gains a server-side path, the state
+// must move into a per-request scope.
 let mediaListener: ((event: MediaQueryListEvent) => void) | null = null;
 
 function unsubscribeSystem(): void {
-  if (!isBrowser() || !mediaListener) return;
-  window.matchMedia('(prefers-color-scheme: dark)').removeEventListener('change', mediaListener);
+  const mq = darkMedia();
+  if (!mq || !mediaListener) return;
+  mq.removeEventListener('change', mediaListener);
   mediaListener = null;
 }
 
 function subscribeSystem(): void {
-  if (!isBrowser() || mediaListener) return;
-  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  const mq = darkMedia();
+  if (!mq || mediaListener) return;
   mediaListener = (event: MediaQueryListEvent) => {
     applyDarkClass(event.matches);
   };
@@ -91,7 +113,9 @@ export function initTheme(): ThemeChoice {
   return choice;
 }
 
-// Test hook: clears the media listener so tests can observe clean state.
+// Test hook: clears the media listener and the cached MediaQueryList so
+// tests that install a fresh fake matchMedia observe clean state.
 export function __resetThemeForTests(): void {
   unsubscribeSystem();
+  darkMediaQuery = null;
 }
