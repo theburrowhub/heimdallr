@@ -250,8 +250,6 @@ func main() {
 		cfg:       &cfg,
 		loginMu:   &loginMu,
 		login:     &cachedLogin,
-		reviewMu:  &reviewMu,
-		inFlight:  inFlight,
 		runReview: runReview,
 	}
 
@@ -293,7 +291,16 @@ func main() {
 
 	pipe := buildPipeline(cfg)
 	pipe.Start(context.Background())
-	defer pipe.Stop()
+	// Use a closure so the defer reads the current pipe variable at shutdown
+	// time, not the initial pointer captured at defer-statement time. After a
+	// reload, pipe points to a new pipeline — the bare defer would stop the
+	// already-halted original pipeline and leak the post-reload one.
+	defer func() {
+		cfgMu.Lock()
+		p := pipe
+		cfgMu.Unlock()
+		p.Stop()
+	}()
 
 	// Expose live config for GET /config
 	srv.SetRepoMetaFns(ghClient.FetchLabels, ghClient.FetchCollaborators)
@@ -384,17 +391,26 @@ func main() {
 			return fmt.Errorf("reload: %w", err)
 		}
 
-		// Stop the old pipeline before starting a new one. The Search API
-		// rate limit (30 req/min) is tight enough that running two loops in
-		// parallel — even briefly during reload — risks throttling.
-		pipe.Stop()
-
+		// Read the current pipe under cfgMu, then stop it OUTSIDE the lock.
+		// Holding cfgMu across Stop() risks deadlock: if Stop() blocks
+		// waiting for in-flight goroutines that also acquire cfgMu (e.g.
+		// tier2Adapter callbacks), both sides block forever.
 		cfgMu.Lock()
-		cfg = newCfg
+		oldPipe := pipe
 		cfgMu.Unlock()
 
-		pipe = buildPipeline(newCfg)
-		pipe.Start(context.Background())
+		oldPipe.Stop()
+
+		newPipe := buildPipeline(newCfg)
+
+		// Swap cfg + pipe atomically under the lock so readers never see
+		// a half-updated state.
+		cfgMu.Lock()
+		cfg = newCfg
+		pipe = newPipe
+		cfgMu.Unlock()
+
+		newPipe.Start(context.Background())
 		return nil
 	})
 
@@ -704,8 +720,6 @@ type tier2Adapter struct {
 	cfg       **config.Config
 	loginMu   *sync.Mutex
 	login     *string
-	reviewMu  *sync.Mutex
-	inFlight  map[int64]bool
 	runReview func(pr *gh.PullRequest, aiCfg config.RepoAI)
 }
 
@@ -726,6 +740,10 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 			ID:        pr.ID,
 			Number:    pr.Number,
 			Repo:      pr.Repo,
+			Title:     pr.Title,
+			HTMLURL:   pr.HTMLURL,
+			Author:    pr.User.Login,
+			State:     pr.State,
 			UpdatedAt: pr.UpdatedAt,
 		})
 	}
@@ -739,13 +757,14 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 	aiCfg := c.AIForRepo(pr.Repo)
 	a.cfgMu.Unlock()
 
-	// Reconstruct the full gh.PullRequest from the minimal Tier2PR.
-	// FetchPRsToReview already resolved the repo and set UpdatedAt; we
-	// need at minimum ID, Number, Repo, UpdatedAt for the pipeline.
 	ghPR := &gh.PullRequest{
 		ID:        pr.ID,
 		Number:    pr.Number,
 		Repo:      pr.Repo,
+		Title:     pr.Title,
+		HTMLURL:   pr.HTMLURL,
+		User:      gh.User{Login: pr.Author},
+		State:     pr.State,
 		UpdatedAt: pr.UpdatedAt,
 	}
 	a.runReview(ghPR, aiCfg)
@@ -848,7 +867,11 @@ func (a *tier2Adapter) PromoteReady(ctx context.Context, repos []string) (int, e
 	globalIT := c.GitHub.IssueTracking
 	a.cfgMu.Unlock()
 
-	if !globalIT.Enabled || len(globalIT.BlockedLabels) == 0 {
+	// Promotion only makes sense when blocked labels are configured.
+	// Intentionally NOT gated on globalIT.Enabled — per-repo IT configs
+	// can enable issue tracking independently while global is disabled.
+	// Gating on Enabled here would silently regress promotion for those users.
+	if len(globalIT.BlockedLabels) == 0 {
 		return 0, nil
 	}
 	return issuepipeline.PromoteReady(ctx, a.ghClient, globalIT, repos)
@@ -887,15 +910,34 @@ func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem)
 // HandleChange implements scheduler.Tier3ItemChecker.
 func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchItem) error {
 	if item.Type == "pr" {
+		// Apply the same dedup gate as Tier 2: skip dismissed PRs and
+		// recently-reviewed PRs. Note: there is a small TOCTOU window
+		// between this check and the actual runReview call — the worst
+		// case is an occasional harmless duplicate review.
+		if a.PRAlreadyReviewed(item.GithubID, item.LastSeen) {
+			slog.Debug("tier3: PR already reviewed, skipping", "pr", item.Number, "repo", item.Repo)
+			return nil
+		}
+
 		a.cfgMu.Lock()
 		c := *a.cfg
 		aiCfg := c.AIForRepo(item.Repo)
 		a.cfgMu.Unlock()
 
+		// Fetch the full PR from the store so runReview receives all
+		// fields (Title, Author, URL, etc.) instead of a sparse struct.
+		stored, _ := a.store.GetPRByGithubID(item.GithubID)
 		ghPR := &gh.PullRequest{
 			ID:     item.GithubID,
 			Number: item.Number,
 			Repo:   item.Repo,
+		}
+		if stored != nil {
+			ghPR.Title = stored.Title
+			ghPR.HTMLURL = stored.URL
+			ghPR.User = gh.User{Login: stored.Author}
+			ghPR.State = stored.State
+			ghPR.UpdatedAt = stored.UpdatedAt
 		}
 		a.runReview(ghPR, aiCfg)
 	}

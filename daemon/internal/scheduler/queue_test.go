@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"container/heap"
 	"testing"
 	"time"
 )
@@ -44,15 +45,44 @@ func TestWatchQueue_Dedup(t *testing.T) {
 
 func TestWatchQueue_BackoffDoubles(t *testing.T) {
 	q := NewWatchQueue()
-	item := &WatchItem{Type: "pr", GithubID: 100, Backoff: 1 * time.Minute}
+	// Use a past NextCheck so PopReady actually drains the item, clearing
+	// the seen map entry and allowing the subsequent ReEnqueue to succeed.
+	item := &WatchItem{
+		Type:      "pr",
+		GithubID:  100,
+		Backoff:   1 * time.Minute,
+		NextCheck: time.Now().Add(-1 * time.Second),
+	}
+	q.Push(item)
+
+	// Pop the item — removes it from seen map
+	ready := q.PopReady()
+	if len(ready) != 1 {
+		t.Fatalf("expected 1 ready item, got %d", len(ready))
+	}
+
+	// Re-enqueue: backoff doubles from 1m → 2m
 	q.ReEnqueue(item)
 	if item.Backoff != 2*time.Minute {
-		t.Errorf("backoff = %v, want 2m", item.Backoff)
+		t.Errorf("after first ReEnqueue: backoff = %v, want 2m", item.Backoff)
 	}
-	q.PopReady() // drain
+	if q.Len() != 1 {
+		t.Errorf("item should be back in queue, got len %d", q.Len())
+	}
+
+	// Pop again and re-enqueue: backoff doubles from 2m → 4m
+	// Item's NextCheck is in the future (now+2m), so set it to the past.
+	item.NextCheck = time.Now().Add(-1 * time.Second)
+	q.mu.Lock()
+	heap.Fix(&q.items, item.index)
+	q.mu.Unlock()
+	ready = q.PopReady()
+	if len(ready) != 1 {
+		t.Fatalf("expected 1 ready item on second pop, got %d", len(ready))
+	}
 	q.ReEnqueue(item)
 	if item.Backoff != 4*time.Minute {
-		t.Errorf("backoff = %v, want 4m", item.Backoff)
+		t.Errorf("after second ReEnqueue: backoff = %v, want 4m", item.Backoff)
 	}
 }
 

@@ -41,8 +41,9 @@ type Pipeline struct {
 	limiter *RateLimiter
 	queue   *WatchQueue
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	stopOnce sync.Once
 }
 
 // NewPipeline creates a new pipeline. Call Start to begin processing.
@@ -143,12 +144,17 @@ func (p *Pipeline) Start(parentCtx context.Context) {
 }
 
 // Stop cancels all goroutines and waits for them to finish.
+// It is idempotent — calling Stop multiple times is safe (e.g. the reload
+// path stops the old pipeline, and the deferred shutdown may also call Stop
+// if it reads a stale pointer).
 func (p *Pipeline) Stop() {
-	if p.cancel != nil {
-		p.cancel()
-	}
-	p.wg.Wait()
-	slog.Info("pipeline: stopped")
+	p.stopOnce.Do(func() {
+		if p.cancel != nil {
+			p.cancel()
+		}
+		p.wg.Wait()
+		slog.Info("pipeline: stopped")
+	})
 }
 
 // Queue returns the watch queue for external inspection/testing.
