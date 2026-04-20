@@ -50,22 +50,25 @@
 </script>
 
 <section class="flex items-center gap-3">
-  <h1 class="text-2xl font-bold">PR Reviews</h1>
+  <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">PR Reviews</h1>
   {#if $reviewingPRs.size > 0}
-    <span class="text-xs text-indigo-600">{$reviewingPRs.size} reviewing…</span>
+    <span class="text-xs text-indigo-600 dark:text-indigo-400">{$reviewingPRs.size} reviewing…</span
+    >
   {/if}
 </section>
 
 <PRFilterBar filters={{ repo, severity, state: prState }} {repos} onChange={applyFilters} />
 
 {#if err}
-  <p class="text-sm text-red-600">Could not load PRs: {err}</p>
+  <p class="text-sm text-red-600 dark:text-red-400">Could not load PRs: {err}</p>
 {:else if loading && prs.length === 0}
-  <p class="text-sm text-gray-500">Loading…</p>
+  <p class="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
 {:else if filtered.length === 0}
-  <p class="text-sm text-gray-500">No PRs match the current filters.</p>
+  <p class="text-sm text-gray-500 dark:text-gray-400">No PRs match the current filters.</p>
 {:else}
-  <div class="overflow-hidden rounded-md border border-gray-200 bg-white">
+  <div
+    class="overflow-hidden rounded-md border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900"
+  >
     {#each filtered as pr (pr.id)}
       <PRTile {pr} />
     {/each}

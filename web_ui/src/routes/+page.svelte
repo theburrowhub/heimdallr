@@ -73,20 +73,20 @@
 </script>
 
 <section class="mb-6 flex items-center gap-3">
-  <h1 class="text-3xl font-bold">Dashboard</h1>
+  <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>
   <ConnectionPill />
 </section>
 
 <StatsCards {stats} />
 
 <section class="mt-6 mb-3 flex items-center gap-2">
-  <span class="text-xs text-gray-500">Sort:</span>
+  <span class="text-xs text-gray-500 dark:text-gray-400">Sort:</span>
   <button
     type="button"
     aria-pressed={$sort === 'priority'}
     class="rounded px-2 py-1 text-xs font-medium {$sort === 'priority'
-      ? 'bg-indigo-100 text-indigo-700'
-      : 'text-gray-600 hover:bg-gray-100'}"
+      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+      : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'}"
     onclick={() => sort.set('priority')}
   >
     Priority
@@ -95,8 +95,8 @@
     type="button"
     aria-pressed={$sort === 'newest'}
     class="rounded px-2 py-1 text-xs font-medium {$sort === 'newest'
-      ? 'bg-indigo-100 text-indigo-700'
-      : 'text-gray-600 hover:bg-gray-100'}"
+      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+      : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'}"
     onclick={() => sort.set('newest')}
   >
     Newest
@@ -104,13 +104,15 @@
 </section>
 
 {#if err}
-  <p class="text-sm text-red-600">Could not load PRs: {err}</p>
+  <p class="text-sm text-red-600 dark:text-red-400">Could not load PRs: {err}</p>
 {:else if loading && prs.length === 0 && issues.length === 0}
-  <p class="mt-6 text-center text-sm text-gray-500">Loading…</p>
+  <p class="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">Loading…</p>
 {:else if empty}
-  <p class="mt-6 text-center text-sm text-gray-500">No activity yet.</p>
+  <p class="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">No activity yet.</p>
 {:else}
-  <div class="overflow-hidden rounded-md border border-gray-200 bg-white">
+  <div
+    class="overflow-hidden rounded-md border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900"
+  >
     {#if myReviews.length > 0}
       <CollapseHeader
         title={hasLogin ? 'My Reviews' : 'Pull Requests'}

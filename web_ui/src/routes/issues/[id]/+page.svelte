@@ -80,14 +80,16 @@
 </script>
 
 {#if err && !issue}
-  <p class="text-sm text-red-600">Could not load issue: {err}</p>
+  <p class="text-sm text-red-600 dark:text-red-400">Could not load issue: {err}</p>
 {:else if !issue}
-  <p class="text-sm text-gray-500">Loading…</p>
+  <p class="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
 {:else}
   <article>
-    <header class="mb-4 rounded-md border border-gray-200 bg-white p-4">
-      <h1 class="text-xl font-bold">{issue.title}</h1>
-      <p class="mt-1 text-sm text-gray-500">
+    <header
+      class="mb-4 rounded-md border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900"
+    >
+      <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100">{issue.title}</h1>
+      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
         <span class="font-mono">{issue.repo}</span>
         · #{issue.number}
         · {issue.author}
@@ -96,21 +98,23 @@
       {#if issue.labels.length > 0}
         <ul class="mt-2 flex flex-wrap gap-1">
           {#each issue.labels as l (l)}
-            <li class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-700">
+            <li
+              class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+            >
               {l}
             </li>
           {/each}
         </ul>
       {/if}
       {#if issue.assignees.length > 0}
-        <p class="mt-2 text-xs text-gray-500">
+        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
           Assignees: {issue.assignees.join(', ')}
         </p>
       {/if}
       <p class="mt-2 text-xs">
         <a
           href="https://github.com/{issue.repo}/issues/{issue.number}"
-          class="text-indigo-600 hover:underline"
+          class="text-indigo-600 hover:underline dark:text-indigo-400"
           target="_blank"
           rel="noreferrer"
         >
@@ -119,7 +123,10 @@
       </p>
       {#if autoImplementPR}
         <p class="mt-2 text-xs">
-          <a href="/prs/{autoImplementPR}" class="text-indigo-600 hover:underline">
+          <a
+            href="/prs/{autoImplementPR}"
+            class="text-indigo-600 hover:underline dark:text-indigo-400"
+          >
             View created PR →
           </a>
         </p>
@@ -129,7 +136,7 @@
     <div class="mb-4 flex items-center gap-2">
       <button
         type="button"
-        class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+        class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 dark:bg-indigo-500 dark:hover:bg-indigo-400"
         onclick={onReview}
         disabled={busy || reviewing}
       >
@@ -137,23 +144,25 @@
       </button>
       <button
         type="button"
-        class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
         onclick={onDismissToggle}
         disabled={busy}
       >
         {issue.dismissed ? 'Undismiss' : 'Dismiss'}
       </button>
       {#if err}
-        <span class="text-xs text-red-600">{err}</span>
+        <span class="text-xs text-red-600 dark:text-red-400">{err}</span>
       {/if}
     </div>
 
     <section>
-      <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">
+      <h2
+        class="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400"
+      >
         Review history ({reviews.length})
       </h2>
       {#if reviews.length === 0}
-        <p class="text-sm text-gray-500">No reviews yet.</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400">No reviews yet.</p>
       {:else}
         {#each reviews as r (r.id)}
           <IssueReviewCard review={r} />

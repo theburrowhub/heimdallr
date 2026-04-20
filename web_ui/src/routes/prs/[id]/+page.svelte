@@ -74,21 +74,28 @@
 </script>
 
 {#if err && !pr}
-  <p class="text-sm text-red-600">Could not load PR: {err}</p>
+  <p class="text-sm text-red-600 dark:text-red-400">Could not load PR: {err}</p>
 {:else if !pr}
-  <p class="text-sm text-gray-500">Loading…</p>
+  <p class="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
 {:else}
   <article>
-    <header class="mb-4 rounded-md border border-gray-200 bg-white p-4">
-      <h1 class="text-xl font-bold">{pr.title}</h1>
-      <p class="mt-1 text-sm text-gray-500">
+    <header
+      class="mb-4 rounded-md border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900"
+    >
+      <h1 class="text-xl font-bold text-gray-900 dark:text-gray-100">{pr.title}</h1>
+      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
         <span class="font-mono">{pr.repo}</span>
         · #{pr.number}
         · {pr.author}
         · <span class="capitalize">{pr.state}</span>
       </p>
       <p class="mt-2 text-xs">
-        <a href={pr.url} class="text-indigo-600 hover:underline" target="_blank" rel="noreferrer">
+        <a
+          href={pr.url}
+          class="text-indigo-600 hover:underline dark:text-indigo-400"
+          target="_blank"
+          rel="noreferrer"
+        >
           View on GitHub →
         </a>
       </p>
@@ -97,7 +104,7 @@
     <div class="mb-4 flex items-center gap-2">
       <button
         type="button"
-        class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+        class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 dark:bg-indigo-500 dark:hover:bg-indigo-400"
         onclick={onReview}
         disabled={busy || reviewing}
       >
@@ -105,23 +112,25 @@
       </button>
       <button
         type="button"
-        class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
         onclick={onDismissToggle}
         disabled={busy}
       >
         {pr.dismissed ? 'Undismiss' : 'Dismiss'}
       </button>
       {#if err}
-        <span class="text-xs text-red-600">{err}</span>
+        <span class="text-xs text-red-600 dark:text-red-400">{err}</span>
       {/if}
     </div>
 
     <section>
-      <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">
+      <h2
+        class="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400"
+      >
         Review history ({reviews.length})
       </h2>
       {#if reviews.length === 0}
-        <p class="text-sm text-gray-500">No reviews yet.</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400">No reviews yet.</p>
       {:else}
         {#each reviews as r (r.id)}
           <PRReviewCard review={r} />

@@ -72,27 +72,29 @@
     scrollToBottom();
   }
 
+  // The viewport is always dark (see comment in the template), so these
+  // colours target a dark background in both light and dark modes.
   function levelClass(level: LogLevel | null): string {
     switch (level) {
       case 'ERROR':
-        return 'text-red-700';
+        return 'text-red-400';
       case 'WARN':
-        return 'text-amber-700';
+        return 'text-amber-400';
       case 'INFO':
-        return 'text-gray-800';
+        return 'text-gray-100';
       case 'DEBUG':
         return 'text-gray-500';
       default:
-        return 'text-gray-700';
+        return 'text-gray-300';
     }
   }
 </script>
 
-<section class="space-y-4">
+<section class="space-y-4 text-gray-900 dark:text-gray-100">
   <header class="flex items-center justify-between gap-4">
     <div>
       <h1 class="text-2xl font-semibold">Logs</h1>
-      <p class="text-sm text-gray-500">
+      <p class="text-sm text-gray-500 dark:text-gray-400">
         Live daemon log stream. Keeps the last {MAX_LINES} lines in memory.
       </p>
     </div>
@@ -109,7 +111,7 @@
         Wrap
       </label>
       <button
-        class="rounded border border-gray-300 px-2 py-1 hover:bg-gray-50"
+        class="rounded border border-gray-300 px-2 py-1 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800"
         onclick={clear}
         data-testid="clear-logs"
       >
@@ -117,7 +119,7 @@
       </button>
       {#if !autoScroll}
         <button
-          class="rounded bg-indigo-600 px-2 py-1 text-white hover:bg-indigo-500"
+          class="rounded bg-indigo-600 px-2 py-1 text-white hover:bg-indigo-500 dark:bg-indigo-500 dark:hover:bg-indigo-400"
           onclick={jumpToBottom}
           data-testid="jump-bottom"
         >
@@ -127,10 +129,15 @@
     </div>
   </header>
 
+  <!--
+    The viewport is intentionally pinned to a dark terminal palette in both
+    themes — log streams are easier to skim in white-on-dark, and the level
+    colours are already tuned against that background.
+  -->
   <div
     bind:this={viewport}
     onscroll={onScroll}
-    class="h-[70vh] overflow-auto rounded border border-gray-200 bg-gray-950 p-3 font-mono text-xs text-gray-100"
+    class="h-[70vh] overflow-auto rounded border border-gray-200 bg-gray-950 p-3 font-mono text-xs text-gray-100 dark:border-gray-800"
     data-testid="logs-viewport"
   >
     {#if entries.length === 0}

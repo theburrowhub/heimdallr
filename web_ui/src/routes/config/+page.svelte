@@ -141,18 +141,18 @@
 
 <section class="space-y-8">
   <header>
-    <h1 class="text-2xl font-semibold">Configuration</h1>
-    <p class="text-sm text-gray-500">
+    <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Configuration</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400">
       Live daemon configuration. Saving applies the change immediately via <code>POST /reload</code
       >.
     </p>
   </header>
 
   {#if loading}
-    <p class="text-gray-500">Loading…</p>
+    <p class="text-gray-500 dark:text-gray-400">Loading…</p>
   {:else if err}
     <div
-      class="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+      class="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
       data-testid="config-error"
     >
       {err}
@@ -167,12 +167,17 @@
         void save();
       }}
     >
-      <fieldset class="space-y-4 rounded border border-gray-200 p-4">
-        <legend class="text-sm font-semibold">Polling & AI</legend>
+      <fieldset
+        class="space-y-4 rounded border border-gray-200 p-4 dark:border-gray-800 dark:text-gray-200"
+      >
+        <legend class="text-sm font-semibold text-gray-900 dark:text-gray-100">Polling & AI</legend>
 
         <label class="flex flex-col gap-1 text-sm">
           Poll interval
-          <select bind:value={pollInterval} class="w-40 rounded border border-gray-300 px-2 py-1">
+          <select
+            bind:value={pollInterval}
+            class="w-40 rounded border border-gray-300 px-2 py-1 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+          >
             {#each pollOptions as opt (opt)}
               <option value={opt}>{opt}</option>
             {/each}
@@ -182,7 +187,10 @@
         <div class="flex gap-4">
           <label class="flex flex-1 flex-col gap-1 text-sm">
             AI primary
-            <select bind:value={aiPrimary} class="rounded border border-gray-300 px-2 py-1">
+            <select
+              bind:value={aiPrimary}
+              class="rounded border border-gray-300 px-2 py-1 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+            >
               <option value="">—</option>
               {#each cliOptions as cli (cli)}
                 <option value={cli}>{cli}</option>
@@ -191,7 +199,10 @@
           </label>
           <label class="flex flex-1 flex-col gap-1 text-sm">
             AI fallback
-            <select bind:value={aiFallback} class="rounded border border-gray-300 px-2 py-1">
+            <select
+              bind:value={aiFallback}
+              class="rounded border border-gray-300 px-2 py-1 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+            >
               <option value="">— (none)</option>
               {#each cliOptions as cli (cli)}
                 <option value={cli}>{cli}</option>
@@ -202,7 +213,10 @@
 
         <label class="flex flex-col gap-1 text-sm">
           Review mode
-          <select bind:value={reviewMode} class="w-40 rounded border border-gray-300 px-2 py-1">
+          <select
+            bind:value={reviewMode}
+            class="w-40 rounded border border-gray-300 px-2 py-1 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+          >
             {#each reviewModes as m (m)}
               <option value={m}>{m}</option>
             {/each}
@@ -215,26 +229,32 @@
             type="number"
             min="0"
             bind:value={retentionDays}
-            class="w-40 rounded border border-gray-300 px-2 py-1"
+            class="w-40 rounded border border-gray-300 px-2 py-1 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
           />
         </label>
       </fieldset>
 
-      <fieldset class="space-y-4 rounded border border-gray-200 p-4">
-        <legend class="text-sm font-semibold">Repositories</legend>
+      <fieldset
+        class="space-y-4 rounded border border-gray-200 p-4 dark:border-gray-800 dark:text-gray-200"
+      >
+        <legend class="text-sm font-semibold text-gray-900 dark:text-gray-100">Repositories</legend>
         <label class="flex flex-col gap-1 text-sm">
           One <code>org/repo</code> per line. Blank lines are ignored.
           <textarea
             bind:value={repositoriesText}
             rows="5"
-            class="rounded border border-gray-300 px-2 py-1 font-mono text-sm"
+            class="rounded border border-gray-300 px-2 py-1 font-mono text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
             placeholder="freepik-company/ai-platform"
           ></textarea>
         </label>
       </fieldset>
 
-      <fieldset class="space-y-4 rounded border border-gray-200 p-4">
-        <legend class="text-sm font-semibold">Issue tracking</legend>
+      <fieldset
+        class="space-y-4 rounded border border-gray-200 p-4 dark:border-gray-800 dark:text-gray-200"
+      >
+        <legend class="text-sm font-semibold text-gray-900 dark:text-gray-100"
+          >Issue tracking</legend
+        >
 
         <label class="flex items-center gap-2 text-sm">
           <input type="checkbox" bind:checked={it.enabled} />
@@ -244,7 +264,10 @@
         <div class="flex gap-4">
           <label class="flex flex-1 flex-col gap-1 text-sm">
             Filter mode
-            <select bind:value={it.filter_mode} class="rounded border border-gray-300 px-2 py-1">
+            <select
+              bind:value={it.filter_mode}
+              class="rounded border border-gray-300 px-2 py-1 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+            >
               {#each filterModes as f (f)}
                 <option value={f}>{f}</option>
               {/each}
@@ -252,7 +275,10 @@
           </label>
           <label class="flex flex-1 flex-col gap-1 text-sm">
             Default action
-            <select bind:value={it.default_action} class="rounded border border-gray-300 px-2 py-1">
+            <select
+              bind:value={it.default_action}
+              class="rounded border border-gray-300 px-2 py-1 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+            >
               {#each defaultActions as a (a)}
                 <option value={a}>{a}</option>
               {/each}
@@ -285,12 +311,14 @@
         <button
           type="submit"
           disabled={saving}
-          class="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          class="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 dark:bg-indigo-500 dark:hover:bg-indigo-400"
         >
           {saving ? 'Saving…' : 'Save & reload'}
         </button>
         {#if savedFlash}
-          <span class="text-sm text-green-700" data-testid="config-saved">{savedFlash}</span>
+          <span class="text-sm text-green-700 dark:text-green-400" data-testid="config-saved"
+            >{savedFlash}</span
+          >
         {/if}
       </div>
     </form>
@@ -305,9 +333,9 @@
       value={values.join(', ')}
       oninput={(e) => onUpdate(parseCsv((e.currentTarget as HTMLInputElement).value))}
       placeholder="bug, feature, needs-triage"
-      class="rounded border border-gray-300 px-2 py-1 font-mono text-xs"
+      class="rounded border border-gray-300 px-2 py-1 font-mono text-xs dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
     />
-    <span class="text-xs text-gray-500"
+    <span class="text-xs text-gray-500 dark:text-gray-400"
       >Comma-separated. No quotes or spaces needed around values.</span
     >
   </label>

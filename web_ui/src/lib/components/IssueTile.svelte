@@ -17,11 +17,14 @@
   });
 </script>
 
-<a href="/issues/{issue.id}" class="block border-b border-gray-100 px-4 py-3 hover:bg-gray-50">
+<a
+  href="/issues/{issue.id}"
+  class="block border-b border-gray-100 px-4 py-3 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-900"
+>
   <div class="flex items-start gap-3">
     <div class="min-w-0 flex-1">
-      <p class="truncate text-sm font-medium text-gray-900">{issue.title}</p>
-      <p class="mt-0.5 truncate text-xs text-gray-500">
+      <p class="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{issue.title}</p>
+      <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
         <span class="font-mono">{issue.repo}</span>
         · #{issue.number}
         · {issue.author}
@@ -30,8 +33,8 @@
         <span
           class="mt-1 inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium
           {mode === 'auto_implement'
-            ? 'bg-indigo-100 text-indigo-700'
-            : 'bg-blue-100 text-blue-700'}"
+            ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+            : 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'}"
         >
           {mode}
         </span>
@@ -39,12 +42,14 @@
     </div>
     <div class="flex shrink-0 items-center gap-2">
       {#if isReviewing}
-        <span class="text-xs text-indigo-600">reviewing…</span>
+        <span class="text-xs text-indigo-600 dark:text-indigo-400">reviewing…</span>
       {/if}
       {#if severity}
         <SeverityBadge {severity} />
       {:else}
-        <span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+        <span
+          class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400"
+        >
           PENDING
         </span>
       {/if}

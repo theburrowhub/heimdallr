@@ -1,7 +1,15 @@
 @import 'tailwindcss';
 
+/* Opt into class-based dark mode so a manual toggle in the header can
+   override `prefers-color-scheme`. With v4 the variant is user-defined. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+:root.dark {
+  color-scheme: dark;
 }
 
 html,
