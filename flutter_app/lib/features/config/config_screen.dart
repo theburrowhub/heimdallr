@@ -471,6 +471,7 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     required ValueChanged<List<String>> onChanged,
   }) {
     return TextFormField(
+      key: ValueKey('$label:${values.join(',')}'),
       initialValue: values.join(', '),
       decoration: InputDecoration(
         labelText: label,

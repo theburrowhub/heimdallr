@@ -243,17 +243,23 @@ class IssueTrackingConfig {
     'assignees':          assignees,
   };
 
-  factory IssueTrackingConfig.fromJson(Map<String, dynamic> json) =>
-      IssueTrackingConfig(
+  static const validFilterModes = ['exclusive', 'inclusive'];
+  static const validDefaultActions = ['ignore', 'review_only'];
+
+  factory IssueTrackingConfig.fromJson(Map<String, dynamic> json) {
+    final rawFilterMode = (json['filter_mode'] as String?) ?? 'exclusive';
+    final rawDefaultAction = (json['default_action'] as String?) ?? 'ignore';
+    return IssueTrackingConfig(
         enabled:          (json['enabled']       as bool?)   ?? false,
-        filterMode:       (json['filter_mode']   as String?) ?? 'exclusive',
-        defaultAction:    (json['default_action'] as String?) ?? 'ignore',
+        filterMode:       validFilterModes.contains(rawFilterMode) ? rawFilterMode : 'exclusive',
+        defaultAction:    validDefaultActions.contains(rawDefaultAction) ? rawDefaultAction : 'ignore',
         developLabels:    _stringList(json['develop_labels']),
         reviewOnlyLabels: _stringList(json['review_only_labels']),
         skipLabels:       _stringList(json['skip_labels']),
         organizations:    _stringList(json['organizations']),
         assignees:        _stringList(json['assignees']),
       );
+  }
 
   static List<String> _stringList(dynamic v) =>
       (v as List<dynamic>?)?.cast<String>() ?? [];
