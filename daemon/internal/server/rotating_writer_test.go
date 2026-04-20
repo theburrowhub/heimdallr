@@ -1,10 +1,13 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -162,4 +165,103 @@ func TestRotatingWriter_ReopenPicksUpExistingSize(t *testing.T) {
 	if got := readFile(t, path+".1"); !strings.Contains(got, "older") {
 		t.Fatalf(".1 = %q, want pre-existing content", got)
 	}
+}
+
+func TestRotatingWriter_ClosedWriterReturnsErrNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.log")
+
+	w, err := NewRotatingWriter(path, 1024, 3)
+	if err != nil {
+		t.Fatalf("NewRotatingWriter: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// After Close, w.f is nil. A write from a late slog.Info must
+	// surface os.ErrClosed instead of panicking on w.f.Write(p).
+	_, err = w.Write([]byte("after-close\n"))
+	if !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("Write after Close returned %v, want os.ErrClosed", err)
+	}
+}
+
+func TestRotatingWriter_RotationRecoversFromRenameFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission semantics required")
+	}
+	if os.Geteuid() == 0 {
+		// Running as root bypasses file-mode permissions, so the
+		// recovery path is not exercised.
+		t.Skip("rotation recovery requires a non-root user")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.log")
+
+	w, err := NewRotatingWriter(path, 6, 3)
+	if err != nil {
+		t.Fatalf("NewRotatingWriter: %v", err)
+	}
+	defer w.Close()
+
+	// Write under the cap so the file exists, then make the directory
+	// read-only: subsequent rename attempts will fail with EACCES and
+	// exercise the recoverActive fallback.
+	writeLine(t, w, "first\n")
+	if err := os.Chmod(dir, 0500); err != nil {
+		t.Fatalf("chmod %s 0500: %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+
+	// This write crosses the cap and triggers a rotation that cannot
+	// complete (no rename allowed). The writer must leave a valid file
+	// handle behind and not panic.
+	if _, err := w.Write([]byte("second\n")); err != nil && !errors.Is(err, os.ErrClosed) {
+		// Write may succeed (recovered handle) or degrade to
+		// os.ErrClosed if the fallback open also failed. Any other
+		// error (or a panic) is a regression.
+		t.Fatalf("Write after failed rotation: unexpected err %v", err)
+	}
+	// Critically: a follow-up write must not panic. That's the #78
+	// regression this test guards against.
+	_, _ = w.Write([]byte("third\n"))
+}
+
+func TestRotatingWriter_ConcurrentWritesStaySafe(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.log")
+
+	// Small cap forces many rotations during the run so the mutex is
+	// exercised across rotation boundaries.
+	w, err := NewRotatingWriter(path, 256, 5)
+	if err != nil {
+		t.Fatalf("NewRotatingWriter: %v", err)
+	}
+	defer w.Close()
+
+	const (
+		goroutines = 20
+		perWorker  = 50
+	)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			line := []byte(fmt.Sprintf("worker-%02d-xxxxxxxxxxxxxxxx\n", id))
+			for j := 0; j < perWorker; j++ {
+				if _, err := w.Write(line); err != nil {
+					// os.ErrClosed is acceptable if recovery ever
+					// fails, but a panic would abort the test.
+					if !errors.Is(err, os.ErrClosed) {
+						t.Errorf("concurrent write: %v", err)
+						return
+					}
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
 }

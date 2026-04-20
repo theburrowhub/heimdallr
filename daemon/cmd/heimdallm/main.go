@@ -671,20 +671,27 @@ func main() {
 
 // logRotationConfig reads HEIMDALLM_LOG_MAX_MB and HEIMDALLM_LOG_KEEP from
 // the environment, falling back to the package defaults. Invalid values
-// fall back silently rather than refusing to start — logging is
-// non-critical enough that a typo in an env var shouldn't take the daemon
-// down.
+// fall back to the default *and* warn to stderr so operators notice typos
+// instead of silently losing the override they thought they had set.
+// Logging is non-critical enough that a bad env var should never take the
+// daemon down.
 func logRotationConfig() (maxBytes int64, keep int) {
 	maxBytes = server.DefaultLogMaxBytes
 	keep = server.DefaultLogKeep
 	if v := os.Getenv("HEIMDALLM_LOG_MAX_MB"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			maxBytes = int64(n) * 1024 * 1024
+		} else {
+			fmt.Fprintf(os.Stderr, "heimdallm: ignoring invalid HEIMDALLM_LOG_MAX_MB=%q (want positive integer, using default %d MiB)\n",
+				v, server.DefaultLogMaxBytes/(1024*1024))
 		}
 	}
 	if v := os.Getenv("HEIMDALLM_LOG_KEEP"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			keep = n
+		} else {
+			fmt.Fprintf(os.Stderr, "heimdallm: ignoring invalid HEIMDALLM_LOG_KEEP=%q (want positive integer, using default %d)\n",
+				v, server.DefaultLogKeep)
 		}
 	}
 	return

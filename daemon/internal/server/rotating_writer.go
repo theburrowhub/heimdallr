@@ -88,6 +88,14 @@ func (w *RotatingWriter) Write(p []byte) (int, error) {
 			fmt.Fprintf(os.Stderr, "heimdallm: log rotation failed: %v\n", err)
 		}
 	}
+	// Defensive guard: rotation's recovery path aims to always leave
+	// w.f non-nil, but if every fallback also failed (e.g. the data
+	// directory became read-only) the handle can still be nil. Surface
+	// os.ErrClosed instead of panicking so the caller — typically slog
+	// — can degrade instead of crashing the daemon.
+	if w.f == nil {
+		return 0, os.ErrClosed
+	}
 	n, err := w.f.Write(p)
 	w.written += int64(n)
 	return n, err
@@ -114,8 +122,19 @@ func (w *RotatingWriter) backupPath(n int) string {
 
 // rotateLocked performs the rename shuffle and opens a fresh active file.
 // Must be called with w.mu held.
+//
+// Invariant: on every return path — success or error — w.f is either a
+// valid, writable file handle or (as a last resort, if even the recovery
+// open failed) nil. The Write path treats nil as os.ErrClosed rather
+// than panicking, but we try hard to never leave it nil: any failure
+// in the remove/shift/rename steps triggers recoverActive(), which
+// re-opens w.path so subsequent writes keep succeeding even though the
+// rotation itself gave up.
 func (w *RotatingWriter) rotateLocked() error {
 	if err := w.f.Close(); err != nil {
+		// We closed the file; we still want to try to recover a handle.
+		w.f = nil
+		w.recoverActive()
 		return fmt.Errorf("close active: %w", err)
 	}
 	w.f = nil
@@ -125,6 +144,7 @@ func (w *RotatingWriter) rotateLocked() error {
 	oldest := w.backupPath(w.keep)
 	if _, err := os.Stat(oldest); err == nil {
 		if err := os.Remove(oldest); err != nil {
+			w.recoverActive()
 			return fmt.Errorf("remove %s: %w", filepath.Base(oldest), err)
 		}
 	}
@@ -136,6 +156,7 @@ func (w *RotatingWriter) rotateLocked() error {
 		to := w.backupPath(n + 1)
 		if _, err := os.Stat(from); err == nil {
 			if err := os.Rename(from, to); err != nil {
+				w.recoverActive()
 				return fmt.Errorf("rename %s → %s: %w",
 					filepath.Base(from), filepath.Base(to), err)
 			}
@@ -144,11 +165,14 @@ func (w *RotatingWriter) rotateLocked() error {
 
 	// Promote the active file to .1.
 	if err := os.Rename(w.path, w.backupPath(1)); err != nil {
-		// Rename failed — truncate the active file as a fallback so the
-		// daemon can keep logging. History is lost but we stay healthy.
+		// Rename failed — truncate-then-reopen the active file as a
+		// fallback so the daemon can keep logging. History is lost but
+		// we stay healthy.
 		fallback, ferr := os.OpenFile(w.path,
 			os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0640)
 		if ferr != nil {
+			// Even truncate failed — leave w.f nil so Write returns
+			// os.ErrClosed instead of panicking.
 			return fmt.Errorf("rename failed (%v) and truncate fallback failed: %w", err, ferr)
 		}
 		w.f = fallback
@@ -160,9 +184,37 @@ func (w *RotatingWriter) rotateLocked() error {
 	fresh, err := os.OpenFile(w.path,
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
 	if err != nil {
+		// The old active is already renamed to .1 — recoverActive will
+		// create a new empty file at w.path if it can.
+		w.recoverActive()
 		return fmt.Errorf("open fresh %s: %w", filepath.Base(w.path), err)
 	}
 	w.f = fresh
 	w.written = 0
 	return nil
+}
+
+// recoverActive is a best-effort attempt to leave w with a writable file
+// handle after a rotation step fails. It tries O_APPEND first (so we
+// keep any content that is still at w.path — e.g. the shift-backup path
+// never moved the active file) and falls back to O_TRUNC|O_CREATE if
+// that fails. If even that fails w.f stays nil and the next Write
+// returns os.ErrClosed — preferable to a panic. Must be called with
+// w.mu held and only when w.f is nil.
+func (w *RotatingWriter) recoverActive() {
+	f, err := os.OpenFile(w.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
+	if err == nil {
+		if info, statErr := f.Stat(); statErr == nil {
+			w.written = info.Size()
+		}
+		w.f = f
+		return
+	}
+	f, err = os.OpenFile(w.path, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0640)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "heimdallm: log rotation recovery failed: %v\n", err)
+		return
+	}
+	w.f = f
+	w.written = 0
 }
