@@ -145,15 +145,11 @@ func main() {
 	issueFetcher := issuepipeline.NewFetcher(ghClient, s, issuePipe)
 	srv := server.New(s, broker, p, apiToken)
 
-	// cfgMu protects cfg, sched and the discovery loop so reload is safe from any goroutine.
+	// cfgMu protects cfg and the pipeline so reload is safe from any goroutine.
 	var cfgMu sync.Mutex
-	var sched *scheduler.Scheduler
 
-	// discoverySvc holds the discovered repo cache; it is nil when topic-based
-	// discovery is disabled. discoveryCancel stops the background loop so reload
-	// can restart it with fresh config.
+	// discoverySvc holds the discovered repo cache.
 	discoverySvc := discovery.NewService(ghClient)
-	var discoveryCancel context.CancelFunc
 
 	// loginMu guards cachedLogin against concurrent reads/writes from the
 	// poll cycle and HTTP goroutines.
@@ -240,215 +236,64 @@ func main() {
 		})})
 	}
 
-	makePollFn := func(c *config.Config) func() {
-		return func() {
-			cfgMu.Lock()
-			static := c.GitHub.Repositories
-			cfgMu.Unlock()
-			// Merge static list with repos discovered via topic tag (empty when disabled).
-			repos := discovery.MergeRepos(static, discoverySvc.Discovered(), c.GitHub.NonMonitored)
+	// ── Multi-tier Pipeline ──────────────────────────────────────────────
+	// tier2Adapter bridges main.go's concrete types to the Pipeline's
+	// Tier 2 / Tier 3 interfaces.
+	adapter := &tier2Adapter{
+		ghClient:  ghClient,
+		pipeline:  p,
+		issuePipe: issuePipe,
+		fetcher:   issueFetcher,
+		store:     s,
+		broker:    broker,
+		cfgMu:     &cfgMu,
+		cfg:       &cfg,
+		loginMu:   &loginMu,
+		login:     &cachedLogin,
+		reviewMu:  &reviewMu,
+		inFlight:  inFlight,
+		runReview: runReview,
+	}
 
-			// Fetch all review-requested PRs without a repo filter — adding many
-			// repo: terms to the Search API query can exceed its length limit and
-			// silently return zero results. We filter to monitored repos below.
-			prs, err := ghClient.FetchPRsToReview()
-			if err != nil {
-				slog.Error("poll: fetch PRs to review", "err", err)
-				return
-			}
-			// Build a quick lookup set for monitored repos.
-			monitoredSet := make(map[string]struct{}, len(repos))
-			for _, r := range repos {
-				monitoredSet[r] = struct{}{}
-			}
-			for _, pr := range prs {
-				pr.ResolveRepo()
-				if pr.Repo == "" {
-					slog.Warn("poll: skipping PR with empty repo", "pr_number", pr.Number)
-					continue
-				}
-				// Only auto-review PRs from repos the user has opted in to monitor.
-				if _, monitored := monitoredSet[pr.Repo]; !monitored {
-					continue
-				}
+	buildPipeline := func(c *config.Config) *scheduler.Pipeline {
+		return scheduler.NewPipeline(scheduler.PipelineConfig{
+			DiscoveryInterval: parseDiscoveryInterval(c.GitHub.DiscoveryInterval),
+			PollInterval:      parsePollInterval(c.GitHub.PollInterval),
+			WatchInterval:     parseWatchInterval(c.GitHub.WatchInterval),
+			RateLimitPerHour:  4500,
+		}, scheduler.PipelineDeps{
+			Discovery: discoverySvc,
+			Tier1ConfigFn: func() scheduler.Tier1Config {
 				cfgMu.Lock()
-				aiCfg := c.AIForRepo(pr.Repo)
-				cfgMu.Unlock()
-				existing, _ := s.GetPRByGithubID(pr.ID)
-				if existing != nil {
-					// Skip PRs the user has dismissed
-					if existing.Dismissed {
-						continue
-					}
-					if rev, err := s.LatestReviewForPR(existing.ID); err == nil && rev != nil {
-						// Skip if PR hasn't been meaningfully updated since our last review.
-						// Add a 30-second grace period: GitHub bumps updated_at by ~2s when
-						// a review is submitted, which would otherwise trigger an immediate re-review.
-						if !pr.UpdatedAt.After(rev.CreatedAt.Add(30 * time.Second)) {
-							continue
-						}
-					}
+				defer cfgMu.Unlock()
+				orgs := append([]string(nil), cfg.GitHub.DiscoveryOrgs...)
+				if len(orgs) == 0 {
+					orgs = discovery.InferOrgs(cfg.GitHub.Repositories)
 				}
-				prCopy := *pr // copy to avoid loop variable capture
-				// Run each review in its own goroutine so the poll loop is not
-				// blocked by a long-running AI review (especially when local_dir
-				// is set and the CLI analyses the full repo).  The inFlight guard
-				// inside runReview prevents concurrent reviews of the same PR.
-				go runReview(&prCopy, aiCfg)
-			}
-			// Retry reviews stored locally but not yet published to GitHub
-			p.PublishPending()
-
-			// ── Issue tracking cycle ─────────────────────────────────────
-			// Check if ANY repo has issue tracking enabled (global or per-repo).
-			cfgMu.Lock()
-			globalIT := c.GitHub.IssueTracking
-			anyITEnabled := globalIT.Enabled
-			if !anyITEnabled {
-				for _, r := range c.AI.Repos {
-					if r.IssueTracking != nil && r.IssueTracking.Enabled {
-						anyITEnabled = true
-						break
-					}
+				return scheduler.Tier1Config{
+					StaticRepos:    cfg.GitHub.Repositories,
+					NonMonitored:   cfg.GitHub.NonMonitored,
+					DiscoveryTopic: cfg.GitHub.DiscoveryTopic,
+					DiscoveryOrgs:  orgs,
 				}
-			}
-			cfgMu.Unlock()
-			if anyITEnabled {
-				loginMu.Lock()
-				authUser := cachedLogin
-				loginMu.Unlock()
-				if authUser == "" {
-					if u, err := ghClient.AuthenticatedUser(); err == nil {
-						authUser = u
-						loginMu.Lock()
-						cachedLogin = u
-						loginMu.Unlock()
-					}
-				}
-
-				optsFor := func(issue *gh.Issue) issuepipeline.RunOptions {
-					cfgMu.Lock()
-					aiCfg := c.AIForRepo(issue.Repo)
-					if aiCfg.Primary == "" {
-						aiCfg.Primary = c.AI.Primary
-					}
-					agentCfg := c.AgentConfigFor(aiCfg.Primary)
-					cfgMu.Unlock()
-
-					extraFlags := agentCfg.ExtraFlags
-					if extraFlags != "" {
-						if err := executor.ValidateExtraFlags(extraFlags); err != nil {
-							slog.Warn("issue poll: extra_flags rejected", "err", err)
-							extraFlags = ""
-						}
-					}
-
-					issuePrompt, issueInstructions := resolveIssuePrompt(s, aiCfg.IssuePrompt, agentCfg.PromptID)
-					implPrompt, implInstructions := resolveImplementPrompt(s, aiCfg.ImplementPrompt, agentCfg.PromptID)
-
-					return issuepipeline.RunOptions{
-						Primary:  aiCfg.Primary,
-						Fallback: aiCfg.Fallback,
-						ExecOpts: executor.ExecOptions{
-							Model:                agentCfg.Model,
-							MaxTurns:             agentCfg.MaxTurns,
-							ApprovalMode:         agentCfg.ApprovalMode,
-							ExtraFlags:           extraFlags,
-							WorkDir:              aiCfg.LocalDir,
-							Effort:               agentCfg.Effort,
-							PermissionMode:       agentCfg.PermissionMode,
-							Bare:                 agentCfg.Bare,
-							DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
-							NoSessionPersistence: agentCfg.NoSessionPersistence,
-						},
-						IssuePromptOverride:     issuePrompt,
-						IssueInstructions:       issueInstructions,
-						ImplementPromptOverride: implPrompt,
-						ImplementInstructions:   implInstructions,
-						PRReviewers: aiCfg.PRReviewers,
-						PRAssignee:  aiCfg.PRAssignee,
-						PRLabels:    aiCfg.PRLabels,
-						PRDraft:     aiCfg.PRDraft,
-					}
-				}
-
-				// Dependency promotion pass: flip issues carrying a
-				// blocked label to the promote-to label once all their
-				// declared `## Depends on` targets have closed. Runs BEFORE
-				// the fetch so a freshly-promoted issue is picked up in the
-				// same poll cycle rather than waiting for the next one.
-				// No-op when BlockedLabels is unset, so default installs
-				// don't pay for the extra calls.
-				if len(globalIT.BlockedLabels) > 0 {
-					if n, err := issuepipeline.PromoteReady(context.Background(), ghClient, globalIT, repos); err != nil {
-						slog.Error("poll: issue promotion failed", "err", err)
-					} else if n > 0 {
-						slog.Info("poll: promoted issues", "count", n)
-					}
-				}
-
-				for _, repo := range repos {
-					cfgMu.Lock()
-					repoIT := c.IssueTrackingForRepo(repo)
-					cfgMu.Unlock()
-					if !repoIT.Enabled {
-						continue
-					}
-					n, err := issueFetcher.ProcessRepo(context.Background(), repo, repoIT, authUser, optsFor)
-					if err != nil {
-						slog.Error("poll: issue fetch failed", "repo", repo, "err", err)
-						continue
-					}
-					if n > 0 {
-						slog.Info("poll: processed issues", "repo", repo, "count", n)
-					}
-				}
-			}
-		}
+			},
+			PRFetcher:      adapter,
+			PRProcessor:    adapter,
+			IssueProcessor: adapter,
+			Promoter:       adapter,
+			Store:          adapter,
+			Tier2ConfigFn: func() []string {
+				cfgMu.Lock()
+				defer cfgMu.Unlock()
+				return discovery.MergeRepos(cfg.GitHub.Repositories, discoverySvc.Discovered(), cfg.GitHub.NonMonitored)
+			},
+			ItemChecker: adapter,
+		})
 	}
 
-	startScheduler := func(c *config.Config) *scheduler.Scheduler {
-		sc := scheduler.New(parsePollInterval(c.GitHub.PollInterval), makePollFn(c))
-		sc.Start()
-		return sc
-	}
-
-	// startDiscovery spawns the discovery loop when discovery_topic is configured.
-	// It returns a cancel func for the running loop, or nil when discovery is off.
-	// Must be called with cfgMu held so the caller can swap cancel funcs atomically.
-	startDiscovery := func(c *config.Config) context.CancelFunc {
-		if c.GitHub.DiscoveryTopic == "" {
-			return nil
-		}
-		interval := parseDiscoveryInterval(c.GitHub.DiscoveryInterval)
-		ctx, cancel := context.WithCancel(context.Background())
-		topic := c.GitHub.DiscoveryTopic
-		orgs := append([]string(nil), c.GitHub.DiscoveryOrgs...)
-		if len(orgs) == 0 {
-			orgs = discovery.InferOrgs(c.GitHub.Repositories)
-		}
-		go discoverySvc.Run(ctx, interval, topic, orgs)
-		slog.Info("discovery: loop started", "topic", topic, "orgs", orgs, "interval", interval)
-		return cancel
-	}
-
-	cfgMu.Lock()
-	sched = startScheduler(cfg)
-	discoveryCancel = startDiscovery(cfg)
-	cfgMu.Unlock()
-
-	// Capture the scheduler pointer under mutex so the deferred Stop is safe
-	// even if a concurrent reload replaces sched before this goroutine exits.
-	defer func() {
-		cfgMu.Lock()
-		sc := sched
-		dc := discoveryCancel
-		cfgMu.Unlock()
-		sc.Stop()
-		if dc != nil {
-			dc()
-		}
-	}()
+	pipe := buildPipeline(cfg)
+	pipe.Start(context.Background())
+	defer pipe.Stop()
 
 	// Expose live config for GET /config
 	srv.SetRepoMetaFns(ghClient.FetchLabels, ghClient.FetchCollaborators)
@@ -521,11 +366,11 @@ func main() {
 		return login, err
 	})
 
-	// Wire the reload callback: re-read config from disk, restart scheduler
-	// and the discovery loop so changes to discovery_topic / orgs / interval
-	// take effect without a daemon restart. Reuses the `loadConfig` closure
-	// captured at startup so the two paths cannot drift on which loader
-	// they pick — both see the same HEIMDALLM_DATA_DIR snapshot.
+	// Wire the reload callback: re-read config from disk, restart the
+	// pipeline so changes to discovery_topic / orgs / intervals take effect
+	// without a daemon restart. Reuses the `loadConfig` closure captured at
+	// startup so the two paths cannot drift on which loader they pick — both
+	// see the same HEIMDALLM_DATA_DIR snapshot.
 	srv.SetReloadFn(func() error {
 		newCfg, err := loadConfig(cfgPath)
 		if err != nil {
@@ -539,31 +384,17 @@ func main() {
 			return fmt.Errorf("reload: %w", err)
 		}
 
-		cfgMu.Lock()
-		oldSched := sched
-		oldDiscoveryCancel := discoveryCancel
-		cfgMu.Unlock()
-
-		// Stop the old discovery loop BEFORE starting the new one. The Search
-		// API rate limit (30 req/min) is tight enough that running two loops
-		// in parallel — even briefly during reload — risks throttling the
-		// daemon.
-		if oldDiscoveryCancel != nil {
-			oldDiscoveryCancel()
-		}
+		// Stop the old pipeline before starting a new one. The Search API
+		// rate limit (30 req/min) is tight enough that running two loops in
+		// parallel — even briefly during reload — risks throttling.
+		pipe.Stop()
 
 		cfgMu.Lock()
 		cfg = newCfg
-		sched = startScheduler(newCfg)
-		discoveryCancel = startDiscovery(newCfg)
 		cfgMu.Unlock()
 
-		// Scheduler overlap is pre-existing behaviour and tolerated; Stop is
-		// idempotent and safe to call outside the lock.
-		oldSched.Stop()
-
-		// Run first poll immediately with new config
-		go makePollFn(newCfg)()
+		pipe = buildPipeline(newCfg)
+		pipe.Start(context.Background())
 		return nil
 	})
 
@@ -723,9 +554,6 @@ func main() {
 		return nil
 	})
 
-	// Initial poll
-	go makePollFn(cfg)()
-
 	go func() {
 		slog.Info("daemon started", "port", cfg.Server.Port, "bind", cfg.Server.BindAddr)
 		if err := srv.Start(cfg.Server.Port, cfg.Server.BindAddr); err != nil {
@@ -853,6 +681,226 @@ func parseDiscoveryInterval(s string) time.Duration {
 		return 15 * time.Minute
 	}
 	return d
+}
+
+func parseWatchInterval(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 1 * time.Minute
+	}
+	return d
+}
+
+// ── tier2Adapter bridges main.go's concrete types to Pipeline interfaces ──
+
+type tier2Adapter struct {
+	ghClient  *gh.Client
+	pipeline  *pipeline.Pipeline
+	issuePipe *issuepipeline.Pipeline
+	fetcher   *issuepipeline.Fetcher
+	store     *store.Store
+	broker    *sse.Broker
+	cfgMu     *sync.Mutex
+	cfg       **config.Config
+	loginMu   *sync.Mutex
+	login     *string
+	reviewMu  *sync.Mutex
+	inFlight  map[int64]bool
+	runReview func(pr *gh.PullRequest, aiCfg config.RepoAI)
+}
+
+// FetchPRsToReview implements scheduler.Tier2PRFetcher.
+func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
+	prs, err := a.ghClient.FetchPRsToReview()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]scheduler.Tier2PR, 0, len(prs))
+	for _, pr := range prs {
+		pr.ResolveRepo()
+		if pr.Repo == "" {
+			slog.Warn("adapter: skipping PR with empty repo", "pr_number", pr.Number)
+			continue
+		}
+		out = append(out, scheduler.Tier2PR{
+			ID:        pr.ID,
+			Number:    pr.Number,
+			Repo:      pr.Repo,
+			UpdatedAt: pr.UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
+// ProcessPR implements scheduler.Tier2PRProcessor.
+func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) error {
+	a.cfgMu.Lock()
+	c := *a.cfg
+	aiCfg := c.AIForRepo(pr.Repo)
+	a.cfgMu.Unlock()
+
+	// Reconstruct the full gh.PullRequest from the minimal Tier2PR.
+	// FetchPRsToReview already resolved the repo and set UpdatedAt; we
+	// need at minimum ID, Number, Repo, UpdatedAt for the pipeline.
+	ghPR := &gh.PullRequest{
+		ID:        pr.ID,
+		Number:    pr.Number,
+		Repo:      pr.Repo,
+		UpdatedAt: pr.UpdatedAt,
+	}
+	a.runReview(ghPR, aiCfg)
+	return nil
+}
+
+// PublishPending implements scheduler.Tier2PRProcessor.
+func (a *tier2Adapter) PublishPending() {
+	a.pipeline.PublishPending()
+}
+
+// ProcessRepo implements scheduler.Tier2IssueProcessor.
+func (a *tier2Adapter) ProcessRepo(ctx context.Context, repo string) (int, error) {
+	a.cfgMu.Lock()
+	c := *a.cfg
+	repoIT := c.IssueTrackingForRepo(repo)
+	globalIT := c.GitHub.IssueTracking
+	anyITEnabled := globalIT.Enabled
+	if !anyITEnabled {
+		for _, r := range c.AI.Repos {
+			if r.IssueTracking != nil && r.IssueTracking.Enabled {
+				anyITEnabled = true
+				break
+			}
+		}
+	}
+	a.cfgMu.Unlock()
+
+	if !anyITEnabled || !repoIT.Enabled {
+		return 0, nil
+	}
+
+	// Resolve authenticated user
+	a.loginMu.Lock()
+	authUser := *a.login
+	a.loginMu.Unlock()
+	if authUser == "" {
+		if u, err := a.ghClient.AuthenticatedUser(); err == nil {
+			authUser = u
+			a.loginMu.Lock()
+			*a.login = u
+			a.loginMu.Unlock()
+		}
+	}
+
+	optsFor := func(issue *gh.Issue) issuepipeline.RunOptions {
+		a.cfgMu.Lock()
+		c := *a.cfg
+		aiCfg := c.AIForRepo(issue.Repo)
+		if aiCfg.Primary == "" {
+			aiCfg.Primary = c.AI.Primary
+		}
+		agentCfg := c.AgentConfigFor(aiCfg.Primary)
+		a.cfgMu.Unlock()
+
+		extraFlags := agentCfg.ExtraFlags
+		if extraFlags != "" {
+			if err := executor.ValidateExtraFlags(extraFlags); err != nil {
+				slog.Warn("issue poll: extra_flags rejected", "err", err)
+				extraFlags = ""
+			}
+		}
+
+		issuePrompt, issueInstructions := resolveIssuePrompt(a.store, aiCfg.IssuePrompt, agentCfg.PromptID)
+		implPrompt, implInstructions := resolveImplementPrompt(a.store, aiCfg.ImplementPrompt, agentCfg.PromptID)
+
+		return issuepipeline.RunOptions{
+			Primary:  aiCfg.Primary,
+			Fallback: aiCfg.Fallback,
+			ExecOpts: executor.ExecOptions{
+				Model:                agentCfg.Model,
+				MaxTurns:             agentCfg.MaxTurns,
+				ApprovalMode:         agentCfg.ApprovalMode,
+				ExtraFlags:           extraFlags,
+				WorkDir:              aiCfg.LocalDir,
+				Effort:               agentCfg.Effort,
+				PermissionMode:       agentCfg.PermissionMode,
+				Bare:                 agentCfg.Bare,
+				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
+				NoSessionPersistence: agentCfg.NoSessionPersistence,
+			},
+			IssuePromptOverride:     issuePrompt,
+			IssueInstructions:       issueInstructions,
+			ImplementPromptOverride: implPrompt,
+			ImplementInstructions:   implInstructions,
+			PRReviewers:             aiCfg.PRReviewers,
+			PRAssignee:              aiCfg.PRAssignee,
+			PRLabels:                aiCfg.PRLabels,
+			PRDraft:                 aiCfg.PRDraft,
+		}
+	}
+
+	return a.fetcher.ProcessRepo(ctx, repo, repoIT, authUser, optsFor)
+}
+
+// PromoteReady implements scheduler.Tier2Promoter.
+func (a *tier2Adapter) PromoteReady(ctx context.Context, repos []string) (int, error) {
+	a.cfgMu.Lock()
+	c := *a.cfg
+	globalIT := c.GitHub.IssueTracking
+	a.cfgMu.Unlock()
+
+	if !globalIT.Enabled || len(globalIT.BlockedLabels) == 0 {
+		return 0, nil
+	}
+	return issuepipeline.PromoteReady(ctx, a.ghClient, globalIT, repos)
+}
+
+// PRAlreadyReviewed implements scheduler.Tier2Store.
+func (a *tier2Adapter) PRAlreadyReviewed(githubID int64, updatedAt time.Time) bool {
+	existing, _ := a.store.GetPRByGithubID(githubID)
+	if existing == nil {
+		return false
+	}
+	// Skip PRs the user has dismissed
+	if existing.Dismissed {
+		return true
+	}
+	rev, err := a.store.LatestReviewForPR(existing.ID)
+	if err != nil || rev == nil {
+		return false
+	}
+	// Add a 30-second grace period: GitHub bumps updated_at by ~2s when
+	// a review is submitted, which would otherwise trigger an immediate re-review.
+	return !updatedAt.After(rev.CreatedAt.Add(30 * time.Second))
+}
+
+// CheckItem implements scheduler.Tier3ItemChecker.
+func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem) (bool, error) {
+	// Use the GitHub Issues API — works for both issues and PRs.
+	issue, err := a.ghClient.GetIssue(item.Repo, item.Number)
+	if err != nil {
+		return false, err
+	}
+	changed := issue.UpdatedAt.After(item.LastSeen)
+	return changed, nil
+}
+
+// HandleChange implements scheduler.Tier3ItemChecker.
+func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchItem) error {
+	if item.Type == "pr" {
+		a.cfgMu.Lock()
+		c := *a.cfg
+		aiCfg := c.AIForRepo(item.Repo)
+		a.cfgMu.Unlock()
+
+		ghPR := &gh.PullRequest{
+			ID:     item.GithubID,
+			Number: item.Number,
+			Repo:   item.Repo,
+		}
+		a.runReview(ghPR, aiCfg)
+	}
+	// For issues, Tier 2 will pick up the change on its next cycle.
+	return nil
 }
 
 type notifyWithSSE struct {
