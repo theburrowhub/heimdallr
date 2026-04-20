@@ -1,13 +1,11 @@
 import 'dart:async';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/models/config_model.dart';
-import '../../core/models/agent.dart';
 import '../../core/setup/first_run_setup.dart';
 import '../../core/setup/repo_discovery.dart';
 import '../../shared/widgets/toast.dart';
-import '../agents/agents_screen.dart' show agentsProvider;
 import '../config/config_providers.dart';
 
 class ReposScreen extends ConsumerStatefulWidget {
@@ -221,7 +219,6 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
 
   @override
   Widget build(BuildContext context) {
-    final prompts = ref.watch(agentsProvider).valueOrNull ?? [];
     final monitored =
         widget.repos.where((r) => widget.configs[r]!.monitored).toList();
     final disabled =
@@ -237,7 +234,7 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
             monitored.length,
             Colors.green.shade700,
           ),
-          ..._buildOrgGroups('monitored', monitored, prompts),
+          ..._buildOrgGroups('monitored', monitored),
         ],
         _sectionHeader(
           context,
@@ -254,7 +251,7 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
             ),
           )
         else
-          ..._buildOrgGroups('disabled', disabled, prompts),
+          ..._buildOrgGroups('disabled', disabled),
       ],
     );
   }
@@ -262,7 +259,6 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
   List<Widget> _buildOrgGroups(
     String section,
     List<String> repos,
-    List<ReviewPrompt> prompts,
   ) {
     final groups = _groupByOrg(repos);
     final items = <Widget>[];
@@ -278,7 +274,6 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
           items.add(_RepoTile(
             repo: r,
             config: widget.configs[r]!,
-            prompts: prompts,
             onChanged: (rc) => widget.onChanged(r, rc),
           ));
         }
@@ -341,249 +336,77 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
 class _RepoTile extends StatelessWidget {
   final String repo;
   final RepoConfig config;
-  final List<ReviewPrompt> prompts;
   final ValueChanged<RepoConfig> onChanged;
 
   const _RepoTile({
     required this.repo,
     required this.config,
-    required this.prompts,
     required this.onChanged,
   });
 
   @override
   Widget build(BuildContext context) {
-    final overrides = _buildOverrides();
     final hasDirMapping = config.localDir != null && config.localDir!.isNotEmpty;
-    final dirLabel = hasDirMapping
-        ? config.localDir!.split('/').last
-        : null;
+    final hasOverrides = config.hasAiOverride;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
-      child: ExpansionTile(
-        leading: Switch(
-          value: config.monitored,
-          onChanged: (v) => onChanged(config.copyWith(monitored: v)),
-        ),
-        title: Text(repo,
-            style: TextStyle(
-              fontWeight: config.monitored ? FontWeight.w600 : FontWeight.normal,
-              color: config.monitored ? null : Colors.grey,
-            )),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (overrides != null)
-              Text(overrides, style: const TextStyle(fontSize: 12)),
-            const SizedBox(height: 2),
-            // Directory mapping — always visible
-            Row(children: [
-              Icon(
-                hasDirMapping ? Icons.folder : Icons.folder_off_outlined,
-                size: 13,
-                color: hasDirMapping ? Colors.green.shade500 : Colors.grey.shade600,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => context.push('/repos/${Uri.encodeComponent(repo)}'),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Switch(
+                value: config.monitored,
+                onChanged: (v) => onChanged(config.copyWith(monitored: v)),
               ),
-              const SizedBox(width: 4),
-              Text(
-                hasDirMapping ? dirLabel! : 'No local dir',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: hasDirMapping ? Colors.green.shade500 : Colors.grey.shade600,
-                  fontStyle: hasDirMapping ? FontStyle.normal : FontStyle.italic,
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(repo,
+                        style: TextStyle(
+                          fontWeight: config.monitored ? FontWeight.w600 : FontWeight.normal,
+                          color: config.monitored ? null : Colors.grey,
+                        )),
+                    const SizedBox(height: 2),
+                    Row(children: [
+                      Icon(
+                        hasDirMapping ? Icons.folder : Icons.folder_off_outlined,
+                        size: 13,
+                        color: hasDirMapping ? Colors.green.shade500 : Colors.grey.shade600,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        hasDirMapping
+                            ? config.localDir!.split('/').last
+                            : 'No local dir',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: hasDirMapping ? Colors.green.shade500 : Colors.grey.shade600,
+                        ),
+                      ),
+                      if (hasOverrides) ...[
+                        const SizedBox(width: 8),
+                        Icon(Icons.tune, size: 12, color: Colors.blue.shade400),
+                        const SizedBox(width: 2),
+                        Text('overrides',
+                            style: TextStyle(fontSize: 10, color: Colors.blue.shade400)),
+                      ],
+                    ]),
+                  ],
                 ),
               ),
-            ]),
-          ],
-        ),
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-        children: [
-          const Divider(height: 1),
-          const SizedBox(height: 10),
-          // AI overrides
-          const Text('AI agent override',
-              style: TextStyle(fontSize: 12, color: Colors.grey)),
-          const SizedBox(height: 8),
-          Row(children: [
-            Expanded(child: _aiDropdown('Primary', config.aiPrimary,
-                (v) => onChanged(config.copyWith(aiPrimary: v)))),
-            const SizedBox(width: 10),
-            Expanded(child: _aiDropdown('Fallback', config.aiFallback,
-                (v) => onChanged(config.copyWith(aiFallback: v)))),
-          ]),
-          const SizedBox(height: 12),
-          // Prompt override
-          const Text('Review prompt',
-              style: TextStyle(fontSize: 12, color: Colors.grey)),
-          const SizedBox(height: 8),
-          _promptDropdown(),
-          const SizedBox(height: 12),
-          // Review mode override
-          const Text('Feedback mode',
-              style: TextStyle(fontSize: 12, color: Colors.grey)),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String?>(
-            // ignore: deprecated_member_use
-            value: config.reviewMode,
-            decoration: const InputDecoration(
-                labelText: 'Override mode',
-                border: OutlineInputBorder(), isDense: true),
-            items: const [
-              DropdownMenuItem<String?>(value: null,     child: Text('Global')),
-              DropdownMenuItem<String?>(value: 'single', child: Text('Single (consolidated review)')),
-              DropdownMenuItem<String?>(value: 'multi',  child: Text('Multi (one comment per issue)')),
+              Icon(Icons.chevron_right, size: 18, color: Colors.grey.shade600),
             ],
-            onChanged: (v) => onChanged(config.copyWith(reviewMode: v)),
           ),
-          const SizedBox(height: 12),
-          // Local directory for full-repo analysis
-          const Text('Local directory',
-              style: TextStyle(fontSize: 12, color: Colors.grey)),
-          const SizedBox(height: 4),
-          Text(
-            'When set, the AI agent runs inside this directory and can read all project files.',
-            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-          ),
-          const SizedBox(height: 8),
-          _LocalDirField(
-            value: config.localDir ?? '',
-            onChanged: (dir) => onChanged(config.copyWith(localDir: dir.isEmpty ? null : dir)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String? _buildOverrides() {
-    final parts = <String>[];
-    if (config.aiPrimary != null) parts.add('AI: ${config.aiPrimary}');
-    if (config.promptId != null) {
-      final p = prompts.where((p) => p.id == config.promptId).firstOrNull;
-      parts.add('Prompt: ${p?.name ?? config.promptId}');
-    }
-    if (config.reviewMode != null) parts.add('Mode: ${config.reviewMode}');
-    return parts.isEmpty ? null : parts.join(' · ');
-  }
-
-  Widget _aiDropdown(String label, String? value, ValueChanged<String?> onChanged) {
-    return DropdownButtonFormField<String?>(
-      // ignore: deprecated_member_use
-      value: value,
-      decoration: InputDecoration(labelText: label,
-          border: const OutlineInputBorder(), isDense: true),
-      items: const [
-        DropdownMenuItem<String?>(value: null, child: Text('Global')),
-        DropdownMenuItem<String?>(value: 'claude', child: Text('claude')),
-        DropdownMenuItem<String?>(value: 'gemini', child: Text('gemini')),
-        DropdownMenuItem<String?>(value: 'codex',  child: Text('codex')),
-      ],
-      onChanged: onChanged,
-    );
-  }
-
-  Widget _promptDropdown() {
-    return DropdownButtonFormField<String?>(
-      // ignore: deprecated_member_use
-      value: config.promptId,
-      decoration: const InputDecoration(
-          labelText: 'Override prompt',
-          border: OutlineInputBorder(), isDense: true),
-      items: [
-        const DropdownMenuItem<String?>(value: null,
-            child: Text('Global active prompt')),
-        ...prompts.map((p) => DropdownMenuItem<String?>(
-          value: p.id,
-          child: Text('${_focusEmoji(p.focus)} ${p.name}'),
-        )),
-      ],
-      onChanged: (v) => onChanged(config.copyWith(promptId: v)),
-    );
-  }
-
-}
-
-// ── Local directory picker ─────────────────────────────────────────────────
-
-class _LocalDirField extends StatefulWidget {
-  final String value;
-  final ValueChanged<String> onChanged;
-  const _LocalDirField({required this.value, required this.onChanged});
-
-  @override
-  State<_LocalDirField> createState() => _LocalDirFieldState();
-}
-
-class _LocalDirFieldState extends State<_LocalDirField> {
-  late final TextEditingController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = TextEditingController(text: widget.value);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pick() async {
-    final dir = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Select local repository directory',
-      lockParentWindow: true,
-    );
-    if (dir == null) return;
-    setState(() => _ctrl.text = dir);
-    widget.onChanged(dir);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(children: [
-      Expanded(
-        child: TextFormField(
-          controller: _ctrl,
-          decoration: const InputDecoration(
-            hintText: '/path/to/local/repo',
-            border: OutlineInputBorder(),
-            isDense: true,
-          ),
-          onChanged: widget.onChanged,
         ),
       ),
-      const SizedBox(width: 8),
-      OutlinedButton.icon(
-        icon: const Icon(Icons.folder_open, size: 16),
-        label: const Text('Browse'),
-        onPressed: _pick,
-        style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        ),
-      ),
-      if (_ctrl.text.isNotEmpty) ...[
-        const SizedBox(width: 4),
-        IconButton(
-          icon: const Icon(Icons.clear, size: 16),
-          tooltip: 'Clear',
-          onPressed: () {
-            setState(() => _ctrl.clear());
-            widget.onChanged('');
-          },
-        ),
-      ],
-    ]);
+    );
   }
+
 }
 
-// ── (end of _LocalDirField) ────────────────────────────────────────────────
-
-String _focusEmoji(String f) {
-  switch (f) {
-    case 'security':     return '🔒';
-    case 'performance':  return '⚡';
-    case 'architecture': return '🏛️';
-    case 'docs':         return '📝';
-    default:             return '🔍';
-  }
-}
