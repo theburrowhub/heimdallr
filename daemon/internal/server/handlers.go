@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -739,7 +740,7 @@ func (srv *Server) handleTriggerIssueReview(w http.ResponseWriter, r *http.Reque
 }
 
 func (srv *Server) handleRepoLabels(w http.ResponseWriter, r *http.Request) {
-	repo := chi.URLParam(r, "name")
+	repo, _ := url.PathUnescape(chi.URLParam(r, "name"))
 	if srv.fetchLabelsFn == nil {
 		http.Error(w, "not configured", http.StatusServiceUnavailable)
 		return
@@ -757,7 +758,7 @@ func (srv *Server) handleRepoLabels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleRepoCollaborators(w http.ResponseWriter, r *http.Request) {
-	repo := chi.URLParam(r, "name")
+	repo, _ := url.PathUnescape(chi.URLParam(r, "name"))
 	if srv.fetchCollaboratorsFn == nil {
 		http.Error(w, "not configured", http.StatusServiceUnavailable)
 		return
