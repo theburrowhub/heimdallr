@@ -18,8 +18,8 @@ endif
 
 .PHONY: build-daemon build-app test test-docker dev dev-daemon dev-stop \
         release-local package-macos install-service verify-linux run-linux \
-        setup up up-daemon down logs logs-daemon ps restart clean \
-        _check-docker _check-env
+        setup up up-build up-daemon up-build-daemon down logs logs-daemon \
+        ps restart clean _check-docker _check-env
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
@@ -301,8 +301,16 @@ _check-env: _check-docker
 up: _check-env
 	docker compose -f $(COMPOSE_FILE) up -d
 
+# Like `up` but rebuilds images from local source (use after `git pull` on main).
+up-build: _check-env
+	docker compose -f $(COMPOSE_FILE) up -d --build --pull always
+
 up-daemon: _check-env
 	docker compose -f $(COMPOSE_FILE) up -d heimdallm
+
+# Like `up-daemon` but rebuilds the daemon image from local source.
+up-build-daemon: _check-env
+	docker compose -f $(COMPOSE_FILE) up -d --build --pull always heimdallm
 
 down: _check-docker
 	docker compose -f $(COMPOSE_FILE) down
