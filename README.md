@@ -69,7 +69,9 @@ For headless/server deployment, Heimdallm runs as a Docker container with all fo
 #### 1. Prerequisites
 
 - **Docker Desktop** (or Docker Engine + compose plugin) running.
-- A **GitHub personal access token** with `repo` scope (or `public_repo` for public-only). Create one at https://github.com/settings/tokens.
+- A **GitHub token** with `repo` scope (or `public_repo` for public-only). Two options:
+  - If you already use `gh` CLI: just run `gh auth token` to print the token you already have — no need to create a new PAT.
+  - Otherwise: create one at https://github.com/settings/tokens.
 - An **API key for your chosen AI provider** — at least one of:
   - Claude: https://console.anthropic.com/settings/keys (or `CLAUDE_CODE_OAUTH_TOKEN` via `claude setup-token`)
   - Gemini: https://aistudio.google.com/apikey
@@ -80,13 +82,18 @@ For headless/server deployment, Heimdallm runs as a Docker container with all fo
 
 ```bash
 cp docker/.env.example docker/.env
-# Edit docker/.env — at minimum fill in:
-#   GITHUB_TOKEN
+
+# Quick-fill GITHUB_TOKEN from your existing gh auth (skip if you made a PAT):
+echo "GITHUB_TOKEN=$(gh auth token)" >> docker/.env
+
+# Then edit docker/.env and set at minimum:
 #   HEIMDALLM_AI_PRIMARY      (claude | gemini | codex | opencode)
 #   <provider>_API_KEY        (matching your primary)
 #   HEIMDALLM_REPOSITORIES    (owner/repo1,owner/repo2 — or leave empty if
 #                              using HEIMDALLM_DISCOVERY_TOPIC)
 ```
+
+> **If you plan to use Claude with `CLAUDE_CODE_OAUTH_TOKEN`**: run `claude setup-token` in a terminal **by itself** (it's interactive — opens a browser, prints instructions + ANSI). Copy only the `sk-ant-oat…` line it produces and paste it into `docker/.env`. Do **not** try to inline it as `$(claude setup-token)`; you'll capture the prompts and break the file.
 
 See [`docker/.env.example`](docker/.env.example) for every supported variable including issue-tracking, topic-based discovery, and web UI settings.
 
@@ -99,6 +106,14 @@ make up-daemon     # daemon only, no web UI
 ```
 
 `make up` refuses to start if `docker/.env` is missing and prints the exact copy-from-template command. The web container waits for the daemon's healthcheck before accepting traffic, so the first UI request never races a half-initialised daemon.
+
+> **Port already in use?** If `make up` fails with `bind: address already in use` for port `3000` (common collision: a local Next.js / Vite / Grafana dev server) or `7842`, override the host-side port in `docker/.env` and re-run:
+> ```bash
+> echo "HEIMDALLM_WEB_PORT=3100" >> docker/.env   # for the web UI
+> echo "HEIMDALLM_PORT=7843"      >> docker/.env   # for the daemon
+> make up
+> ```
+> To see what's holding the port: `lsof -iTCP:3000 -sTCP:LISTEN`.
 
 #### 4. Verify
 
