@@ -171,6 +171,17 @@ func scanActivity(s scanner) (*Activity, error) {
 	return &a, nil
 }
 
+// CountActivitySince returns the number of activity_log rows with ts >= cutoff.
+func (s *Store) CountActivitySince(cutoff time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM activity_log WHERE ts >= ?",
+		cutoff.UTC().Format(sqliteTimeFormat)).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("store: count activity: %w", err)
+	}
+	return n, nil
+}
+
 func placeholders(n int) string {
 	if n <= 0 {
 		return ""

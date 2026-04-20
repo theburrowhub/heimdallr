@@ -909,3 +909,33 @@ func TestHandlerPutConfigValueValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleStats_IncludesActivityCount24h(t *testing.T) {
+	srv, s := setupServer(t)
+	// Insert one recent activity and one old (>24h).
+	now := time.Now()
+	if _, err := s.InsertActivity(now.Add(-1*time.Hour), "a", "a/b", "pr", 1, "t", "review", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertActivity(now.Add(-30*time.Hour), "a", "a/b", "pr", 2, "t", "review", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/stats", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	v, ok := body["activity_count_24h"]
+	if !ok {
+		t.Fatalf("activity_count_24h missing from response: %v", body)
+	}
+	// JSON numbers unmarshal to float64 when decoding into map[string]any.
+	got, ok := v.(float64)
+	if !ok || got != 1 {
+		t.Errorf("activity_count_24h = %v, want 1", v)
+	}
+}
