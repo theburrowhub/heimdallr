@@ -5,10 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/models/config_model.dart';
 import '../../core/models/agent.dart';
+import '../../shared/widgets/autocomplete_chip_field.dart';
 import '../../shared/widgets/override_field.dart';
 import '../../shared/widgets/toast.dart';
 import '../agents/agents_screen.dart' show agentsProvider;
 import '../config/config_providers.dart';
+import '../dashboard/dashboard_providers.dart';
 
 class RepoDetailScreen extends ConsumerStatefulWidget {
   final String repoName;
@@ -22,6 +24,8 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
   RepoConfig _config = const RepoConfig();
   bool _initialized = false;
   Timer? _debounce;
+  List<String> _repoLabels = [];
+  List<String> _repoCollaborators = [];
 
   @override
   void dispose() {
@@ -33,6 +37,25 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
     if (_initialized) return;
     _initialized = true;
     _config = config.repoConfigs[widget.repoName] ?? const RepoConfig();
+    _loadRepoMeta();
+  }
+
+  Future<void> _loadRepoMeta() async {
+    final api = ref.read(apiClientProvider);
+    try {
+      final results = await Future.wait([
+        api.fetchRepoLabels(widget.repoName),
+        api.fetchRepoCollaborators(widget.repoName),
+      ]);
+      if (mounted) {
+        setState(() {
+          _repoLabels = results[0];
+          _repoCollaborators = results[1];
+        });
+      }
+    } catch (_) {
+      // Non-fatal — autocomplete just won't have suggestions
+    }
   }
 
   void _update(RepoConfig updated) {
@@ -179,39 +202,37 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
 
                 // ── Issue Tracking ───────────────────────────────────────
                 _sectionCard('Issue Tracking', [
-                  OverrideTextField(
+                  AutocompleteChipField(
                     label: 'Develop labels',
-                    helper:
-                        'Issues with these labels get a branch + PR',
-                    globalValue: _joinList(
-                        appConfig.issueTracking.developLabels),
-                    overrideValue: _config.developLabels?.join(', '),
-                    onChanged: (v) => _update(_config.copyWith(
-                        developLabels:
-                            v != null ? _parseList(v) : null)),
+                    helper: 'Issues with these labels get a branch + PR',
+                    selectedValues: _config.developLabels ?? appConfig.issueTracking.developLabels,
+                    availableOptions: _repoLabels,
+                    isOverridden: _config.developLabels != null,
+                    globalHint: _joinList(appConfig.issueTracking.developLabels),
+                    onChanged: (v) => _update(_config.copyWith(developLabels: v)),
+                    onReset: () => _update(_config.copyWith(developLabels: null)),
                   ),
                   const SizedBox(height: 10),
-                  OverrideTextField(
+                  AutocompleteChipField(
                     label: 'Review-only labels',
-                    helper:
-                        'Issues with these labels get a review comment only',
-                    globalValue: _joinList(
-                        appConfig.issueTracking.reviewOnlyLabels),
-                    overrideValue: _config.reviewOnlyLabels?.join(', '),
-                    onChanged: (v) => _update(_config.copyWith(
-                        reviewOnlyLabels:
-                            v != null ? _parseList(v) : null)),
+                    helper: 'Issues with these labels get a review comment only',
+                    selectedValues: _config.reviewOnlyLabels ?? appConfig.issueTracking.reviewOnlyLabels,
+                    availableOptions: _repoLabels,
+                    isOverridden: _config.reviewOnlyLabels != null,
+                    globalHint: _joinList(appConfig.issueTracking.reviewOnlyLabels),
+                    onChanged: (v) => _update(_config.copyWith(reviewOnlyLabels: v)),
+                    onReset: () => _update(_config.copyWith(reviewOnlyLabels: null)),
                   ),
                   const SizedBox(height: 10),
-                  OverrideTextField(
+                  AutocompleteChipField(
                     label: 'Skip labels',
                     helper: 'Issues with these labels are ignored',
-                    globalValue:
-                        _joinList(appConfig.issueTracking.skipLabels),
-                    overrideValue: _config.skipLabels?.join(', '),
-                    onChanged: (v) => _update(_config.copyWith(
-                        skipLabels:
-                            v != null ? _parseList(v) : null)),
+                    selectedValues: _config.skipLabels ?? appConfig.issueTracking.skipLabels,
+                    availableOptions: _repoLabels,
+                    isOverridden: _config.skipLabels != null,
+                    globalHint: _joinList(appConfig.issueTracking.skipLabels),
+                    onChanged: (v) => _update(_config.copyWith(skipLabels: v)),
+                    onReset: () => _update(_config.copyWith(skipLabels: null)),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -236,59 +257,56 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                   const SizedBox(height: 10),
                   OverrideTextField(
                     label: 'Organizations',
-                    helper:
-                        'Comma-separated GitHub org names to filter issues',
-                    globalValue: _joinList(
-                        appConfig.issueTracking.organizations),
+                    helper: 'GitHub org names to filter issues',
+                    globalValue: _joinList(appConfig.issueTracking.organizations),
                     overrideValue: _config.issueOrganizations?.join(', '),
                     onChanged: (v) => _update(_config.copyWith(
-                        issueOrganizations:
-                            v != null ? _parseList(v) : null)),
+                        issueOrganizations: v != null ? _parseList(v) : null)),
                   ),
                   const SizedBox(height: 10),
-                  OverrideTextField(
+                  AutocompleteChipField(
                     label: 'Assignees',
-                    helper:
-                        'Comma-separated GitHub usernames to filter issues',
-                    globalValue:
-                        _joinList(appConfig.issueTracking.assignees),
-                    overrideValue: _config.issueAssignees?.join(', '),
-                    onChanged: (v) => _update(_config.copyWith(
-                        issueAssignees:
-                            v != null ? _parseList(v) : null)),
+                    helper: 'Only process issues assigned to these users',
+                    selectedValues: _config.issueAssignees ?? appConfig.issueTracking.assignees,
+                    availableOptions: _repoCollaborators,
+                    isOverridden: _config.issueAssignees != null,
+                    globalHint: _joinList(appConfig.issueTracking.assignees),
+                    onChanged: (v) => _update(_config.copyWith(issueAssignees: v)),
+                    onReset: () => _update(_config.copyWith(issueAssignees: null)),
                   ),
                 ]),
 
                 // ── PR Metadata ──────────────────────────────────────────
                 _sectionCard('PR Metadata', [
-                  OverrideTextField(
+                  AutocompleteChipField(
                     label: 'Reviewers',
-                    helper:
-                        'Comma-separated GitHub usernames to request review',
-                    globalValue: '',
-                    overrideValue: _config.prReviewers?.join(', '),
-                    onChanged: (v) => _update(_config.copyWith(
-                        prReviewers:
-                            v != null ? _parseList(v) : null)),
+                    helper: 'GitHub usernames to request review',
+                    selectedValues: _config.prReviewers ?? [],
+                    availableOptions: _repoCollaborators,
+                    isOverridden: _config.prReviewers != null,
+                    onChanged: (v) => _update(_config.copyWith(prReviewers: v)),
+                    onReset: () => _update(_config.copyWith(prReviewers: null)),
                   ),
                   const SizedBox(height: 10),
-                  OverrideTextField(
+                  AutocompleteChipField(
                     label: 'Assignee',
                     helper: 'GitHub username to assign to PRs',
-                    globalValue: '',
-                    overrideValue: _config.prAssignee,
-                    onChanged: (v) =>
-                        _update(_config.copyWith(prAssignee: v)),
+                    selectedValues: _config.prAssignee != null ? [_config.prAssignee!] : [],
+                    availableOptions: _repoCollaborators,
+                    isOverridden: _config.prAssignee != null,
+                    onChanged: (v) => _update(_config.copyWith(
+                        prAssignee: v != null && v.isNotEmpty ? v.first : null)),
+                    onReset: () => _update(_config.copyWith(prAssignee: null)),
                   ),
                   const SizedBox(height: 10),
-                  OverrideTextField(
+                  AutocompleteChipField(
                     label: 'Labels',
-                    helper: 'Comma-separated labels to add to PRs',
-                    globalValue: '',
-                    overrideValue: _config.prLabels?.join(', '),
-                    onChanged: (v) => _update(_config.copyWith(
-                        prLabels:
-                            v != null ? _parseList(v) : null)),
+                    helper: 'Labels to add to PRs',
+                    selectedValues: _config.prLabels ?? [],
+                    availableOptions: _repoLabels,
+                    isOverridden: _config.prLabels != null,
+                    onChanged: (v) => _update(_config.copyWith(prLabels: v)),
+                    onReset: () => _update(_config.copyWith(prLabels: null)),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(

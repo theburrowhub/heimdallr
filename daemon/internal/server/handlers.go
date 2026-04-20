@@ -37,6 +37,9 @@ type Server struct {
 	meFn                 func() (string, error)
 	// configFn returns the current running config as a JSON-serializable map.
 	configFn func() map[string]any
+	// repoMetaFns fetch repo metadata from GitHub for autocomplete.
+	fetchLabelsFn        func(repo string) ([]string, error)
+	fetchCollaboratorsFn func(repo string) ([]string, error)
 	// apiToken is required on all state-mutating requests (POST/PUT/DELETE).
 	// Empty string disables authentication (should not happen in production).
 	apiToken  string
@@ -89,6 +92,7 @@ var sensitiveGETPaths = []string{
 	"/prs",    // exposes PR titles, repos, authors
 	"/stats",  // exposes review activity metadata
 	"/issues", // covers /issues and /issues/{id}
+	"/repos",  // covers /repos/{name}/labels and /repos/{name}/collaborators
 }
 
 // authMiddleware rejects:
@@ -141,6 +145,12 @@ func (srv *Server) SetMeFn(fn func() (string, error)) { srv.meFn = fn }
 // SetConfigFn wires the callback that returns the live config for GET /config.
 func (srv *Server) SetConfigFn(fn func() map[string]any) { srv.configFn = fn }
 
+// SetRepoMetaFns wires GitHub metadata fetchers for autocomplete endpoints.
+func (srv *Server) SetRepoMetaFns(labels func(string) ([]string, error), collabs func(string) ([]string, error)) {
+	srv.fetchLabelsFn = labels
+	srv.fetchCollaboratorsFn = collabs
+}
+
 // Router returns the underlying http.Handler for use in tests or embedding.
 func (srv *Server) Router() http.Handler {
 	return srv.router
@@ -182,6 +192,8 @@ func (srv *Server) buildRouter() chi.Router {
 	r.Post("/issues/{id}/review", srv.handleTriggerIssueReview)
 	r.Post("/issues/{id}/dismiss", srv.handleDismissIssue)
 	r.Post("/issues/{id}/undismiss", srv.handleUndismissIssue)
+	r.Get("/repos/{name}/labels", srv.handleRepoLabels)
+	r.Get("/repos/{name}/collaborators", srv.handleRepoCollaborators)
 	r.Get("/stats", srv.handleStats)
 	r.Get("/agents", srv.handleListAgents)
 	r.Post("/agents", srv.handleUpsertAgent)
@@ -724,6 +736,42 @@ func (srv *Server) handleTriggerIssueReview(w http.ResponseWriter, r *http.Reque
 		}
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "review queued"})
+}
+
+func (srv *Server) handleRepoLabels(w http.ResponseWriter, r *http.Request) {
+	repo := chi.URLParam(r, "name")
+	if srv.fetchLabelsFn == nil {
+		http.Error(w, "not configured", http.StatusServiceUnavailable)
+		return
+	}
+	labels, err := srv.fetchLabelsFn(repo)
+	if err != nil {
+		slog.Error("handleRepoLabels: fetch error", "repo", repo, "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if labels == nil {
+		labels = []string{}
+	}
+	writeJSON(w, http.StatusOK, labels)
+}
+
+func (srv *Server) handleRepoCollaborators(w http.ResponseWriter, r *http.Request) {
+	repo := chi.URLParam(r, "name")
+	if srv.fetchCollaboratorsFn == nil {
+		http.Error(w, "not configured", http.StatusServiceUnavailable)
+		return
+	}
+	collabs, err := srv.fetchCollaboratorsFn(repo)
+	if err != nil {
+		slog.Error("handleRepoCollaborators: fetch error", "repo", repo, "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if collabs == nil {
+		collabs = []string{}
+	}
+	writeJSON(w, http.StatusOK, collabs)
 }
 
 func (srv *Server) handleStats(w http.ResponseWriter, r *http.Request) {

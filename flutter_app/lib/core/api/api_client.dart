@@ -167,6 +167,24 @@ class ApiClient {
     }
   }
 
+  // ── Repo metadata (autocomplete) ─────────────────────────────────────
+
+  Future<List<String>> fetchRepoLabels(String repo) async {
+    final resp = await _client.get(
+        _uri('/repos/${Uri.encodeComponent(repo)}/labels'),
+        headers: await _authHeaders());
+    if (resp.statusCode != 200) return [];
+    return (jsonDecode(resp.body) as List<dynamic>).cast<String>();
+  }
+
+  Future<List<String>> fetchRepoCollaborators(String repo) async {
+    final resp = await _client.get(
+        _uri('/repos/${Uri.encodeComponent(repo)}/collaborators'),
+        headers: await _authHeaders());
+    if (resp.statusCode != 200) return [];
+    return (jsonDecode(resp.body) as List<dynamic>).cast<String>();
+  }
+
   // ── Issues ────────────────────────────────────────────────────────────
 
   Future<List<TrackedIssue>> fetchIssues() async {

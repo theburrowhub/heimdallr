@@ -438,6 +438,8 @@ func main() {
 	}()
 
 	// Expose live config for GET /config
+	srv.SetRepoMetaFns(ghClient.FetchLabels, ghClient.FetchCollaborators)
+
 	srv.SetConfigFn(func() map[string]any {
 		cfgMu.Lock()
 		c := cfg
