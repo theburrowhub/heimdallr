@@ -2,6 +2,18 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.4.12](https://github.com/theburrowhub/heimdallm/compare/v0.4.11...v0.4.12) (2026-04-21)
+
+
+### Features
+
+* add Homebrew tap to GoReleaser config ([#166](https://github.com/theburrowhub/heimdallm/issues/166)) ([817054d](https://github.com/theburrowhub/heimdallm/commit/817054d79c3eaa03e671edb544ef90cfaa64eaee))
+
+
+### Documentation
+
+* comprehensive configuration guide ([#167](https://github.com/theburrowhub/heimdallm/issues/167)) ([25b3003](https://github.com/theburrowhub/heimdallm/commit/25b3003308a2d68f8e4676e9b07079ad803f5c62)), closes [#136](https://github.com/theburrowhub/heimdallm/issues/136)
+
 ## [0.4.11](https://github.com/theburrowhub/heimdallm/compare/v0.4.10...v0.4.11) (2026-04-21)
 
 
