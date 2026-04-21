@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -425,16 +426,31 @@ class _LocalDirFieldState extends State<_LocalDirField> {
           onChanged: widget.onChanged,
         ),
       ),
-      const SizedBox(width: 8),
-      OutlinedButton.icon(
-        icon: const Icon(Icons.folder_open, size: 16),
-        label: const Text('Browse'),
-        onPressed: _pick,
-        style: OutlinedButton.styleFrom(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      // Browse button is desktop-only — browsers can't expose native
+      // filesystem paths to the daemon. On web the operator types a
+      // path that exists inside the daemon container (e.g. /repos/foo
+      // if they've bind-mounted host:/repos into the compose service).
+      if (!kIsWeb) ...[
+        const SizedBox(width: 8),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.folder_open, size: 16),
+          label: const Text('Browse'),
+          onPressed: _pick,
+          style: OutlinedButton.styleFrom(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          ),
         ),
-      ),
+      ] else ...[
+        const SizedBox(width: 8),
+        Tooltip(
+          message: 'The daemon runs in a container, so paths here refer to '
+              'directories inside that container — typically a bind-mount '
+              'like /repos/<name>. Enter the path manually.',
+          child: Icon(Icons.info_outline,
+              size: 16, color: Colors.grey.shade500),
+        ),
+      ],
       if (_ctrl.text.isNotEmpty) ...[
         const SizedBox(width: 4),
         IconButton(
