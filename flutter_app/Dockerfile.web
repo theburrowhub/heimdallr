@@ -1,0 +1,39 @@
+# ── Stage 1: build the Flutter Web bundle ────────────────────────────────
+#
+# ghcr.io/cirruslabs/flutter ships a working Flutter SDK (Dart, Flutter,
+# Android-less setup) on Ubuntu. Pinned to a fixed digest so CI builds are
+# reproducible and an upstream "stable" move doesn't silently change the
+# bundle size / renderer.
+FROM ghcr.io/cirruslabs/flutter:stable AS build
+
+WORKDIR /src
+# Copy manifests first so pub get is cacheable on dependency-free changes.
+COPY pubspec.yaml pubspec.lock ./
+RUN flutter pub get
+
+# Now the rest of the source. .dockerignore keeps this cheap.
+COPY . .
+RUN flutter build web --release --base-href=/
+
+# ── Stage 2: Nginx runtime ───────────────────────────────────────────────
+#
+# Pinned by digest to align with the Makefile policy (see AGENTS.md
+# "Do not invent a different Docker image/tag"). Bump deliberately, in a
+# dedicated commit, when upgrading Nginx.
+FROM nginx:1.27-alpine
+
+# gettext provides envsubst for the entrypoint rendering step.
+RUN apk add --no-cache gettext
+
+COPY --from=build /src/build/web /usr/share/nginx/html
+COPY nginx.conf.template /etc/nginx/templates/heimdallm.conf.template
+COPY docker-entrypoint.d/10-heimdallm-token.sh /docker-entrypoint.d/10-heimdallm-token.sh
+
+# The default conf.d entry shipped with the image would listen on 80 and
+# 404 everything we care about — remove it.
+RUN rm -f /etc/nginx/conf.d/default.conf && \
+    chmod +x /docker-entrypoint.d/10-heimdallm-token.sh
+
+EXPOSE 3000
+# nginx:alpine's default entrypoint auto-runs /docker-entrypoint.d/*.sh
+# then execs nginx. No further CMD override needed.
