@@ -276,6 +276,7 @@ func main() {
 	// Tier 2 / Tier 3 interfaces.
 	adapter := &tier2Adapter{
 		ghClient:  ghClient,
+		ghToken:   token,
 		pipeline:  p,
 		issuePipe: issuePipe,
 		fetcher:   issueFetcher,
@@ -361,6 +362,18 @@ func main() {
 				"review_mode": ai.ReviewMode,
 				"local_dir":   ai.LocalDir,
 			}
+			if len(ai.PRReviewers) > 0 {
+				ro["pr_reviewers"] = ai.PRReviewers
+			}
+			if ai.PRAssignee != "" {
+				ro["pr_assignee"] = ai.PRAssignee
+			}
+			if len(ai.PRLabels) > 0 {
+				ro["pr_labels"] = ai.PRLabels
+			}
+			if ai.PRDraft {
+				ro["pr_draft"] = ai.PRDraft
+			}
 			if ai.IssueTracking != nil {
 				ro["issue_tracking"] = ai.IssueTracking
 			}
@@ -428,7 +441,7 @@ func main() {
 				repoOverrides[repo] = ro
 			}
 		}
-		return map[string]any{
+		result := map[string]any{
 			"server_port":                 c.Server.Port,
 			"poll_interval":               c.GitHub.PollInterval,
 			"repositories":                reposList,
@@ -444,6 +457,17 @@ func main() {
 			"activity_log_enabled":        ptrBoolOrTrue(c.ActivityLog.Enabled),
 			"activity_log_retention_days": ptrIntOr(c.ActivityLog.RetentionDays, 90),
 		}
+		if len(c.AI.PRMetadata.Reviewers) > 0 || len(c.AI.PRMetadata.Labels) > 0 {
+			pm := map[string]any{}
+			if len(c.AI.PRMetadata.Reviewers) > 0 {
+				pm["reviewers"] = c.AI.PRMetadata.Reviewers
+			}
+			if len(c.AI.PRMetadata.Labels) > 0 {
+				pm["labels"] = c.AI.PRMetadata.Labels
+			}
+			result["pr_metadata"] = pm
+		}
+		return result
 	})
 
 	// Cache authenticated username for GET /me.
@@ -642,8 +666,9 @@ func main() {
 		implPrompt, implInstructions := resolveImplementPrompt(s, aiCfg.ImplementPrompt, agentCfg.PromptID)
 
 		opts := issuepipeline.RunOptions{
-			Primary:  aiCfg.Primary,
-			Fallback: aiCfg.Fallback,
+			GitHubToken: token,
+			Primary:     aiCfg.Primary,
+			Fallback:    aiCfg.Fallback,
 			ExecOpts: executor.ExecOptions{
 				Model:                agentCfg.Model,
 				MaxTurns:             agentCfg.MaxTurns,
@@ -865,6 +890,7 @@ func upsertDiscoveredRepos(c *config.Config, prs []*gh.PullRequest) []string {
 
 type tier2Adapter struct {
 	ghClient  *gh.Client
+	ghToken   string
 	pipeline  *pipeline.Pipeline
 	issuePipe *issuepipeline.Pipeline
 	fetcher   *issuepipeline.Fetcher
@@ -1108,8 +1134,9 @@ func (a *tier2Adapter) ProcessRepo(ctx context.Context, repo string) (int, error
 		implPrompt, implInstructions := resolveImplementPrompt(a.store, aiCfg.ImplementPrompt, agentCfg.PromptID)
 
 		return issuepipeline.RunOptions{
-			Primary:  aiCfg.Primary,
-			Fallback: aiCfg.Fallback,
+			GitHubToken: a.ghToken,
+			Primary:     aiCfg.Primary,
+			Fallback:    aiCfg.Fallback,
 			ExecOpts: executor.ExecOptions{
 				Model:                agentCfg.Model,
 				MaxTurns:             agentCfg.MaxTurns,
