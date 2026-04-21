@@ -17,7 +17,7 @@ import 'platform_services.dart';
 /// Wraps dart:io, tray_manager, window_manager, local_notifier, and the
 /// existing FirstRunSetup / DaemonLifecycle helpers so that shared code
 /// never has to import them directly.
-class DesktopPlatformServices implements PlatformServices {
+class DesktopPlatformServices with WindowListener implements PlatformServices {
   DesktopPlatformServices({
     int apiPort = 7842,
     String? tokenPath,
@@ -92,6 +92,10 @@ class DesktopPlatformServices implements PlatformServices {
     required Size minimumSize,
   }) async {
     await windowManager.ensureInitialized();
+    // Register the hide-on-close listener. When main.dart later calls
+    // setPreventWindowClose(true), `onWindowClose` hides the window
+    // instead of letting it actually close.
+    windowManager.addListener(this);
     final options = WindowOptions(
       size: size,
       minimumSize: minimumSize,
@@ -162,6 +166,14 @@ class DesktopPlatformServices implements PlatformServices {
 
   @override
   Future<void> hideWindow() => windowManager.hide();
+
+  @override
+  void onWindowClose() async {
+    if (await windowManager.isPreventClose()) {
+      await windowManager.hide();
+    }
+  }
+
   @override
   Never quitApp() => exit(0);
 
