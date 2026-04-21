@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/models/pr.dart';
 import '../../core/models/tracked_issue.dart';
 import '../../shared/widgets/severity_badge.dart';
 import '../../shared/widgets/toast.dart';
+import '../../shared/widgets/type_badge.dart';
+import '../activity/activity_screen.dart';
+import '../activity/activity_providers.dart';
 import '../agents/agents_screen.dart';
 import '../cli_agents/cli_agents_screen.dart';
-import '../issues/issues_screen.dart';
 import '../issues/issues_providers.dart';
 import '../repositories/repos_screen.dart';
 import '../stats/stats_screen.dart';
+import 'activity_filter_bar.dart';
+import 'activity_filters.dart';
 import 'dashboard_providers.dart';
 
 class DashboardScreen extends ConsumerWidget {
@@ -39,13 +44,15 @@ class DashboardScreen extends ConsumerWidget {
                 ref.invalidate(prsProvider);
                 ref.invalidate(issuesProvider);
                 ref.invalidate(statsProvider);
+                ref.invalidate(activityEntriesProvider);
+                ref.invalidate(activityOptionsProvider);
               },
             ),
           ],
           bottom: const TabBar(
             tabs: [
               Tab(icon: Icon(Icons.dashboard),       text: 'Activity'),
-              Tab(icon: Icon(Icons.bug_report),      text: 'Issues'),
+              Tab(icon: Icon(Icons.timeline),        text: 'Activity log'),
               Tab(icon: Icon(Icons.folder_outlined), text: 'Repositories'),
               Tab(icon: Icon(Icons.auto_awesome),    text: 'Prompts'),
               Tab(icon: Icon(Icons.smart_toy),       text: 'Agents'),
@@ -56,7 +63,7 @@ class DashboardScreen extends ConsumerWidget {
         body: const TabBarView(
           children: [
             _ActivityTab(),
-            IssuesScreen(),
+            ActivityScreen(),
             ReposScreen(),
             AgentsScreen(),
             CLIAgentsScreen(),
@@ -70,34 +77,152 @@ class DashboardScreen extends ConsumerWidget {
 
 // ── Reviews tab ──────────────────────────────────────────────────────────────
 
-enum _SortMode { priority, newest }
+// SortMode is defined in activity_filters.dart (shared with activity_filter_bar)
 
-/// Persists the user's sort selection across tab navigation.
-final _reviewsSortProvider = StateProvider<_SortMode>((ref) => _SortMode.priority);
+const _sortPrefKey = 'activity_sort_mode';
 
-/// Sort by priority: pending → high → medium → low, then most recent first within group.
-int _prSortKey(PR p) {
-  if (p.latestReview == null) return 0;
-  switch (p.latestReview!.severity.toLowerCase()) {
-    case 'high':   return 1;
-    case 'medium': return 2;
-    default:       return 3;
+final reviewsSortProvider =
+    NotifierProvider<SortNotifier, SortMode>(SortNotifier.new);
+
+class SortNotifier extends Notifier<SortMode> {
+  @override
+  SortMode build() {
+    _loadAsync();
+    return SortMode.priority;
+  }
+
+  void _loadAsync() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final value = prefs.getString(_sortPrefKey);
+      if (value == 'newest') {
+        state = SortMode.newest;
+      }
+    } catch (e) {
+      debugPrint('SortNotifier: failed to load preference: $e');
+    }
+  }
+
+  void set(SortMode mode) {
+    state = mode;
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setString(_sortPrefKey, mode.name);
+    }).catchError((e) {
+      debugPrint('SortNotifier: failed to save preference: $e');
+    });
   }
 }
 
-List<PR> _sortedPRs(List<PR> prs, _SortMode mode) {
-  final list = [...prs];
-  switch (mode) {
-    case _SortMode.priority:
-      list.sort((a, b) {
-        final sev = _prSortKey(a).compareTo(_prSortKey(b));
-        if (sev != 0) return sev;
-        return b.updatedAt.compareTo(a.updatedAt);
-      });
-    case _SortMode.newest:
-      list.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+// ── Unified activity item ────────────────────────────────────────────────────
+
+sealed class _ActivityItem {
+  const _ActivityItem();
+  factory _ActivityItem.pr(PR pr) = _PRItem;
+  factory _ActivityItem.issue(TrackedIssue issue) = _IssueItem;
+}
+
+class _PRItem extends _ActivityItem {
+  final PR pr;
+  const _PRItem(this.pr);
+}
+
+class _IssueItem extends _ActivityItem {
+  final TrackedIssue issue;
+  const _IssueItem(this.issue);
+}
+
+String _itemType(_ActivityItem item) => switch (item) {
+  _PRItem() => 'pr',
+  _IssueItem(:final issue) =>
+      (issue.latestReview != null && issue.latestReview!.actionTaken == 'develop')
+          ? 'dev'
+          : 'it',
+};
+
+String _itemRepo(_ActivityItem item) => switch (item) {
+  _PRItem(:final pr)       => pr.repo,
+  _IssueItem(:final issue) => issue.repo,
+};
+
+String _itemTitle(_ActivityItem item) => switch (item) {
+  _PRItem(:final pr)       => pr.title,
+  _IssueItem(:final issue) => issue.title,
+};
+
+int _itemNumber(_ActivityItem item) => switch (item) {
+  _PRItem(:final pr)       => pr.number,
+  _IssueItem(:final issue) => issue.number,
+};
+
+String _itemAuthor(_ActivityItem item) => switch (item) {
+  _PRItem(:final pr)       => pr.author,
+  _IssueItem(:final issue) => issue.author,
+};
+
+DateTime _itemDate(_ActivityItem item) => switch (item) {
+  _PRItem(:final pr)       => pr.updatedAt,
+  _IssueItem(:final issue) => issue.latestReview?.createdAt ?? issue.fetchedAt,
+};
+
+int _itemPriorityKey(_ActivityItem item) => switch (item) {
+  _PRItem(:final pr) => pr.latestReview == null
+      ? 0
+      : switch (pr.latestReview!.severity.toLowerCase()) {
+          'high'   => 1,
+          'medium' => 2,
+          _        => 3,
+        },
+  _IssueItem(:final issue) => issue.latestReview == null
+      ? 0
+      : switch (issue.latestReview!.severity.toLowerCase()) {
+          'critical' => 0,
+          'high'     => 1,
+          'medium'   => 2,
+          _          => 3,
+        },
+};
+
+bool _matchesFilters(_ActivityItem item, ActivityFilters filters) {
+  // Type filter
+  if (filters.types.isNotEmpty) {
+    final type = _itemType(item);
+    if (!filters.types.contains(type)) return false;
   }
-  return list;
+  // Org filter
+  if (filters.orgs.isNotEmpty) {
+    final repo = _itemRepo(item);
+    final org = repo.contains('/') ? repo.split('/').first : repo;
+    if (!filters.orgs.contains(org)) return false;
+  }
+  // Repo filter
+  if (filters.repos.isNotEmpty) {
+    if (!filters.repos.contains(_itemRepo(item))) return false;
+  }
+  // Search
+  if (filters.search.isNotEmpty) {
+    final q = filters.search.toLowerCase();
+    final title  = _itemTitle(item).toLowerCase();
+    final repo   = _itemRepo(item).toLowerCase();
+    final number = _itemNumber(item).toString();
+    final author = _itemAuthor(item).toLowerCase();
+    if (!title.contains(q) && !repo.contains(q) && !number.contains(q) && !author.contains(q)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void _sortItems(List<_ActivityItem> items, SortMode mode) {
+  switch (mode) {
+    case SortMode.priority:
+      items.sort((a, b) {
+        final sev = _itemPriorityKey(a).compareTo(_itemPriorityKey(b));
+        if (sev != 0) return sev;
+        return _itemDate(b).compareTo(_itemDate(a));
+      });
+    case SortMode.newest:
+      items.sort((a, b) => _itemDate(b).compareTo(_itemDate(a)));
+  }
 }
 
 class _ActivityTab extends ConsumerStatefulWidget {
@@ -107,16 +232,12 @@ class _ActivityTab extends ConsumerStatefulWidget {
 }
 
 class _ActivityTabState extends ConsumerState<_ActivityTab> {
-  bool _reviewsExpanded = true;
-  bool _prsExpanded     = true;
-  bool _issuesExpanded  = true;
-
   @override
   Widget build(BuildContext context) {
     final prsAsync    = ref.watch(prsProvider);
     final issuesAsync = ref.watch(issuesProvider);
-    final meAsync     = ref.watch(meProvider);
-    final sort        = ref.watch(_reviewsSortProvider);
+    final sort        = ref.watch(reviewsSortProvider);
+    final filters     = ref.watch(activityFiltersProvider);
 
     // Combine loading states
     if (prsAsync.isLoading && issuesAsync.isLoading) {
@@ -128,12 +249,24 @@ class _ActivityTabState extends ConsumerState<_ActivityTab> {
 
     final prs    = prsAsync.valueOrNull ?? [];
     final issues = issuesAsync.valueOrNull ?? [];
-    final me     = meAsync.valueOrNull ?? '';
 
-    final myReviews = _sortedPRs(prs.where((p) =>
-        p.repo.isNotEmpty && p.author.toLowerCase() != me.toLowerCase()).toList(), sort);
-    final myPRs = _sortedPRs(prs.where((p) =>
-        p.repo.isNotEmpty && p.author.toLowerCase() == me.toLowerCase()).toList(), sort);
+    // Collect all known repos for the filter bar.
+    final allRepos = <String>{
+      ...prs.map((p) => p.repo),
+      ...issues.map((i) => i.repo),
+    }..remove('');
+
+    // Build unified list of items.
+    final List<_ActivityItem> items = [
+      ...prs.where((p) => p.repo.isNotEmpty).map((p) => _ActivityItem.pr(p)),
+      ...issues.map((i) => _ActivityItem.issue(i)),
+    ];
+
+    // Apply filters.
+    final filtered = items.where((item) => _matchesFilters(item, filters)).toList();
+
+    // Sort.
+    _sortItems(filtered, sort);
 
     if (prs.isEmpty && issues.isEmpty) {
       return const Center(child: Text('No activity yet'));
@@ -142,60 +275,31 @@ class _ActivityTabState extends ConsumerState<_ActivityTab> {
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        // Sort selector
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          child: Row(
-            children: [
-              Text('Sort:',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
-              const SizedBox(width: 8),
-              _SortButton(
-                label: 'Priority',
-                icon: Icons.sort,
-                selected: sort == _SortMode.priority,
-                onTap: () => ref.read(_reviewsSortProvider.notifier).state = _SortMode.priority,
-              ),
-              const SizedBox(width: 6),
-              _SortButton(
-                label: 'Newest',
-                icon: Icons.schedule,
-                selected: sort == _SortMode.newest,
-                onTap: () => ref.read(_reviewsSortProvider.notifier).state = _SortMode.newest,
-              ),
-            ],
-          ),
+        // Sort + Filter bar — single unified row
+        ActivityFilterBar(
+          allRepos: allRepos,
+          sort: sort,
+          onSortChanged: (mode) => ref.read(reviewsSortProvider.notifier).set(mode),
         ),
-        if (myReviews.isNotEmpty) ...[
-          _CollapseHeader(
-            title: 'My Reviews',
-            count: myReviews.length,
-            expanded: _reviewsExpanded,
-            onToggle: () => setState(() => _reviewsExpanded = !_reviewsExpanded),
+        // Filtered count when filters are active
+        if (filters.hasFilters)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Text(
+              '${filtered.length} item${filtered.length == 1 ? '' : 's'}',
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+            ),
           ),
-          if (_reviewsExpanded)
-            ...myReviews.map((pr) => _PRTile(pr: pr)),
-        ],
-        if (myPRs.isNotEmpty) ...[
-          _CollapseHeader(
-            title: 'My PRs',
-            count: myPRs.length,
-            expanded: _prsExpanded,
-            onToggle: () => setState(() => _prsExpanded = !_prsExpanded),
-          ),
-          if (_prsExpanded)
-            ...myPRs.map((pr) => _PRTile(pr: pr)),
-        ],
-        if (issues.isNotEmpty) ...[
-          _CollapseHeader(
-            title: 'Tracked Issues',
-            count: issues.length,
-            expanded: _issuesExpanded,
-            onToggle: () => setState(() => _issuesExpanded = !_issuesExpanded),
-          ),
-          if (_issuesExpanded)
-            ...issues.map((issue) => _IssueActivityTile(issue: issue)),
-        ],
+        if (filtered.isEmpty && filters.hasFilters)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: Text('No items match the current filters.')),
+          )
+        else
+          ...filtered.map((item) => switch (item) {
+            _PRItem(:final pr) => _PRTile(pr: pr),
+            _IssueItem(:final issue) => _IssueActivityTile(issue: issue),
+          }),
       ],
     );
   }
@@ -231,86 +335,6 @@ class _ActivityTabState extends ConsumerState<_ActivityTab> {
             ],
           ),
         ],
-      ),
-    );
-  }
-}
-
-// ── Collapsible section header ────────────────────────────────────────────────
-
-// ── Sort button ───────────────────────────────────────────────────────────────
-
-class _SortButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-  const _SortButton({required this.label, required this.icon,
-      required this.selected, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = selected
-        ? Theme.of(context).colorScheme.primary
-        : Colors.grey.shade600;
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: selected
-              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.15)
-              : Colors.transparent,
-          border: Border.all(color: color.withValues(alpha: 0.5)),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 13, color: color),
-          const SizedBox(width: 4),
-          Text(label, style: TextStyle(fontSize: 12, color: color,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.normal)),
-        ]),
-      ),
-    );
-  }
-}
-
-class _CollapseHeader extends StatelessWidget {
-  final String title;
-  final int count;
-  final bool expanded;
-  final VoidCallback onToggle;
-
-  const _CollapseHeader({
-    required this.title, required this.count,
-    required this.expanded, required this.onToggle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onToggle,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-        child: Row(children: [
-          Text(title,
-              style: Theme.of(context).textTheme.titleSmall
-                  ?.copyWith(fontWeight: FontWeight.bold)),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primaryContainer,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text('$count',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                    color: Theme.of(context).colorScheme.onPrimaryContainer)),
-          ),
-          const Spacer(),
-          Icon(expanded ? Icons.expand_less : Icons.expand_more,
-              size: 18, color: Colors.grey),
-        ]),
       ),
     );
   }
@@ -391,6 +415,11 @@ class _PRTileState extends ConsumerState<_PRTile> {
                           : Colors.grey.shade600,
                   borderRadius: BorderRadius.circular(2),
                 ),
+              ),
+              // Type badge
+              const Padding(
+                padding: EdgeInsets.only(right: 10),
+                child: TypeBadge(type: 'pr'),
               ),
               // Title + subtitle
               Expanded(
@@ -476,6 +505,8 @@ class _IssueActivityTile extends StatelessWidget {
   final TrackedIssue issue;
   const _IssueActivityTile({required this.issue});
 
+  String get _type => _itemType(_IssueItem(issue));
+
   @override
   Widget build(BuildContext context) {
     final reviewed = issue.latestReview != null;
@@ -498,8 +529,11 @@ class _IssueActivityTile extends StatelessWidget {
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              Icon(Icons.bug_report, size: 16, color: Colors.grey.shade500),
-              const SizedBox(width: 8),
+              // Type badge
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: TypeBadge(type: _type),
+              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,

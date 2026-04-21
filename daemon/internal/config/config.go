@@ -31,10 +31,11 @@ var githubTopicPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,49}$`)
 var githubOrgPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$`)
 
 type Config struct {
-	Server    ServerConfig    `toml:"server"`
-	GitHub    GitHubConfig    `toml:"github"`
-	AI        AIConfig        `toml:"ai"`
-	Retention RetentionConfig `toml:"retention"`
+	Server      ServerConfig      `toml:"server"`
+	GitHub      GitHubConfig      `toml:"github"`
+	AI          AIConfig          `toml:"ai"`
+	Retention   RetentionConfig   `toml:"retention"`
+	ActivityLog ActivityLogConfig `toml:"activity_log"`
 }
 
 type ServerConfig struct {
@@ -62,6 +63,11 @@ type GitHubConfig struct {
 	// rate limit (30 req/min authenticated). Defaults to "15m" when discovery
 	// is enabled. Accepts any Go time.ParseDuration value.
 	DiscoveryInterval string `toml:"discovery_interval"`
+
+	// WatchInterval controls Tier 3 per-item polling — how often active
+	// items (PRs/issues with recent activity) are re-checked for state
+	// changes (label updates, new comments, merge/close). Defaults to "1m".
+	WatchInterval string `toml:"watch_interval"`
 
 	// IssueTracking turns the issue-tracking pipeline (fase-2) on and off and
 	// governs how issues are filtered and classified. The pipeline itself
@@ -269,6 +275,18 @@ type RetentionConfig struct {
 	MaxDays int `toml:"max_days"`
 }
 
+// ActivityLogConfig controls the daily activity log (#113). When enabled,
+// the daemon records a row per significant action (review, triage,
+// implement, promote, error) into the activity_log table.
+//
+// Enabled is a pointer so we can tell "absent from TOML" (nil → default
+// true, opt-out behaviour) from "explicitly disabled" (&false). Post
+// applyDefaults it is always non-nil.
+type ActivityLogConfig struct {
+	Enabled       *bool `toml:"enabled"`
+	RetentionDays *int  `toml:"retention_days"`
+}
+
 // DefaultReposMountPath is the conventional location inside the daemon's
 // container where an operator's repos root is bind-mounted (e.g. via
 // HEIMDALLM_REPOS_DIR=/Users/you/projects → /repos). Exposed as a
@@ -434,6 +452,14 @@ func (c *Config) applyDefaults() {
 	if c.AI.ReviewMode == "" {
 		c.AI.ReviewMode = "single"
 	}
+	if c.ActivityLog.Enabled == nil {
+		v := true
+		c.ActivityLog.Enabled = &v
+	}
+	if c.ActivityLog.RetentionDays == nil {
+		v := 90
+		c.ActivityLog.RetentionDays = &v
+	}
 }
 
 // applyEnvOverrides applies HEIMDALLM_* environment variable overrides.
@@ -493,6 +519,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("HEIMDALLM_DISCOVERY_INTERVAL"); v != "" {
 		c.GitHub.DiscoveryInterval = v
+	}
+	if v := os.Getenv("HEIMDALLM_WATCH_INTERVAL"); v != "" {
+		c.GitHub.WatchInterval = v
 	}
 	c.applyIssueTrackingEnv()
 	c.applyPRMetadataEnv()
@@ -590,6 +619,12 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateIssueTracking(); err != nil {
 		return err
+	}
+	if c.ActivityLog.RetentionDays != nil {
+		d := *c.ActivityLog.RetentionDays
+		if d < 0 || d > 3650 {
+			return fmt.Errorf("config: activity_log.retention_days must be between 0 and 3650, got %d", d)
+		}
 	}
 	return nil
 }
