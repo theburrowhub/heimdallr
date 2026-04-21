@@ -14,6 +14,23 @@ services:
       # Gemini OAuth tokens from host (uncomment for Level 3 E2E test):
       # - ~/.gemini:/home/heimdallm/.gemini:ro
 
+  web:
+    container_name: heimdallm-web-test
+    restart: "no"
+    # Set HEIMDALLM_API_TOKEN to empty (the entrypoint's `[ -n "$VAR" ]`
+    # check treats empty and unset the same, falling through to the file
+    # at /data/api_token). This overrides whatever stale value the
+    # operator might have in docker/.env from a prior run, so the web
+    # container always uses the token the test-mode daemon just wrote
+    # into the shared volume.
+    environment:
+      - HEIMDALLM_API_TOKEN=
+    volumes:
+      # Mount the same test-data volume the daemon uses, so /data/api_token
+      # is the one this daemon generated — not the main heimdallm-data
+      # volume which belongs to a different (possibly non-existent) daemon.
+      - heimdallm-test-data:/data:ro
+
 volumes:
   heimdallm-test-data:
     driver: local

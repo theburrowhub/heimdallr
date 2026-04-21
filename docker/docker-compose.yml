@@ -87,8 +87,14 @@ services:
       # Gemini OAuth tokens from host (if using browser-based auth):
       # - ~/.gemini:/home/heimdallm/.gemini:ro
       #
-      # Local repos for full-repo analysis (optional):
-      # - /path/to/repos:/repos:ro
+      # Local repos for full-repo analysis. The agent runs with its CWD
+      # set to the Local Directory the operator picked in the UI, e.g.
+      # `/repos/api-specs`. Set HEIMDALLM_REPOS_DIR in docker/.env to
+      # your host's repos root (e.g. /Users/you/projects). When unset
+      # we mount an empty placeholder so compose doesn't error and the
+      # feature just returns "directory not found" in the UI — i.e.
+      # the feature is opt-in without breaking the default `make up-build`.
+      - ${HEIMDALLM_REPOS_DIR:-./repos-placeholder}:/repos:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:7842/health"]
       interval: 30s
@@ -96,58 +102,55 @@ services:
       start_period: 10s
       retries: 3
 
-  # SvelteKit web UI. Talks to the daemon over its HTTP API; reads the
-  # per-daemon API token from the shared heimdallm-data volume so operators
-  # don't have to copy it into the environment by hand. `make setup`
-  # provides a fallback path that writes the token into docker/.env.
-  #
-  # This service starts alongside the daemon by default (matches the
-  # acceptance criterion of #33: "`docker compose up` levanta daemon + web
-  # sin config manual de token"). If you want the pre-#33 behaviour
-  # (daemon only) name the service explicitly:
-  #     docker compose up -d heimdallm
-  # A `profiles: ["web"]` key was considered but rejected — it would turn
-  # the default command into a no-op for the web UI and break the AC.
+  # Flutter Web served by Nginx with server-side token injection.
+  # Swap-in for the SvelteKit web_ui container we used to build here:
+  # same host port, same token-from-shared-volume flow, same depends_on.
+  # The Nginx entrypoint reads the daemon's API token from /data/api_token
+  # (shared read-only volume) or HEIMDALLM_API_TOKEN env var and injects
+  # it into proxied /api/* requests so the browser never handles it.
   web:
     build:
-      # The web_ui Dockerfile assumes the build context is rooted at web_ui/
-      # (it does `COPY package.json ./` without any prefix). Point compose at
-      # that directory so the build matches the Dockerfile's expectations.
-      context: ../web_ui
-      dockerfile: Dockerfile
+      context: ../flutter_app
+      dockerfile: Dockerfile.web
     container_name: heimdallm-web
     restart: unless-stopped
     ports:
       - "${HEIMDALLM_WEB_PORT:-3000}:3000"
     environment:
-      # Where the daemon lives inside the compose network. Host + port line
+      # Upstream daemon URL inside the compose network. Host + port line
       # up with the heimdallm service above.
-      - HEIMDALLM_API_URL=http://heimdallm:${HEIMDALLM_PORT:-7842}
-      # Optional: set HEIMDALLM_API_TOKEN to skip reading the token from
-      # the shared volume. Left empty on purpose in the example.
-      - HEIMDALLM_API_TOKEN=${HEIMDALLM_API_TOKEN:-}
+      #
+      # Migration note (v0.4 → Flutter Web): the env var was renamed
+      # from HEIMDALLM_API_URL (SvelteKit) to DAEMON_URL (Nginx entrypoint).
+      # If you had HEIMDALLM_API_URL in docker/.env or your shell, move it
+      # under this key. Default is fine for the standard compose network.
+      - DAEMON_URL=http://heimdallm:${HEIMDALLM_PORT:-7842}
+      # HEIMDALLM_API_TOKEN is intentionally NOT passed through from
+      # .env here. The entrypoint reads /data/api_token from the shared
+      # volume, which is always the live daemon token. A stale value in
+      # docker/.env (left from an older `make setup`) would otherwise
+      # shadow the volume token and every /api/* call would 401.
+      # To override the token for testing, set it with `docker compose
+      # -e HEIMDALLM_API_TOKEN=... up web`.
     volumes:
-      # Read-only mount so the web container can load /data/api_token but
-      # cannot mutate the daemon's SQLite DB or config.
+      # Read-only mount so Nginx can load /data/api_token but cannot
+      # mutate the daemon's SQLite DB or config.
       - heimdallm-data:/data:ro
     depends_on:
       heimdallm:
-        # Wait until the daemon is healthy so the first UI request does
-        # not race a still-initialising daemon and render a 502.
+        # Wait until the daemon is healthy so the token file exists and
+        # the first UI request doesn't race a still-initialising daemon.
         condition: service_healthy
     healthcheck:
-      # node:22-alpine does not ship curl or wget, but it does have node.
-      # A tiny http GET is enough to confirm the SvelteKit server responds
-      # without pulling an extra package into the image.
-      test:
-        - "CMD"
-        - "node"
-        - "-e"
-        - "require('http').get('http://localhost:3000/', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
+      # nginx:alpine ships wget via busybox. Use 127.0.0.1 explicitly:
+      # `localhost` resolves to ::1 inside the container and nginx's
+      # `listen 3000;` binds IPv4 only, so `http://localhost` fails with
+      # Connection refused and the container never goes healthy.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 6
 
 volumes:
   heimdallm-data:

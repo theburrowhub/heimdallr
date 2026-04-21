@@ -1,6 +1,6 @@
 # Heimdallm
 
-> AI-powered GitHub automation for macOS and Linux — reviews your pull requests, triages your issues, and can even open implementation PRs for you. Uses Claude, Gemini, Codex, or OpenCode under the hood, posts everything back as your GitHub account, and keeps you informed via a native menu-bar app or a SvelteKit web UI.
+> AI-powered GitHub automation for macOS and Linux — reviews your pull requests, triages your issues, and can even open implementation PRs for you. Uses Claude, Gemini, Codex, or OpenCode under the hood, posts everything back as your GitHub account, and keeps you informed via a native menu-bar app or a Flutter Web UI.
 
 ![Heimdallm dashboard](assets/icon.png)
 
@@ -17,7 +17,7 @@ Watches the PRs where you're requested as a reviewer, runs an AI code review, an
 Fetches issues from monitored repos, classifies them by label (`review_only` vs `auto_implement` vs `skip` vs `blocked`), and for the develop-track ones optionally **creates a branch, commits the change, and opens a PR** against your default branch — fully autonomous on the issues you mark for it. Issues can declare dependencies on other issues/PRs; Heimdallm holds them in a `blocked` state until the prerequisites close, then promotes them automatically.
 
 ### 3. Self-monitoring UI
-A SvelteKit web dashboard (`:3000`) with Dashboard, PR list, Issue list, prompt/agent editor, live config editor, and a live log stream. Opens alongside the daemon in Docker mode.
+A Flutter Web dashboard (`:3000`) with Dashboard, PR list, Issue list, prompt/agent editor, live config editor, and a live log stream. Opens alongside the daemon in Docker mode.
 
 ### Headline features
 
@@ -30,7 +30,7 @@ A SvelteKit web dashboard (`:3000`) with Dashboard, PR list, Issue list, prompt/
 - **Topic-based auto-discovery** — tag repos with a GitHub topic and Heimdallm monitors them without editing config
 - **Severity gating** — only `high` severity triggers `REQUEST_CHANGES`; everything else approves with informational notes
 - **Native desktop** — macOS menu-bar app, system notifications, dark mode, no Electron
-- **Web UI** — SvelteKit dashboard with system / light / dark theme toggle, live SSE updates
+- **Web UI** — Flutter Web dashboard served by Nginx with system / light / dark theme toggle, live SSE updates
 - **Docker mode** — single `make up` spins up daemon + web UI for server/team deployments
 
 ---
@@ -171,6 +171,31 @@ Then open the web UI:
 - Or browse to `http://localhost:3000` manually.
 
 The `web` container reads the daemon's API token from the shared `heimdallm-data` volume automatically — no manual copy needed.
+
+After `make up` completes, the target prints a summary of which AI credentials were picked up from `docker/.env` and flags the optional knobs (full-repo analysis, topic discovery) that are currently off. Use it as a checklist before opening the UI.
+
+#### 4b. Opt-in: full-repo analysis
+
+By default the AI agent reviews a PR using only the diff it gets from the GitHub API. That's enough for most reviews. If you want the agent to explore the surrounding code (grep sibling files, read the call graph, check imports, etc.), you need to give it a directory on the daemon's side to `cd` into.
+
+On Docker the daemon is containerised, so "a directory on the daemon's side" means a path inside that container. Mount your host repos root into the container as `/repos` via an env var:
+
+```bash
+# In docker/.env
+HEIMDALLM_REPOS_DIR=/Users/you/projects       # macOS / Linux
+# or
+HEIMDALLM_REPOS_DIR=/home/you/code
+```
+
+```bash
+make down && make up
+```
+
+Then in the web UI, go to a repo's detail screen and under **Local directory** enter the path inside the container — typically `/repos/<repo-name>` (matching the sub-directory of your host's projects root). When unset, the compose file mounts an empty placeholder at `/repos` so the feature is a silent no-op and doesn't break anything.
+
+The mount is read-only. The agent can read every file under that directory but cannot modify your working tree.
+
+On the desktop app this is automatic: the `Browse` button opens the native picker and stores the host path directly — no mount needed.
 
 #### 5. Day-to-day commands
 
@@ -332,7 +357,7 @@ The **Go daemon** (`heimdalld`, port `7842`) is the engine. It polls GitHub for 
 Two first-party UIs talk to it over HTTP:
 
 - **Flutter desktop app** — macOS menu-bar + dashboard, system notifications. Ships inside the `.dmg` / Linux packages.
-- **SvelteKit web UI** — browser dashboard on port `3000`, ships as a second Docker container alongside the daemon.
+- **Flutter Web UI** — browser dashboard on port `3000`, served by Nginx, ships as a second Docker container alongside the daemon.
 
 ```
 Flutter app ─┐
@@ -375,13 +400,9 @@ cp docker/.env.example docker/.env    # fill in GITHUB_TOKEN + provider key
 make up                                # daemon + web UI
 make logs                              # follow both services
 ```
-For iterating on the SvelteKit code with HMR against a running daemon:
+For iterating on the Flutter Web bundle against a running daemon:
 ```bash
-cd web_ui
-npm install
-HEIMDALLM_API_URL=http://localhost:7842 \
-HEIMDALLM_API_TOKEN=$(docker compose -f ../docker/docker-compose.yml exec -T heimdallm cat /data/api_token) \
-npm run dev
+make build-web    # compile Flutter → web/; then `make up-build` to bake into the Nginx image
 ```
 
 ### Other targets
@@ -429,24 +450,17 @@ heimdallm/
 │       ├── scheduler/       Poll loop, grace windows
 │       ├── server/          HTTP + SSE API
 │       └── keychain/        Host credential storage
-├── flutter_app/             macOS / Linux desktop UI
-│   └── lib/
-│       ├── features/
-│       │   ├── dashboard/   Reviews tab (My Reviews / My PRs)
-│       │   ├── repositories/Repo management + per-repo config
-│       │   ├── agents/      Review prompt library
-│       │   └── stats/       Review statistics
-│       └── core/
-│           ├── api/         HTTP + SSE client
-│           └── setup/       First-run setup, token detection
-├── web_ui/                  SvelteKit web dashboard (port 3000)
-│   ├── src/
-│   │   ├── routes/          /, /prs, /prs/[id], /issues, /issues/[id],
-│   │   │                    /agents, /config, /logs
-│   │   ├── lib/components/  PRTile, IssueTile, SeverityBadge, FilterBar…
-│   │   └── lib/             api client, SSE client, theme helper
-│   ├── Dockerfile           Node 22-alpine, multi-stage
-│   └── package.json         Svelte 5 + Tailwind v4 + Vitest
+├── flutter_app/             macOS / Linux / Web UI
+│   ├── lib/
+│   │   ├── features/
+│   │   │   ├── dashboard/   Reviews tab (My Reviews / My PRs)
+│   │   │   ├── repositories/Repo management + per-repo config
+│   │   │   ├── agents/      Review prompt library
+│   │   │   └── stats/       Review statistics
+│   │   └── core/
+│   │       ├── api/         HTTP + SSE client
+│   │       └── setup/       First-run setup, token detection
+│   └── web/                 Flutter Web build output (served by Nginx on port 3000)
 ├── docker/                  Docker deployment
 │   ├── Dockerfile           Daemon image (Go + Node + 4 AI CLIs)
 │   ├── docker-compose.yml   daemon + web UI services

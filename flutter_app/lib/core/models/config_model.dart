@@ -333,6 +333,13 @@ class AppConfig {
   final Map<String, CLIAgentConfig> agentConfigs; // keyed by CLI name
   final Map<String, RepoConfig> repoConfigs;      // keyed by "org/repo"
   final IssueTrackingConfig issueTracking;
+  /// Auto-detected `local_dir` per repo, populated by the daemon when the
+  /// repo is visible at `/repos/<short-name>` in the container (i.e. the
+  /// operator set HEIMDALLM_REPOS_DIR). The daemon falls back to this
+  /// value at review time when the per-repo `local_dir` is empty; the UI
+  /// surfaces it next to the repo so the user knows full-repo analysis
+  /// will kick in without configuring anything. Keyed by "org/repo".
+  final Map<String, String> localDirsDetected;
 
   const AppConfig({
     this.serverPort = 7842,
@@ -344,6 +351,7 @@ class AppConfig {
     this.agentConfigs = const {},
     this.repoConfigs = const {},
     this.issueTracking = const IssueTrackingConfig(),
+    this.localDirsDetected = const {},
   });
 
   /// Computed list of monitored repos — this is what the daemon uses.
@@ -364,17 +372,19 @@ class AppConfig {
     Map<String, CLIAgentConfig>? agentConfigs,
     Map<String, RepoConfig>? repoConfigs,
     IssueTrackingConfig? issueTracking,
+    Map<String, String>? localDirsDetected,
   }) {
     return AppConfig(
-      serverPort:    serverPort    ?? this.serverPort,
-      pollInterval:  pollInterval  ?? this.pollInterval,
-      aiPrimary:     aiPrimary     ?? this.aiPrimary,
-      aiFallback:    aiFallback    ?? this.aiFallback,
-      reviewMode:    reviewMode    ?? this.reviewMode,
-      retentionDays: retentionDays ?? this.retentionDays,
-      agentConfigs:  agentConfigs  ?? this.agentConfigs,
-      repoConfigs:   repoConfigs   ?? this.repoConfigs,
-      issueTracking: issueTracking ?? this.issueTracking,
+      serverPort:        serverPort        ?? this.serverPort,
+      pollInterval:      pollInterval      ?? this.pollInterval,
+      aiPrimary:         aiPrimary         ?? this.aiPrimary,
+      aiFallback:        aiFallback        ?? this.aiFallback,
+      reviewMode:        reviewMode        ?? this.reviewMode,
+      retentionDays:     retentionDays     ?? this.retentionDays,
+      agentConfigs:      agentConfigs      ?? this.agentConfigs,
+      repoConfigs:       repoConfigs       ?? this.repoConfigs,
+      issueTracking:     issueTracking     ?? this.issueTracking,
+      localDirsDetected: localDirsDetected ?? this.localDirsDetected,
     );
   }
 
@@ -451,16 +461,27 @@ class AppConfig {
         ? IssueTrackingConfig.fromJson(itRaw)
         : const IssueTrackingConfig();
 
+    // Auto-detected local_dir map (may be absent on older daemons).
+    final detectedRaw = json['local_dirs_detected'] as Map<String, dynamic>?;
+    final localDirsDetected = <String, String>{};
+    if (detectedRaw != null) {
+      for (final entry in detectedRaw.entries) {
+        final v = entry.value;
+        if (v is String && v.isNotEmpty) localDirsDetected[entry.key] = v;
+      }
+    }
+
     return AppConfig(
-      serverPort:    (json['server_port']   as int?)    ?? 7842,
-      pollInterval:  (json['poll_interval'] as String?) ?? '5m',
-      aiPrimary:     (json['ai_primary']    as String?) ?? 'claude',
-      aiFallback:    (json['ai_fallback']   as String?) ?? '',
-      reviewMode:    (json['review_mode']   as String?) ?? 'single',
-      retentionDays: (json['retention_days'] as int?)   ?? 90,
-      agentConfigs:  agentConfigs,
-      repoConfigs:   configs,
-      issueTracking: issueTracking,
+      serverPort:        (json['server_port']   as int?)    ?? 7842,
+      pollInterval:      (json['poll_interval'] as String?) ?? '5m',
+      aiPrimary:         (json['ai_primary']    as String?) ?? 'claude',
+      aiFallback:        (json['ai_fallback']   as String?) ?? '',
+      reviewMode:        (json['review_mode']   as String?) ?? 'single',
+      retentionDays:     (json['retention_days'] as int?)   ?? 90,
+      agentConfigs:      agentConfigs,
+      repoConfigs:       configs,
+      issueTracking:     issueTracking,
+      localDirsDetected: localDirsDetected,
     );
   }
 }
