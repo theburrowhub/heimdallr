@@ -115,7 +115,7 @@ void main() {
     });
 
     test('multi-value filters', () {
-      final q = ActivityQuery(
+      const q = ActivityQuery(
         orgs: {'a', 'b'},
         repos: {'a/x'},
         actions: {ActivityAction.review, ActivityAction.triage},

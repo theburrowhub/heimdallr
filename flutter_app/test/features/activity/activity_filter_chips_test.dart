@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:heimdallm/core/models/activity.dart';
 import 'package:heimdallm/features/activity/activity_providers.dart';
 import 'package:heimdallm/features/activity/widgets/activity_filter_chips.dart';
 
