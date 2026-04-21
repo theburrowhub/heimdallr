@@ -180,7 +180,8 @@ func main() {
 	srv := server.New(s, broker, p, apiToken)
 
 	// cfgMu protects cfg and the pipeline so reload is safe from any goroutine.
-	var cfgMu sync.Mutex
+	var cfgMu   sync.Mutex
+	var reloadMu sync.Mutex // serialises config reloads to prevent duplicate pipelines
 
 	// discoverySvc holds the discovered repo cache.
 	discoverySvc := discovery.NewService(ghClient)
@@ -415,6 +416,13 @@ func main() {
 	// startup so the two paths cannot drift on which loader they pick — both
 	// see the same HEIMDALLM_DATA_DIR snapshot.
 	srv.SetReloadFn(func() error {
+		// Serialise reloads: without this, two concurrent /reload calls
+		// could each read the same oldPipe, both stop it, both build a
+		// new pipeline, and leave two pipelines running against the same
+		// GitHub API budget.
+		reloadMu.Lock()
+		defer reloadMu.Unlock()
+
 		newCfg, err := loadConfig(cfgPath)
 		if err != nil {
 			return fmt.Errorf("reload: %w", err)
@@ -736,9 +744,14 @@ func parseDiscoveryInterval(s string) time.Duration {
 }
 
 func parseWatchInterval(s string) time.Duration {
+	const minWatch = 10 * time.Second
 	d, err := time.ParseDuration(s)
 	if err != nil || d <= 0 {
 		return 1 * time.Minute
+	}
+	if d < minWatch {
+		slog.Warn("watch_interval too small, clamping to minimum", "configured", d, "minimum", minWatch)
+		return minWatch
 	}
 	return d
 }
@@ -977,7 +990,15 @@ func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchIt
 		}
 		a.runReview(ghPR, aiCfg)
 	}
-	// For issues, Tier 2 will pick up the change on its next cycle.
+	// For issues we cannot trigger an immediate re-triage from Tier 3,
+	// but returning nil signals the caller (RunTier3) to call
+	// queue.ResetBackoff — which resets the item's backoff to 1m so it
+	// gets re-checked quickly rather than waiting at a potentially 15m
+	// backoff for Tier 2's next full cycle.
+	if item.Type == "issue" {
+		slog.Info("tier3: issue change detected, backoff will reset",
+			"repo", item.Repo, "number", item.Number)
+	}
 	return nil
 }
 
