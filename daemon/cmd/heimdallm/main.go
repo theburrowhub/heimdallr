@@ -348,10 +348,14 @@ func main() {
 		repoOverrides := make(map[string]map[string]any)
 		for repo, ai := range c.AI.Repos {
 			ro := map[string]any{
-				"primary":     ai.Primary,
-				"fallback":    ai.Fallback,
-				"review_mode": ai.ReviewMode,
-				"local_dir":   ai.LocalDir,
+				"primary":      ai.Primary,
+				"fallback":     ai.Fallback,
+				"review_mode":  ai.ReviewMode,
+				"local_dir":    ai.LocalDir,
+				"pr_reviewers": ai.PRReviewers,
+				"pr_assignee":  ai.PRAssignee,
+				"pr_labels":    ai.PRLabels,
+				"pr_draft":     ai.PRDraft,
 			}
 			if ai.IssueTracking != nil {
 				ro["issue_tracking"] = ai.IssueTracking
