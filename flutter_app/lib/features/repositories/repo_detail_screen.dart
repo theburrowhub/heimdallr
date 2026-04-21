@@ -25,6 +25,8 @@ class RepoDetailScreen extends ConsumerStatefulWidget {
 
 class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
   RepoConfig _config = const RepoConfig();
+  // ignore: unused_field
+  RepoConfig _previousConfig = const RepoConfig();
   bool _initialized = false;
   Timer? _debounce;
   List<String> _repoLabels = [];
@@ -40,6 +42,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
     if (_initialized) return;
     _initialized = true;
     _config = config.repoConfigs[widget.repoName] ?? const RepoConfig();
+    _previousConfig = _config;
     _loadRepoMeta();
   }
 
@@ -62,23 +65,116 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
   }
 
   void _update(RepoConfig updated) {
+    final previous = _config;
     setState(() => _config = updated);
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 800), _autoSave);
+    _debounce = Timer(const Duration(milliseconds: 800), () => _autoSave(previous));
   }
 
-  Future<void> _autoSave() async {
-    final current = ref.read(configNotifierProvider).valueOrNull;
-    if (current == null) return;
-    final updatedRepos = Map<String, RepoConfig>.from(current.repoConfigs);
-    updatedRepos[widget.repoName] = _config;
-    final updated = current.copyWith(repoConfigs: updatedRepos);
+  Future<void> _autoSave(RepoConfig previous) async {
+    final api = ref.read(apiClientProvider);
     try {
-      await ref.read(configNotifierProvider.notifier).save(updated);
+      final repoDiff = _computeRepoDiff(previous, _config);
+      Map<String, dynamic>? lastResponse;
+      if (repoDiff.isNotEmpty) {
+        lastResponse = await api.patchRepoConfig(widget.repoName, repoDiff);
+      }
+
+      final monitoringChanged = previous.isMonitored != _config.isMonitored;
+      if (monitoringChanged) {
+        final current = ref.read(configNotifierProvider).valueOrNull;
+        if (current != null) {
+          final updatedRepos = Map<String, RepoConfig>.from(current.repoConfigs);
+          updatedRepos[widget.repoName] = _config;
+          final monitored = updatedRepos.entries
+              .where((e) => e.value.isMonitored)
+              .map((e) => e.key)
+              .toList()..sort();
+          final nonMonitored = updatedRepos.entries
+              .where((e) => !e.value.isMonitored)
+              .map((e) => e.key)
+              .toList()..sort();
+          lastResponse = await api.patchConfig({
+            'github': {
+              'repositories': monitored,
+              'non_monitored': nonMonitored,
+            },
+          });
+        }
+      }
+
+      if (lastResponse != null) {
+        ref.read(configNotifierProvider.notifier).updateFromServer(lastResponse);
+      }
+      _previousConfig = _config;
       if (mounted) showToast(context, 'Saved');
     } catch (e) {
       if (mounted) showToast(context, 'Error: $e', isError: true);
     }
+  }
+
+  Map<String, dynamic> _computeRepoDiff(RepoConfig old, RepoConfig updated) {
+    final diff = <String, dynamic>{};
+    if (old.aiPrimary != updated.aiPrimary) diff['primary'] = updated.aiPrimary ?? '';
+    if (old.aiFallback != updated.aiFallback) diff['fallback'] = updated.aiFallback ?? '';
+    if (old.reviewMode != updated.reviewMode) diff['review_mode'] = updated.reviewMode ?? '';
+    if (old.promptId != updated.promptId) diff['prompt'] = updated.promptId ?? '';
+    if (old.localDir != updated.localDir) diff['local_dir'] = updated.localDir ?? '';
+    if (old.prAssignee != updated.prAssignee) diff['pr_assignee'] = updated.prAssignee ?? '';
+    if (old.prDraft != updated.prDraft && updated.prDraft != null) diff['pr_draft'] = updated.prDraft!;
+    if (old.developPromptId != updated.developPromptId) diff['implement_prompt'] = updated.developPromptId ?? '';
+
+    if (!_listsEqual(old.prReviewers, updated.prReviewers)) {
+      diff['pr_reviewers'] = updated.prReviewers ?? <String>[];
+    }
+    if (!_listsEqual(old.prLabels, updated.prLabels)) {
+      diff['pr_labels'] = updated.prLabels ?? <String>[];
+    }
+
+    final itDiff = <String, dynamic>{};
+    if (old.itEnabled != updated.itEnabled && updated.itEnabled != null) {
+      itDiff['enabled'] = updated.itEnabled!;
+    }
+    if (old.devEnabled != updated.devEnabled && updated.devEnabled != null) {
+      itDiff['develop_enabled'] = updated.devEnabled!;
+    }
+    if (old.issueFilterMode != updated.issueFilterMode) {
+      itDiff['filter_mode'] = updated.issueFilterMode ?? '';
+    }
+    if (old.issueDefaultAction != updated.issueDefaultAction) {
+      itDiff['default_action'] = updated.issueDefaultAction ?? '';
+    }
+    if (old.issuePromptId != updated.issuePromptId) {
+      itDiff['issue_prompt'] = updated.issuePromptId ?? '';
+    }
+    if (!_listsEqual(old.reviewOnlyLabels, updated.reviewOnlyLabels)) {
+      itDiff['review_only_labels'] = updated.reviewOnlyLabels ?? <String>[];
+    }
+    if (!_listsEqual(old.skipLabels, updated.skipLabels)) {
+      itDiff['skip_labels'] = updated.skipLabels ?? <String>[];
+    }
+    if (!_listsEqual(old.developLabels, updated.developLabels)) {
+      itDiff['develop_labels'] = updated.developLabels ?? <String>[];
+    }
+    if (!_listsEqual(old.issueOrganizations, updated.issueOrganizations)) {
+      itDiff['organizations'] = updated.issueOrganizations ?? <String>[];
+    }
+    if (!_listsEqual(old.issueAssignees, updated.issueAssignees)) {
+      itDiff['assignees'] = updated.issueAssignees ?? <String>[];
+    }
+
+    if (itDiff.isNotEmpty) diff['issue_tracking'] = itDiff;
+    return diff;
+  }
+
+  bool _listsEqual(List<String>? a, List<String>? b) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return false;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
