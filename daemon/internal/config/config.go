@@ -64,6 +64,11 @@ type GitHubConfig struct {
 	// is enabled. Accepts any Go time.ParseDuration value.
 	DiscoveryInterval string `toml:"discovery_interval"`
 
+	// AutoEnablePROnDiscovery controls the initial prEnabled value for repos
+	// auto-added from the poll cycle's review-requested results. nil means
+	// "use default". Default is true to preserve pre-feature behaviour.
+	AutoEnablePROnDiscovery *bool `toml:"auto_enable_pr_review_on_discovery"`
+
 	// WatchInterval controls Tier 3 per-item polling — how often active
 	// items (PRs/issues with recent activity) are re-checked for state
 	// changes (label updates, new comments, merge/close). Defaults to "1m".
@@ -415,6 +420,14 @@ func (c *Config) IssueTrackingForRepo(repo string) IssueTrackingConfig {
 		merged.Assignees = ov.Assignees
 	}
 	return merged
+}
+
+// AutoEnablePRForDiscovery returns the effective boolean value.
+func (c *GitHubConfig) AutoEnablePRForDiscovery() bool {
+	if c.AutoEnablePROnDiscovery == nil {
+		return true
+	}
+	return *c.AutoEnablePROnDiscovery
 }
 
 // AgentConfigFor returns the CLIAgentConfig for a given CLI name, or an empty struct.

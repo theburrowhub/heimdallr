@@ -1310,3 +1310,20 @@ retention_days = 0
 		t.Errorf("RetentionDays = %d, want 0 (explicit)", *c.ActivityLog.RetentionDays)
 	}
 }
+
+// ── AutoEnablePRForDiscovery ────────────────────────────────────────────────
+
+func TestAutoEnablePRForDiscovery_Default(t *testing.T) {
+	cfg := &GitHubConfig{}
+	if !cfg.AutoEnablePRForDiscovery() {
+		t.Fatal("default should be true")
+	}
+}
+
+func TestAutoEnablePRForDiscovery_Explicit(t *testing.T) {
+	f := false
+	cfg := &GitHubConfig{AutoEnablePROnDiscovery: &f}
+	if cfg.AutoEnablePRForDiscovery() {
+		t.Fatal("explicit false should return false")
+	}
+}
