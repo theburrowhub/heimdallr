@@ -2,6 +2,13 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.4.6](https://github.com/theburrowhub/heimdallm/compare/v0.4.5...v0.4.6) (2026-04-21)
+
+
+### Bug Fixes
+
+* add SSH client and agent forwarding for auto_implement ([#149](https://github.com/theburrowhub/heimdallm/issues/149)) ([00b12b1](https://github.com/theburrowhub/heimdallm/commit/00b12b111c9f5f4679e9e387d9e6949f12672113)), closes [#148](https://github.com/theburrowhub/heimdallm/issues/148)
+
 ## [0.4.5](https://github.com/theburrowhub/heimdallm/compare/v0.4.4...v0.4.5) (2026-04-21)
 
 
