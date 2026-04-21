@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -12,7 +13,8 @@ func newStatsCmd() *cobra.Command {
 		Use:   "stats",
 		Short: "Show review statistics",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			stats, err := client.GetStats()
+			c := clientFromContext(cmd.Context())
+			stats, err := c.GetStats()
 			if err != nil {
 				return fmt.Errorf("fetching stats: %w", err)
 			}
@@ -25,15 +27,25 @@ func newStatsCmd() *cobra.Command {
 
 			if len(stats.BySeverity) > 0 {
 				fmt.Println("\n  By Severity:")
-				for sev, count := range stats.BySeverity {
-					fmt.Printf("    %-8s %d\n", sev, count)
+				sevKeys := make([]string, 0, len(stats.BySeverity))
+				for sev := range stats.BySeverity {
+					sevKeys = append(sevKeys, sev)
+				}
+				sort.Strings(sevKeys)
+				for _, sev := range sevKeys {
+					fmt.Printf("    %-8s %d\n", sev, stats.BySeverity[sev])
 				}
 			}
 
 			if len(stats.ByCLI) > 0 {
 				fmt.Println("\n  By CLI:")
-				for cli, count := range stats.ByCLI {
-					fmt.Printf("    %-10s %d\n", cli, count)
+				cliKeys := make([]string, 0, len(stats.ByCLI))
+				for k := range stats.ByCLI {
+					cliKeys = append(cliKeys, k)
+				}
+				sort.Strings(cliKeys)
+				for _, k := range cliKeys {
+					fmt.Printf("    %-10s %d\n", k, stats.ByCLI[k])
 				}
 			}
 
@@ -46,8 +58,13 @@ func newStatsCmd() *cobra.Command {
 
 			if len(stats.ReviewsLast7Days) > 0 {
 				fmt.Println("\n  Reviews (last 7 days):")
+				const maxBar = 40
 				for _, dc := range stats.ReviewsLast7Days {
-					bar := strings.Repeat("█", dc.Count)
+					barLen := dc.Count
+					if barLen > maxBar {
+						barLen = maxBar
+					}
+					bar := strings.Repeat("\u2588", barLen)
 					fmt.Printf("    %s  %s (%d)\n", dc.Day, bar, dc.Count)
 				}
 			}

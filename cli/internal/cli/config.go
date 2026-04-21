@@ -12,7 +12,8 @@ func newConfigCmd() *cobra.Command {
 		Use:   "config",
 		Short: "Show the daemon's running configuration",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := client.GetConfig()
+			c := clientFromContext(cmd.Context())
+			cfg, err := c.GetConfig()
 			if err != nil {
 				return fmt.Errorf("fetching config: %w", err)
 			}

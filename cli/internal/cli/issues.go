@@ -15,7 +15,8 @@ func newIssuesCmd() *cobra.Command {
 		Use:   "issues",
 		Short: "List triaged issues",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			issues, err := client.ListIssues()
+			c := clientFromContext(cmd.Context())
+			issues, err := c.ListIssues()
 			if err != nil {
 				return fmt.Errorf("fetching issues: %w", err)
 			}
@@ -53,14 +54,8 @@ func newIssuesCmd() *cobra.Command {
 					sev = extractTriageSeverity(iss.LatestReview.Triage)
 					action = iss.LatestReview.ActionTaken
 				}
-				title := iss.Title
-				if len(title) > 38 {
-					title = title[:35] + "..."
-				}
-				repo := iss.Repo
-				if len(repo) > 28 {
-					repo = repo[:25] + "..."
-				}
+				title := truncate(iss.Title, 38)
+				repo := truncate(iss.Repo, 28)
 				fmt.Printf("%-6d %-30s %-40s %-8s %-12s\n", iss.ID, repo, title, sev, action)
 			}
 

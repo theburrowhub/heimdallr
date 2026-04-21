@@ -1,11 +1,12 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/heimdallm/cli/internal/api"
+	"github.com/theburrowhub/heimdallm/cli/internal/api"
 	"github.com/spf13/cobra"
 )
 
@@ -16,12 +17,15 @@ func newFollowCmd() *cobra.Command {
 		Use:   "follow",
 		Short: "Stream real-time SSE events (like tail -f)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+
 			events := make(chan api.SSEEvent, 32)
-			done := make(chan struct{})
 			errCh := make(chan error, 1)
 
+			c := clientFromContext(cmd.Context())
 			go func() {
-				errCh <- client.StreamEvents(events, done)
+				errCh <- c.StreamEvents(ctx, events)
 			}()
 
 			fmt.Println("Listening for events... (Ctrl+C to stop)")
@@ -47,6 +51,10 @@ func newFollowCmd() *cobra.Command {
 						return fmt.Errorf("SSE stream: %w", err)
 					}
 					fmt.Println("Stream ended.")
+					return nil
+				case <-cmd.Context().Done():
+					cancel()
+					fmt.Println("\nStopped.")
 					return nil
 				}
 			}

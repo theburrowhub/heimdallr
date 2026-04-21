@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -264,12 +265,14 @@ func (c *Client) TriggerIssueReview(id int64) error {
 }
 
 // StreamEvents opens an SSE connection and sends events to the provided channel.
-// It blocks until the connection is closed or an error occurs.
-// The caller should close the done channel to stop streaming.
-func (c *Client) StreamEvents(events chan<- SSEEvent, done <-chan struct{}) error {
-	req, err := c.newRequest("GET", "/events", nil)
+// It blocks until the context is cancelled, the connection is closed, or an error occurs.
+func (c *Client) StreamEvents(ctx context.Context, events chan<- SSEEvent) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.Host+"/events", nil)
 	if err != nil {
 		return err
+	}
+	if c.Token != "" {
+		req.Header.Set("X-Heimdallm-Token", c.Token)
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
@@ -286,18 +289,10 @@ func (c *Client) StreamEvents(events chan<- SSEEvent, done <-chan struct{}) erro
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
-	var eventType, eventData string
+	var eventType string
+	var dataLines []string
 
-	for {
-		select {
-		case <-done:
-			return nil
-		default:
-		}
-
-		if !scanner.Scan() {
-			break
-		}
+	for scanner.Scan() {
 		line := scanner.Text()
 
 		if strings.HasPrefix(line, ":") {
@@ -306,19 +301,24 @@ func (c *Client) StreamEvents(events chan<- SSEEvent, done <-chan struct{}) erro
 		if strings.HasPrefix(line, "event: ") {
 			eventType = strings.TrimPrefix(line, "event: ")
 		} else if strings.HasPrefix(line, "data: ") {
-			eventData = strings.TrimPrefix(line, "data: ")
+			dataLines = append(dataLines, strings.TrimPrefix(line, "data: "))
 		} else if line == "" && eventType != "" {
+			eventData := strings.Join(dataLines, "\n")
 			select {
 			case events <- SSEEvent{Type: eventType, Data: eventData}:
-			case <-done:
-				return nil
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 			eventType = ""
-			eventData = ""
+			dataLines = nil
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
+		// Context cancellation causes the read to fail; don't treat as error.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("SSE stream error: %w", err)
 	}
 	return nil

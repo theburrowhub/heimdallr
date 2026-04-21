@@ -1,4 +1,4 @@
-module github.com/heimdallm/cli
+module github.com/theburrowhub/heimdallm/cli
 
 go 1.21
 

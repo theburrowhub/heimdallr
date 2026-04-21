@@ -14,7 +14,8 @@ func newPRsCmd() *cobra.Command {
 		Use:   "prs",
 		Short: "List reviewed PRs",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			prs, err := client.ListPRs()
+			c := clientFromContext(cmd.Context())
+			prs, err := c.ListPRs()
 			if err != nil {
 				return fmt.Errorf("fetching PRs: %w", err)
 			}
@@ -47,14 +48,8 @@ func newPRsCmd() *cobra.Command {
 				if pr.LatestReview != nil {
 					sev = pr.LatestReview.Severity
 				}
-				title := pr.Title
-				if len(title) > 38 {
-					title = title[:35] + "..."
-				}
-				repo := pr.Repo
-				if len(repo) > 28 {
-					repo = repo[:25] + "..."
-				}
+				title := truncate(pr.Title, 38)
+				repo := truncate(pr.Repo, 28)
 				fmt.Printf("%-6d %-30s %-40s %-8s %-8s\n", pr.ID, repo, title, sev, pr.State)
 			}
 

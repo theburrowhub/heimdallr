@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/spf13/cobra"
 )
@@ -11,16 +12,17 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show daemon state, uptime, and monitored repos",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := client.Health(); err != nil {
+			c := clientFromContext(cmd.Context())
+			if err := c.Health(); err != nil {
 				return fmt.Errorf("daemon unreachable: %w", err)
 			}
 
-			cfg, err := client.GetConfig()
+			cfg, err := c.GetConfig()
 			if err != nil {
 				return fmt.Errorf("fetching config: %w", err)
 			}
 
-			stats, err := client.GetStats()
+			stats, err := c.GetStats()
 			if err != nil {
 				return fmt.Errorf("fetching stats: %w", err)
 			}
@@ -52,13 +54,18 @@ func newStatusCmd() *cobra.Command {
 			fmt.Printf("  Activity (24h): %d events\n", stats.ActivityCount24h)
 
 			if len(stats.BySeverity) > 0 {
+				sevKeys := make([]string, 0, len(stats.BySeverity))
+				for sev := range stats.BySeverity {
+					sevKeys = append(sevKeys, sev)
+				}
+				sort.Strings(sevKeys)
 				fmt.Printf("  By severity:   ")
 				first := true
-				for sev, count := range stats.BySeverity {
+				for _, sev := range sevKeys {
 					if !first {
 						fmt.Printf(", ")
 					}
-					fmt.Printf("%s=%d", sev, count)
+					fmt.Printf("%s=%d", sev, stats.BySeverity[sev])
 					first = false
 				}
 				fmt.Println()

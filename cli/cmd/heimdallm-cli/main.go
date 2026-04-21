@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/heimdallm/cli/internal/cli"
+	"github.com/theburrowhub/heimdallm/cli/internal/cli"
 )
 
 func main() {

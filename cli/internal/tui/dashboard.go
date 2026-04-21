@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -8,7 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/heimdallm/cli/internal/api"
+	"github.com/theburrowhub/heimdallm/cli/internal/api"
 )
 
 type tab int
@@ -41,7 +42,7 @@ type Dashboard struct {
 	startTime time.Time
 
 	sseEvents chan api.SSEEvent
-	sseDone   chan struct{}
+	sseCancel context.CancelFunc
 }
 
 type activityLine struct {
@@ -66,7 +67,6 @@ func NewDashboard(host, token string) *Dashboard {
 		client:    api.New(host, token),
 		startTime: time.Now(),
 		sseEvents: make(chan api.SSEEvent, 32),
-		sseDone:   make(chan struct{}),
 	}
 }
 
@@ -127,23 +127,21 @@ func (d *Dashboard) fetchData() tea.Msg {
 }
 
 func (d *Dashboard) connectSSE() tea.Msg {
+	ctx, cancel := context.WithCancel(context.Background())
+	d.sseCancel = cancel
 	go func() {
-		_ = d.client.StreamEvents(d.sseEvents, d.sseDone)
+		_ = d.client.StreamEvents(ctx, d.sseEvents)
 	}()
 	return nil
 }
 
 func (d *Dashboard) listenSSE() tea.Cmd {
 	return func() tea.Msg {
-		select {
-		case event, ok := <-d.sseEvents:
-			if !ok {
-				return nil
-			}
-			return sseMsg(event)
-		case <-d.sseDone:
+		event, ok := <-d.sseEvents
+		if !ok {
 			return nil
 		}
+		return sseMsg(event)
 	}
 }
 
@@ -203,7 +201,9 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
-		close(d.sseDone)
+		if d.sseCancel != nil {
+			d.sseCancel()
+		}
 		return d, tea.Quit
 	case "tab", "l", "right":
 		d.activeTab = (d.activeTab + 1) % tab(len(tabNames))
@@ -412,14 +412,8 @@ func (d *Dashboard) renderPRs(height int) string {
 		if pr.LatestReview != nil {
 			sev = pr.LatestReview.Severity
 		}
-		title := pr.Title
-		if len(title) > 33 {
-			title = title[:30] + "..."
-		}
-		repo := pr.Repo
-		if len(repo) > 23 {
-			repo = repo[:20] + "..."
-		}
+		title := truncateRunes(pr.Title, 33)
+		repo := truncateRunes(pr.Repo, 23)
 		sevRendered := severityStyle(sev).Render(fmt.Sprintf("%-8s", sev))
 		line := fmt.Sprintf("  %-6d %-25s %-35s %s %-8s", pr.ID, repo, title, sevRendered, pr.State)
 
@@ -455,14 +449,8 @@ func (d *Dashboard) renderIssues(height int) string {
 			sev = extractSeverity(iss.LatestReview.Triage)
 			action = iss.LatestReview.ActionTaken
 		}
-		title := iss.Title
-		if len(title) > 33 {
-			title = title[:30] + "..."
-		}
-		repo := iss.Repo
-		if len(repo) > 23 {
-			repo = repo[:20] + "..."
-		}
+		title := truncateRunes(iss.Title, 33)
+		repo := truncateRunes(iss.Repo, 23)
 		sevRendered := severityStyle(sev).Render(fmt.Sprintf("%-8s", sev))
 		line := fmt.Sprintf("  %-6d %-25s %-35s %s %-12s", iss.ID, repo, title, sevRendered, action)
 
@@ -577,4 +565,14 @@ func extractSeverity(triage json.RawMessage) string {
 		return fmt.Sprintf("%v", sev)
 	}
 	return "---"
+}
+
+// truncateRunes returns s truncated to at most maxLen runes, appending an
+// ellipsis if truncated. This avoids corrupting multi-byte UTF-8 characters.
+func truncateRunes(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen-1]) + "\u2026"
 }

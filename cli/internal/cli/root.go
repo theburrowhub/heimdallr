@@ -1,20 +1,31 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 
-	"github.com/heimdallm/cli/internal/api"
+	"github.com/theburrowhub/heimdallm/cli/internal/api"
 	"github.com/spf13/cobra"
 )
 
-var (
-	flagHost  string
-	flagToken string
-	client    *api.Client
-)
+// contextKey is an unexported type for context keys in this package.
+type contextKey struct{}
+
+// clientKey is the context key for the API client.
+var clientKey = contextKey{}
+
+// clientFromContext retrieves the *api.Client stored in the context.
+func clientFromContext(ctx context.Context) *api.Client {
+	return ctx.Value(clientKey).(*api.Client)
+}
 
 func NewRootCmd() *cobra.Command {
+	var (
+		flagHost  string
+		flagToken string
+	)
+
 	root := &cobra.Command{
 		Use:   "heimdallm-cli",
 		Short: "CLI client for the Heimdallm daemon",
@@ -26,13 +37,14 @@ func NewRootCmd() *cobra.Command {
 			if flagToken == "" {
 				flagToken = os.Getenv("HEIMDALLM_TOKEN")
 			}
-			client = api.New(flagHost, flagToken)
+			c := api.New(flagHost, flagToken)
+			cmd.SetContext(context.WithValue(cmd.Context(), clientKey, c))
 		},
 		SilenceUsage: true,
 	}
 
 	root.PersistentFlags().StringVar(&flagHost, "host", "", fmt.Sprintf("daemon URL (env: HEIMDALLM_HOST, default: %s)", api.DefaultHost))
-	root.PersistentFlags().StringVar(&flagToken, "token", "", "API token for mutating commands (env: HEIMDALLM_TOKEN)")
+	root.PersistentFlags().StringVar(&flagToken, "token", "", "API token for mutating commands (env: HEIMDALLM_TOKEN; note: flag value may be visible in process listings)")
 
 	root.AddCommand(
 		newStatusCmd(),
