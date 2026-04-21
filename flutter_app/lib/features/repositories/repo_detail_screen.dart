@@ -155,6 +155,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                   const SizedBox(height: 8),
                   _LocalDirField(
                     value: _config.localDir ?? '',
+                    detectedDir: appConfig.localDirsDetected[widget.repoName],
                     onChanged: (dir) => _update(_config.copyWith(
                         localDir: dir.isEmpty ? null : dir)),
                   ),
@@ -381,7 +382,16 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
 class _LocalDirField extends StatefulWidget {
   final String value;
   final ValueChanged<String> onChanged;
-  const _LocalDirField({required this.value, required this.onChanged});
+  /// Non-null when the daemon detected a `/repos/<name>` path for this repo
+  /// (HEIMDALLM_REPOS_DIR is mounted and the repo is visible there). Shown
+  /// as the field's placeholder + a small hint below the row so the operator
+  /// knows the fallback will kick in if they leave the field empty.
+  final String? detectedDir;
+  const _LocalDirField({
+    required this.value,
+    required this.onChanged,
+    this.detectedDir,
+  });
 
   @override
   State<_LocalDirField> createState() => _LocalDirFieldState();
@@ -414,18 +424,31 @@ class _LocalDirFieldState extends State<_LocalDirField> {
 
   @override
   Widget build(BuildContext context) {
-    return Row(children: [
-      Expanded(
-        child: TextFormField(
-          controller: _ctrl,
-          decoration: const InputDecoration(
-            hintText: '/path/to/local/repo',
-            border: OutlineInputBorder(),
-            isDense: true,
+    final detected = widget.detectedDir;
+    final hintText = detected != null && detected.isNotEmpty
+        ? 'Auto-detected: $detected'
+        : '/path/to/local/repo';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Expanded(
+            child: TextFormField(
+              controller: _ctrl,
+              decoration: InputDecoration(
+                hintText: hintText,
+                hintStyle: detected != null && detected.isNotEmpty
+                    ? TextStyle(
+                        color: Colors.blue.shade400,
+                        fontStyle: FontStyle.italic,
+                      )
+                    : null,
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: widget.onChanged,
+            ),
           ),
-          onChanged: widget.onChanged,
-        ),
-      ),
       // Browse button is desktop-only — browsers can't expose native
       // filesystem paths to the daemon. On web the operator types a
       // path that exists inside the daemon container (e.g. /repos/foo
@@ -462,6 +485,23 @@ class _LocalDirFieldState extends State<_LocalDirField> {
           },
         ),
       ],
-    ]);
+        ]),
+        if (detected != null && detected.isNotEmpty && _ctrl.text.isEmpty) ...[
+          const SizedBox(height: 6),
+          Row(children: [
+            Icon(Icons.auto_awesome, size: 12, color: Colors.blue.shade400),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                'Leave empty to use the auto-detected path above. '
+                'Type a different path to override.',
+                style: TextStyle(
+                    fontSize: 11, color: Colors.blue.shade400),
+              ),
+            ),
+          ]),
+        ],
+      ],
+    );
   }
 }

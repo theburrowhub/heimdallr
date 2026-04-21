@@ -378,7 +378,16 @@ class _RepoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasDirMapping = config.localDir != null && config.localDir!.isNotEmpty;
+    final configuredDir = (config.localDir ?? '').isNotEmpty ? config.localDir : null;
+    final detectedDir = appConfig.localDirsDetected[repo];
+    final effectiveDir = configuredDir ?? detectedDir;
+    // Full-repo analysis is available as long as *either* the user
+    // configured a path *or* the daemon detected one under /repos.
+    final hasDirMapping = effectiveDir != null && effectiveDir.isNotEmpty;
+    // Distinguish configured vs auto-detected in the label/colour so the
+    // operator can tell at a glance whether they set it themselves or the
+    // bind-mount convention kicked in.
+    final isAutoDetected = configuredDir == null && detectedDir != null;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
@@ -424,16 +433,26 @@ class _RepoTile extends StatelessWidget {
                       Icon(
                         hasDirMapping ? Icons.folder : Icons.folder_off_outlined,
                         size: 13,
-                        color: hasDirMapping ? Colors.green.shade500 : Colors.grey.shade600,
+                        color: hasDirMapping
+                            ? (isAutoDetected
+                                ? Colors.blue.shade400
+                                : Colors.green.shade500)
+                            : Colors.grey.shade600,
                       ),
                       const SizedBox(width: 4),
                       Text(
                         hasDirMapping
-                            ? config.localDir!.split('/').last
+                            ? (isAutoDetected
+                                ? 'Auto: ${effectiveDir.split('/').last}'
+                                : effectiveDir.split('/').last)
                             : 'No local dir',
                         style: TextStyle(
                           fontSize: 11,
-                          color: hasDirMapping ? Colors.green.shade500 : Colors.grey.shade600,
+                          color: hasDirMapping
+                              ? (isAutoDetected
+                                  ? Colors.blue.shade400
+                                  : Colors.green.shade500)
+                              : Colors.grey.shade600,
                         ),
                       ),
                     ]),

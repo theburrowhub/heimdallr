@@ -478,6 +478,33 @@ func main() {
 			}
 			repoOverrides[repo] = ro
 		}
+		// Auto-detected local_dir for every repo the UI may render. Populated
+		// only when config.ResolveLocalDir() finds a matching directory under
+		// DefaultReposMountPath — i.e. the operator's bind-mount is in effect
+		// and the repo has been cloned there. The UI uses this to display
+		// "Auto-detected: /repos/<name>" next to repos where the user has
+		// not set `local_dir` manually but a review would still get
+		// full-repo context.
+		localDirsDetected := make(map[string]string)
+		seenRepo := make(map[string]bool)
+		addDetection := func(repo string) {
+			if repo == "" || seenRepo[repo] {
+				return
+			}
+			seenRepo[repo] = true
+			if d := config.ResolveLocalDir("", repo); d != "" {
+				localDirsDetected[repo] = d
+			}
+		}
+		for _, r := range c.GitHub.Repositories {
+			addDetection(r)
+		}
+		for _, r := range c.GitHub.NonMonitored {
+			addDetection(r)
+		}
+		for r := range c.AI.Repos {
+			addDetection(r)
+		}
 		agentConfigs := make(map[string]map[string]any)
 		for name, ac := range c.AI.Agents {
 			agentConfigs[name] = map[string]any{
@@ -494,17 +521,18 @@ func main() {
 			}
 		}
 		return map[string]any{
-			"server_port":    c.Server.Port,
-			"poll_interval":  c.GitHub.PollInterval,
-			"repositories":   c.GitHub.Repositories,
-			"non_monitored":  c.GitHub.NonMonitored,
-			"ai_primary":     c.AI.Primary,
-			"ai_fallback":    c.AI.Fallback,
-			"review_mode":    c.AI.ReviewMode,
-			"retention_days": c.Retention.MaxDays,
-			"issue_tracking": c.GitHub.IssueTracking,
-			"repo_overrides": repoOverrides,
-			"agent_configs":  agentConfigs,
+			"server_port":         c.Server.Port,
+			"poll_interval":       c.GitHub.PollInterval,
+			"repositories":        c.GitHub.Repositories,
+			"non_monitored":       c.GitHub.NonMonitored,
+			"ai_primary":          c.AI.Primary,
+			"ai_fallback":         c.AI.Fallback,
+			"review_mode":         c.AI.ReviewMode,
+			"retention_days":      c.Retention.MaxDays,
+			"issue_tracking":      c.GitHub.IssueTracking,
+			"repo_overrides":      repoOverrides,
+			"agent_configs":       agentConfigs,
+			"local_dirs_detected": localDirsDetected,
 		}
 	})
 
