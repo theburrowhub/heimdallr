@@ -23,8 +23,14 @@ fail() { printf '✗  %s\n' "$1" >&2; exit 1; }
 
 cleanup() {
   $COMPOSE down -v --remove-orphans >/dev/null 2>&1 || true
+  rm -f "${INDEX_HTML:-}" "${DEEP_HTML:-}" "${SSE_HDR:-}"
 }
 trap cleanup EXIT
+
+# Temp files for response bodies/headers. mktemp is parallel-safe on CI.
+INDEX_HTML="$(mktemp)"
+DEEP_HTML="$(mktemp)"
+SSE_HDR="$(mktemp)"
 
 log "docker compose up -d --build"
 $COMPOSE up -d --build
@@ -39,8 +45,8 @@ for i in $(seq 1 60); do
 done
 
 log "1/6 GET /"
-curl -sf "$BASE/" -o /tmp/index.html
-grep -q "Heimdallm" /tmp/index.html || fail "/ did not return Heimdallm shell"
+curl -sf "$BASE/" -o "$INDEX_HTML"
+grep -q "Heimdallm" "$INDEX_HTML" || fail "/ did not return Heimdallm shell"
 
 log "2/6 GET /main.dart.js"
 curl -sfI "$BASE/main.dart.js" | grep -qi 'content-type: .*javascript' \
@@ -51,20 +57,19 @@ body="$(curl -sf "$BASE/healthz")"
 [ "$body" = "ok" ] || fail "/healthz returned '$body' (expected 'ok')"
 
 log "4/6 GET /api/health"
-# Daemon /health is public but the request still goes through the token-injecting
-# proxy — a 200 proves Nginx can reach the daemon over the compose network.
-curl -sf "$BASE/api/health" -o /dev/null \
-  || fail "/api/health failed (daemon unreachable through proxy)"
+# Assert the response is valid JSON, not the SPA fallback (Nginx would
+# return index.html if /api/ proxy weren't wired).
+api_health="$(curl -sf "$BASE/api/health")"
+echo "$api_health" | grep -q '"status"' \
+  || fail "/api/health did not return JSON (got: ${api_health:-<empty>})"
 
 log "5/6 GET /api/events (SSE) — expect text/event-stream header within 2s"
-tmp="$(mktemp)"
-curl -sN -H 'Accept: text/event-stream' --max-time 2 "$BASE/api/events" -D "$tmp" -o /dev/null || true
-grep -qi '^content-type: text/event-stream' "$tmp" \
+curl -sN -H 'Accept: text/event-stream' --max-time 2 "$BASE/api/events" -D "$SSE_HDR" -o /dev/null || true
+grep -qi '^content-type: text/event-stream' "$SSE_HDR" \
   || fail "/api/events did not open with text/event-stream"
-rm -f "$tmp"
 
 log "6/6 GET /prs/123 — SPA fallback should return Flutter shell"
-curl -sf "$BASE/prs/123" -o /tmp/deep.html
-grep -q "Heimdallm" /tmp/deep.html || fail "deep-link /prs/123 did not fall back to index.html"
+curl -sf "$BASE/prs/123" -o "$DEEP_HTML"
+grep -q "Heimdallm" "$DEEP_HTML" || fail "deep-link /prs/123 did not fall back to index.html"
 
 printf '✓  all checks passed\n'
