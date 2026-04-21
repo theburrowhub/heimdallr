@@ -480,6 +480,103 @@ run-linux:
 	  heimdallm-verify \
 	  $(LINUX_BUNDLE)/heimdallm
 
+# ── Native Linux install / uninstall (user-local, no sudo) ────────────────────
+#
+# Extracts the Flutter bundle and Go daemon from the heimdallm-verify Docker
+# image (built by `make verify-linux`) and stages them into ~/.local/ so the
+# app launches like any other desktop Linux application. No host Flutter
+# toolchain required; Docker does the build.
+#
+# Layout written:
+#   ~/.local/opt/heimdallm/                  # bundle root (matches CI .deb)
+#     heimdallm                              # Flutter binary
+#     heimdalld                              # Go daemon (copied from /app/daemon/bin/heimdallm in image, renamed)
+#   ~/.local/bin/heimdallm                   # → symlink into the bundle
+#   ~/.local/share/applications/com.theburrowhub.heimdallm.desktop
+#   ~/.local/share/icons/hicolor/{48,128,256,512}x{same}/apps/heimdallm.png
+#
+# The Flutter app (DaemonLifecycle.defaultBinaryPath in
+# flutter_app/lib/core/daemon/daemon_lifecycle.dart) resolves the daemon as
+# "heimdalld" next to its own binary, so the rename at install time is what
+# makes the spawn work without any env var override.
+#
+# Binary compatibility: the heimdallm-verify image is ubuntu:22.04, so the
+# binaries link dynamically against that distro's glibc/gtk versions. Works
+# on any reasonably current Debian/Ubuntu/Fedora/Arch; hosts with a much
+# older libc may see missing-symbol errors at first launch.
+#
+# Usage:
+#   make install-linux
+#
+# To remove: see `uninstall-linux` below.
+
+EXTRACT_DIR := /tmp/heimdallm-install-extract
+
+install-linux: _check-linux verify-linux
+	@command -v docker >/dev/null 2>&1 || { echo "❌  Docker is required. Install from https://docs.docker.com/get-docker/"; exit 1; }
+	@echo "▶  Extracting Heimdallm artifacts from heimdallm-verify image..."
+	@rm -rf "$(EXTRACT_DIR)"
+	@mkdir -p "$(EXTRACT_DIR)"
+	@CID=$$(docker create heimdallm-verify) ; \
+	 trap 'docker rm "$$CID" >/dev/null 2>&1 || true' EXIT ; \
+	 docker cp "$$CID:/app/flutter_app/build/linux/x64/release/bundle/." "$(EXTRACT_DIR)/bundle/" && \
+	 docker cp "$$CID:/app/daemon/bin/heimdallm" "$(EXTRACT_DIR)/daemon"
+	@echo "▶  Staging Heimdallm into $$HOME/.local/opt/heimdallm..."
+	rm -rf "$$HOME/.local/opt/heimdallm"
+	mkdir -p "$$HOME/.local/opt/heimdallm"
+	cp -r "$(EXTRACT_DIR)/bundle/." "$$HOME/.local/opt/heimdallm/"
+	cp "$(EXTRACT_DIR)/daemon" "$$HOME/.local/opt/heimdallm/heimdalld"
+	chmod +x "$$HOME/.local/opt/heimdallm/heimdalld"
+	@# Fork-bomb guard: same check CI's release pipeline runs.
+	@# If both binaries are byte-identical, the "spawn heimdalld" call from
+	@# DaemonLifecycle would re-exec the Flutter app and hundreds of instances
+	@# would spawn on first launch.
+	@if cmp -s "$$HOME/.local/opt/heimdallm/heimdallm" "$$HOME/.local/opt/heimdallm/heimdalld"; then \
+	  echo "❌  Both binaries are identical — case-collision fork-bomb state. Aborting."; \
+	  exit 1; \
+	fi
+	rm -rf "$(EXTRACT_DIR)"
+	mkdir -p "$$HOME/.local/bin"
+	ln -sf "$$HOME/.local/opt/heimdallm/heimdallm" "$$HOME/.local/bin/heimdallm"
+	@for SIZE in 48 128 256 512; do \
+	  ICON_DIR="$$HOME/.local/share/icons/hicolor/$${SIZE}x$${SIZE}/apps"; \
+	  mkdir -p "$$ICON_DIR"; \
+	  cp "flutter_app/assets/icons/$${SIZE}.png" "$$ICON_DIR/heimdallm.png"; \
+	done
+	@DESKTOP_DIR="$$HOME/.local/share/applications"; \
+	mkdir -p "$$DESKTOP_DIR"; \
+	printf '%s\n' \
+	  '[Desktop Entry]' \
+	  'Name=Heimdallm' \
+	  'Comment=AI-powered GitHub PR review agent' \
+	  "Exec=$$HOME/.local/opt/heimdallm/heimdallm" \
+	  'Icon=heimdallm' \
+	  'Type=Application' \
+	  'Categories=Development;' \
+	  'StartupWMClass=com.theburrowhub.heimdallm' \
+	  'StartupNotify=true' \
+	  > "$$DESKTOP_DIR/com.theburrowhub.heimdallm.desktop"
+	@# Best-effort launcher cache refresh (silent no-op if tools missing).
+	@command -v update-desktop-database >/dev/null 2>&1 && \
+	  update-desktop-database "$$HOME/.local/share/applications/" 2>/dev/null || true
+	@command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+	  gtk-update-icon-cache -q -t "$$HOME/.local/share/icons/hicolor/" 2>/dev/null || true
+	@echo ""
+	@echo "✅  Heimdallm installed:"
+	@echo "    Bundle:  $$HOME/.local/opt/heimdallm/"
+	@echo "    Symlink: $$HOME/.local/bin/heimdallm"
+	@echo "    Desktop: $$HOME/.local/share/applications/com.theburrowhub.heimdallm.desktop"
+	@echo "    Icons:   $$HOME/.local/share/icons/hicolor/<size>x<size>/apps/heimdallm.png"
+	@echo ""
+	@echo "    Launch with: heimdallm  (or via your app launcher)"
+	@case ":$$PATH:" in \
+	  *":$$HOME/.local/bin:"*) ;; \
+	  *) echo ""; \
+	     echo "⚠  $$HOME/.local/bin is not on your PATH."; \
+	     echo "   Add this to ~/.bashrc or ~/.zshrc:"; \
+	     echo "     export PATH=\"\$$HOME/.local/bin:\$$PATH\"" ;; \
+	esac
+
 clean:
 	cd daemon && make clean
 	cd flutter_app && flutter clean
