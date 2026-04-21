@@ -409,7 +409,7 @@ func repoOrg(repo string) string {
 // flat [ai] fields on top of [ai.pr_metadata]. Flat fields win when set,
 // matching the contract that HEIMDALLM_PR_* env vars populate the flat
 // fields and should override the nested section.
-func (c *Config) resolvedPRMetadata() (reviewers, labels []string, assignee string, draft *bool) {
+func (c *Config) ResolvedPRMetadata() (reviewers, labels []string, assignee string, draft *bool) {
 	reviewers = c.AI.PRMetadata.Reviewers
 	labels = c.AI.PRMetadata.Labels
 	assignee = c.AI.PRMetadata.Assignee
@@ -435,7 +435,7 @@ func (c *Config) resolvedPRMetadata() (reviewers, labels []string, assignee stri
 // three levels: per-repo > per-org > global defaults. Each PR metadata
 // field resolves independently.
 func (c *Config) AIForRepo(repo string) RepoAI {
-	gReviewers, gLabels, gAssignee, gDraft := c.resolvedPRMetadata()
+	gReviewers, gLabels, gAssignee, gDraft := c.ResolvedPRMetadata()
 
 	// Org-level layer: start from global, overlay org-level fields.
 	orgReviewers, orgLabels, orgAssignee, orgDraft := gReviewers, gLabels, gAssignee, gDraft

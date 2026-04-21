@@ -238,13 +238,20 @@ class FirstRunSetup {
     buf.writeln();
 
     // Global PR metadata defaults
-    if (config.globalPRReviewers.isNotEmpty || config.globalPRLabels.isNotEmpty) {
+    if (config.globalPRReviewers.isNotEmpty || config.globalPRLabels.isNotEmpty ||
+        config.globalPRAssignee.isNotEmpty || config.globalPRDraft) {
       buf.writeln('[ai.pr_metadata]');
       if (config.globalPRReviewers.isNotEmpty) {
         buf.writeln('reviewers = [${config.globalPRReviewers.map((r) => '"${_tomlEscapeString(r)}"').join(', ')}]');
       }
       if (config.globalPRLabels.isNotEmpty) {
         buf.writeln('labels = [${config.globalPRLabels.map((l) => '"${_tomlEscapeString(l)}"').join(', ')}]');
+      }
+      if (config.globalPRAssignee.isNotEmpty) {
+        buf.writeln('pr_assignee = "${_tomlEscapeString(config.globalPRAssignee)}"');
+      }
+      if (config.globalPRDraft) {
+        buf.writeln('pr_draft = true');
       }
       buf.writeln();
     }

@@ -457,6 +457,8 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
 
   List<String> _globalPRReviewers = [];
   List<String> _globalPRLabels = [];
+  String _globalPRAssignee = '';
+  bool _globalPRDraft = false;
   bool _developInitialized = false;
 
   void _initDevelopFromConfig(AppConfig config) {
@@ -464,6 +466,8 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     _developInitialized = true;
     _globalPRReviewers = List.from(config.globalPRReviewers);
     _globalPRLabels = List.from(config.globalPRLabels);
+    _globalPRAssignee = config.globalPRAssignee;
+    _globalPRDraft = config.globalPRDraft;
   }
 
   Widget _developSection(AppConfig config) {
@@ -479,41 +483,69 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
         contentPadding: EdgeInsets.zero,
         value: hasLabels,
         onChanged: (v) => setState(() {
-          if (!v) {
+          if (v) {
+            // Give it a default label so the section stays enabled
+            if (_issueTracking.developLabels.isEmpty) {
+              _issueTracking = _issueTracking.copyWith(developLabels: ['develop']);
+            }
+          } else {
             _issueTracking = _issueTracking.copyWith(developLabels: []);
           }
         }),
       ),
-      const SizedBox(height: 6),
-      AutocompleteChipField(
-        label: 'Develop labels',
-        helper: 'Issues with these labels get a branch + PR',
-        selectedValues: _issueTracking.developLabels,
-        availableOptions: const [],
-        onChanged: (v) => setState(() {
-          _issueTracking = _issueTracking.copyWith(developLabels: v ?? []);
-        }),
-      ),
-      const SizedBox(height: 10),
-      AutocompleteChipField(
-        label: 'PR Reviewers',
-        helper: 'GitHub usernames to request review',
-        selectedValues: _globalPRReviewers,
-        availableOptions: const [],
-        onChanged: (v) => setState(() {
-          _globalPRReviewers = v ?? [];
-        }),
-      ),
-      const SizedBox(height: 10),
-      AutocompleteChipField(
-        label: 'PR Labels',
-        helper: 'Labels to add to PRs',
-        selectedValues: _globalPRLabels,
-        availableOptions: const [],
-        onChanged: (v) => setState(() {
-          _globalPRLabels = v ?? [];
-        }),
-      ),
+      if (hasLabels) ...[
+        const SizedBox(height: 6),
+        AutocompleteChipField(
+          label: 'Develop labels',
+          helper: 'Issues with these labels get a branch + PR',
+          selectedValues: _issueTracking.developLabels,
+          availableOptions: const [],
+          onChanged: (v) => setState(() {
+            _issueTracking = _issueTracking.copyWith(developLabels: v ?? []);
+          }),
+        ),
+        const SizedBox(height: 10),
+        AutocompleteChipField(
+          label: 'PR Reviewers',
+          helper: 'GitHub usernames to request review',
+          selectedValues: _globalPRReviewers,
+          availableOptions: const [],
+          onChanged: (v) => setState(() {
+            _globalPRReviewers = v ?? [];
+          }),
+        ),
+        const SizedBox(height: 10),
+        TextFormField(
+          initialValue: _globalPRAssignee,
+          decoration: const InputDecoration(
+            labelText: 'PR Assignee',
+            helperText: 'GitHub username to assign PRs to',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          onChanged: (v) => setState(() => _globalPRAssignee = v.trim()),
+        ),
+        const SizedBox(height: 10),
+        AutocompleteChipField(
+          label: 'PR Labels',
+          helper: 'Labels to add to PRs',
+          selectedValues: _globalPRLabels,
+          availableOptions: const [],
+          onChanged: (v) => setState(() {
+            _globalPRLabels = v ?? [];
+          }),
+        ),
+        const SizedBox(height: 10),
+        SwitchListTile(
+          title: const Text('Create as draft', style: TextStyle(fontSize: 13)),
+          subtitle: const Text('PRs are created as drafts by default',
+              style: TextStyle(fontSize: 11)),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          value: _globalPRDraft,
+          onChanged: (v) => setState(() => _globalPRDraft = v),
+        ),
+      ],
     ]);
   }
 
@@ -611,6 +643,8 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     issueTracking: _issueTracking,
     globalPRReviewers: _globalPRReviewers,
     globalPRLabels: _globalPRLabels,
+    globalPRAssignee: _globalPRAssignee,
+    globalPRDraft: _globalPRDraft,
     // aiPrimary, aiFallback, reviewMode, agentConfigs managed in Agents tab
   );
 

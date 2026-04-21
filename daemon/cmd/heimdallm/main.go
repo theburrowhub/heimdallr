@@ -462,14 +462,21 @@ func main() {
 			"activity_log_enabled":        ptrBoolOrTrue(c.ActivityLog.Enabled),
 			"activity_log_retention_days": ptrIntOr(c.ActivityLog.RetentionDays, 90),
 		}
-		if len(c.AI.PRMetadata.Reviewers) > 0 || len(c.AI.PRMetadata.Labels) > 0 {
-			pm := map[string]any{}
-			if len(c.AI.PRMetadata.Reviewers) > 0 {
-				pm["reviewers"] = c.AI.PRMetadata.Reviewers
-			}
-			if len(c.AI.PRMetadata.Labels) > 0 {
-				pm["labels"] = c.AI.PRMetadata.Labels
-			}
+		reviewers, labels, assignee, draft := c.ResolvedPRMetadata()
+		pm := map[string]any{}
+		if len(reviewers) > 0 {
+			pm["reviewers"] = reviewers
+		}
+		if len(labels) > 0 {
+			pm["labels"] = labels
+		}
+		if assignee != "" {
+			pm["pr_assignee"] = assignee
+		}
+		if draft != nil {
+			pm["pr_draft"] = *draft
+		}
+		if len(pm) > 0 {
 			result["pr_metadata"] = pm
 		}
 		return result

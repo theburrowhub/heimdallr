@@ -114,6 +114,12 @@ Map<String, dynamic> _computeGlobalDiff(AppConfig old, AppConfig updated) {
   if (_listsDiffer(old.globalPRLabels, updated.globalPRLabels)) {
     prMeta['labels'] = updated.globalPRLabels;
   }
+  if (old.globalPRAssignee != updated.globalPRAssignee) {
+    prMeta['pr_assignee'] = updated.globalPRAssignee;
+  }
+  if (old.globalPRDraft != updated.globalPRDraft) {
+    prMeta['pr_draft'] = updated.globalPRDraft;
+  }
   if (prMeta.isNotEmpty) aiDiff['pr_metadata'] = prMeta;
 
   if (aiDiff.isNotEmpty) diff['ai'] = aiDiff;

@@ -339,11 +339,10 @@ class AppConfig {
   final IssueTrackingConfig issueTracking;
   final List<String> globalPRReviewers;
   final List<String> globalPRLabels;
+  final String globalPRAssignee;
+  final bool globalPRDraft;
   /// Host paths the daemon scans (in order) when a repo has no explicit
   /// `local_dir` set — first match at `{base}/{short-repo-name}` wins.
-  /// Written to the `[github].local_dir_base` TOML key. Unknown to early
-  /// `writeConfig` revisions; fielded here so a Flutter save preserves
-  /// the value instead of silently dropping it on the floor.
   final List<String> localDirBase;
   /// Auto-detected `local_dir` per repo, populated by the daemon when the
   /// repo is visible at `/home/heimdallm/repos/<short-name>` in the
@@ -366,6 +365,8 @@ class AppConfig {
     this.issueTracking = const IssueTrackingConfig(),
     this.globalPRReviewers = const [],
     this.globalPRLabels = const [],
+    this.globalPRAssignee = '',
+    this.globalPRDraft = false,
     this.localDirBase = const [],
     this.localDirsDetected = const {},
   });
@@ -390,6 +391,8 @@ class AppConfig {
     IssueTrackingConfig? issueTracking,
     List<String>? globalPRReviewers,
     List<String>? globalPRLabels,
+    String? globalPRAssignee,
+    bool? globalPRDraft,
     List<String>? localDirBase,
     Map<String, String>? localDirsDetected,
   }) {
@@ -405,6 +408,8 @@ class AppConfig {
       issueTracking:     issueTracking     ?? this.issueTracking,
       globalPRReviewers: globalPRReviewers ?? this.globalPRReviewers,
       globalPRLabels:    globalPRLabels    ?? this.globalPRLabels,
+      globalPRAssignee:  globalPRAssignee  ?? this.globalPRAssignee,
+      globalPRDraft:     globalPRDraft     ?? this.globalPRDraft,
       localDirBase:      localDirBase      ?? this.localDirBase,
       localDirsDetected: localDirsDetected ?? this.localDirsDetected,
     );
@@ -510,6 +515,8 @@ class AppConfig {
       issueTracking:     issueTracking,
       globalPRReviewers: _parseStringList((json['pr_metadata'] as Map<String, dynamic>?)?['reviewers']),
       globalPRLabels:    _parseStringList((json['pr_metadata'] as Map<String, dynamic>?)?['labels']),
+      globalPRAssignee:  (json['pr_metadata'] as Map<String, dynamic>?)?['pr_assignee'] as String? ?? '',
+      globalPRDraft:     (json['pr_metadata'] as Map<String, dynamic>?)?['pr_draft'] as bool? ?? false,
       localDirBase:      _parseStringList(json['local_dir_base']),
       localDirsDetected: localDirsDetected,
     );
