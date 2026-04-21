@@ -131,6 +131,36 @@ func TestMarkReviewPublished_RoundTripsStateAndID(t *testing.T) {
 	}
 }
 
+// TestReview_HeadSHARoundTrip covers the field added to deduplicate re-reviews
+// by HEAD commit SHA instead of the PR's updated_at (which is bumped every time
+// any reviewer — including a peer bot — submits a review, causing bot-feedback
+// loops on the same commit).
+func TestReview_HeadSHARoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	prID, _ := s.UpsertPR(&store.PR{
+		GithubID: 1, Repo: "org/r", Number: 1, Title: "t", Author: "a",
+		URL: "u", State: "open", UpdatedAt: time.Now(), FetchedAt: time.Now(),
+	})
+
+	rev := &store.Review{
+		PRID: prID, CLIUsed: "claude", Summary: "ok",
+		Issues: "[]", Suggestions: "[]", Severity: "low",
+		CreatedAt: time.Now().UTC().Truncate(time.Second),
+		HeadSHA:   "deadbeefcafef00d",
+	}
+	if _, err := s.InsertReview(rev); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	got, err := s.LatestReviewForPR(prID)
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	if got.HeadSHA != "deadbeefcafef00d" {
+		t.Errorf("HeadSHA = %q, want %q", got.HeadSHA, "deadbeefcafef00d")
+	}
+}
+
 func TestPR_ListAll(t *testing.T) {
 	s := newTestStore(t)
 	for i := 0; i < 3; i++ {
