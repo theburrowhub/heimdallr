@@ -13,9 +13,17 @@ import 'platform_services.dart';
 class DesktopPlatformServices implements PlatformServices {
   DesktopPlatformServices({
     int apiPort = 7842,
-  }) : _apiPort = apiPort;
+    String? tokenPath,
+  })  : _apiPort = apiPort,
+        _tokenPath = tokenPath;
 
   final int _apiPort;
+  final String? _tokenPath;
+  String? _cachedToken;
+
+  String get _resolvedTokenPath =>
+      _tokenPath ??
+      '${Platform.environment['HOME'] ?? ''}/.local/share/heimdallm/api_token';
 
   @override
   String get apiBaseUrl => 'http://127.0.0.1:$_apiPort';
@@ -23,11 +31,22 @@ class DesktopPlatformServices implements PlatformServices {
   // ── The rest is stubbed to throw for now — later tasks fill them in. ─────
 
   @override
-  Future<String?> loadApiToken() => throw UnimplementedError();
+  Future<String?> loadApiToken() async {
+    if (_cachedToken != null) return _cachedToken;
+    final file = File(_resolvedTokenPath);
+    if (await file.exists()) {
+      _cachedToken = (await file.readAsString()).trim();
+    }
+    return _cachedToken;
+  }
+
   @override
-  void clearApiTokenCache() => throw UnimplementedError();
+  void clearApiTokenCache() {
+    _cachedToken = null;
+  }
+
   @override
-  String? readEnv(String name) => throw UnimplementedError();
+  String? readEnv(String name) => Platform.environment[name];
   @override
   Future<bool> ensureSingleInstance() => throw UnimplementedError();
   @override
