@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1056,5 +1057,91 @@ func TestHandlePatchConfig_RejectsNull(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for null value, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlePatchRepoConfig(t *testing.T) {
+	// TOML with a global primary and an existing repo override.
+	tomlContent := "[ai]\nprimary = \"claude\"\n\n[ai.repos.\"org/repo1\"]\nprimary = \"gemini\"\nfallback = \"openai\"\n"
+	tomlPath := writeTempTOML(t, tomlContent)
+
+	srv := setupServerWithToken(t, "test-token")
+	srv.SetConfigPath(tomlPath)
+
+	// PATCH only primary — fallback must be preserved.
+	body := `{"primary":"claude-new"}`
+	req := httptest.NewRequest("PATCH", "/config/repos/"+url.PathEscape("org/repo1"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Heimdallm-Token", "test-token")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// Verify TOML on disk reflects the change.
+	m, err := config.ReadTOMLMap(tomlPath)
+	if err != nil {
+		t.Fatalf("read TOML after PATCH: %v", err)
+	}
+	ai, ok := m["ai"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai] section, got %v", m)
+	}
+	repos, ok := ai["repos"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai.repos] section, got %v", ai)
+	}
+	repo1, ok := repos["org/repo1"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai.repos.\"org/repo1\"] section, got %v", repos)
+	}
+	if repo1["primary"] != "claude-new" {
+		t.Errorf("primary = %v, want claude-new", repo1["primary"])
+	}
+	if repo1["fallback"] != "openai" {
+		t.Errorf("fallback = %v, want openai (should be preserved)", repo1["fallback"])
+	}
+}
+
+func TestHandlePatchRepoConfig_CreatesNewSection(t *testing.T) {
+	// TOML with only a global primary — no repo overrides yet.
+	tomlContent := "[ai]\nprimary = \"claude\"\n"
+	tomlPath := writeTempTOML(t, tomlContent)
+
+	srv := setupServerWithToken(t, "test-token")
+	srv.SetConfigPath(tomlPath)
+
+	body := `{"pr_draft":true}`
+	req := httptest.NewRequest("PATCH", "/config/repos/"+url.PathEscape("org/new-repo"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Heimdallm-Token", "test-token")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// Verify TOML now contains a section for org/new-repo with pr_draft.
+	m, err := config.ReadTOMLMap(tomlPath)
+	if err != nil {
+		t.Fatalf("read TOML after PATCH: %v", err)
+	}
+	ai, ok := m["ai"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai] section, got %v", m)
+	}
+	repos, ok := ai["repos"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai.repos] section, got %v", ai)
+	}
+	newRepo, ok := repos["org/new-repo"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai.repos.\"org/new-repo\"] section, got %v", repos)
+	}
+	if newRepo["pr_draft"] != true {
+		t.Errorf("pr_draft = %v, want true", newRepo["pr_draft"])
 	}
 }

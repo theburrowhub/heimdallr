@@ -245,6 +245,7 @@ func (srv *Server) buildRouter() chi.Router {
 	r.Get("/config", srv.handleGetConfig)
 	r.Put("/config", srv.handlePutConfig)
 	r.Patch("/config", srv.handlePatchConfig)
+	r.Patch("/config/repos/{repo}", srv.handlePatchRepoConfig)
 	r.Post("/reload", srv.handleReload)
 	r.Get("/events", srv.handleSSE)
 	r.Get("/logs/stream", srv.handleLogsStream)
@@ -544,6 +545,62 @@ func (srv *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Error("PATCH /config failed", "err", err)
+		if strings.Contains(err.Error(), "config:") {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		} else {
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (srv *Server) handlePatchRepoConfig(w http.ResponseWriter, r *http.Request) {
+	if srv.configPath == "" {
+		http.Error(w, `{"error":"PATCH not available — configPath not set"}`, http.StatusServiceUnavailable)
+		return
+	}
+	repo, err := url.PathUnescape(chi.URLParam(r, "repo"))
+	if err != nil || repo == "" {
+		http.Error(w, `{"error":"invalid repo parameter"}`, http.StatusBadRequest)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var patch map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if err := config.ContainsNull(patch); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "null values not allowed in PATCH — use DELETE to remove fields",
+		})
+		return
+	}
+	config.NormalizeNumbers(patch)
+
+	globalPatch := map[string]any{
+		"ai": map[string]any{
+			"repos": map[string]any{
+				repo: patch,
+			},
+		},
+	}
+
+	result, err := srv.patchTOML(func(m map[string]any) error {
+		merged := config.DeepMerge(m, globalPatch)
+		for k, v := range merged {
+			m[k] = v
+		}
+		for k := range m {
+			if _, ok := merged[k]; !ok {
+				delete(m, k)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		slog.Error("PATCH /config/repos failed", "repo", repo, "err", err)
 		if strings.Contains(err.Error(), "config:") {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		} else {
