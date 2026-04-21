@@ -357,6 +357,33 @@ func main() {
 			}
 			repoOverrides[repo] = ro
 		}
+		// Auto-detected local_dir for every repo the UI may render. Populated
+		// only when config.ResolveLocalDir() finds a matching directory under
+		// DefaultReposMountPath — i.e. the operator's bind-mount is in effect
+		// and the repo has been cloned there. The UI uses this to display
+		// "Auto-detected: /repos/<name>" next to repos where the user has
+		// not set `local_dir` manually but a review would still get
+		// full-repo context.
+		localDirsDetected := make(map[string]string)
+		seenRepo := make(map[string]bool)
+		addDetection := func(repo string) {
+			if repo == "" || seenRepo[repo] {
+				return
+			}
+			seenRepo[repo] = true
+			if d := config.ResolveLocalDir("", repo); d != "" {
+				localDirsDetected[repo] = d
+			}
+		}
+		for _, r := range c.GitHub.Repositories {
+			addDetection(r)
+		}
+		for _, r := range c.GitHub.NonMonitored {
+			addDetection(r)
+		}
+		for r := range c.AI.Repos {
+			addDetection(r)
+		}
 		agentConfigs := make(map[string]map[string]any)
 		for name, ac := range c.AI.Agents {
 			agentConfigs[name] = map[string]any{
@@ -384,6 +411,7 @@ func main() {
 			"issue_tracking":              c.GitHub.IssueTracking,
 			"repo_overrides":              repoOverrides,
 			"agent_configs":               agentConfigs,
+			"local_dirs_detected":         localDirsDetected,
 			"activity_log_enabled":        ptrBoolOrTrue(c.ActivityLog.Enabled),
 			"activity_log_retention_days": ptrIntOr(c.ActivityLog.RetentionDays, 90),
 		}
@@ -480,6 +508,9 @@ func main() {
 		cfgMu.Lock()
 		aiCfg := cfg.AIForRepo(pr.Repo)
 		cfgMu.Unlock()
+		// /repos/<short-name> fallback when local_dir is unset (stat-based,
+		// keep outside the mutex).
+		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, pr.Repo)
 
 		// Construct github.PullRequest from stored data
 		ghPR := &gh.PullRequest{
@@ -546,6 +577,9 @@ func main() {
 		}
 		agentCfg := cfg.AgentConfigFor(aiCfg.Primary)
 		cfgMu.Unlock()
+		// /repos/<short-name> fallback when local_dir is unset (stat-based,
+		// keep outside the mutex).
+		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, iss.Repo)
 
 		// Reconstruct github.Issue from store data for the pipeline
 		ghIssue := &gh.Issue{
@@ -805,6 +839,10 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 	c := *a.cfg
 	aiCfg := c.AIForRepo(pr.Repo)
 	a.cfgMu.Unlock()
+	// /repos/<short-name> fallback when local_dir is unset (stat-based,
+	// keep outside the mutex). Lets HEIMDALLM_REPOS_DIR give every
+	// monitored repo full-repo context without a per-repo override.
+	aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, pr.Repo)
 
 	ghPR := &gh.PullRequest{
 		ID:        pr.ID,
@@ -868,6 +906,9 @@ func (a *tier2Adapter) ProcessRepo(ctx context.Context, repo string) (int, error
 		}
 		agentCfg := c.AgentConfigFor(aiCfg.Primary)
 		a.cfgMu.Unlock()
+		// /repos/<short-name> fallback when local_dir is unset (stat-based,
+		// keep outside the mutex).
+		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, issue.Repo)
 
 		extraFlags := agentCfg.ExtraFlags
 		if extraFlags != "" {

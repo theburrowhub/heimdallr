@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/sse_client.dart';
+import '../../core/platform/platform_services_provider.dart';
 
 // Terminal-style colors per log level
 Color _levelColor(String line) {
@@ -18,13 +20,13 @@ Color _levelColor(String line) {
   return const Color(0xFFD4D4D4);
 }
 
-class LogsScreen extends StatefulWidget {
+class LogsScreen extends ConsumerStatefulWidget {
   const LogsScreen({super.key});
   @override
-  State<LogsScreen> createState() => _LogsScreenState();
+  ConsumerState<LogsScreen> createState() => _LogsScreenState();
 }
 
-class _LogsScreenState extends State<LogsScreen> {
+class _LogsScreenState extends ConsumerState<LogsScreen> {
   final _lines = <String>[];
   final _scrollController = ScrollController();
   SseClient? _sseClient;
@@ -51,7 +53,10 @@ class _LogsScreenState extends State<LogsScreen> {
   }
 
   void _connect() {
-    _sseClient = SseClient(path: '/logs/stream');
+    _sseClient = SseClient(
+      platform: ref.read(platformServicesProvider),
+      path: '/logs/stream',
+    );
     _sub = _sseClient!.connect().listen(
       (event) {
         if (event.type == 'log_line') {
