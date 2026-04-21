@@ -21,7 +21,11 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 // DeepMerge recursively merges patch into a copy of base and returns the
 // result. Only keys present in patch are updated. When both base and patch
 // have a map[string]any for the same key, the merge recurses. Otherwise the
-// patch value replaces the base value. base is never mutated.
+// patch value replaces the base value.
+//
+// The top-level map is a fresh allocation. Nested maps for keys that appear
+// in patch are also fresh (via recursion). Nested maps for keys absent from
+// patch share backing storage with base — callers must not mutate those.
 func DeepMerge(base, patch map[string]any) map[string]any {
 	out := make(map[string]any, len(base))
 	for k, v := range base {
@@ -51,7 +55,7 @@ func ContainsNull(m map[string]any) error {
 		}
 		if nested, ok := v.(map[string]any); ok {
 			if err := ContainsNull(nested); err != nil {
-				return err
+				return fmt.Errorf("%s.%w", k, err)
 			}
 		}
 	}
