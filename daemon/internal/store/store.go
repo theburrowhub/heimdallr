@@ -234,9 +234,10 @@ func (s *Store) ComputeStats(repos []string) (*Stats, error) {
 		ByCLI:      make(map[string]int),
 	}
 
-	// Build a reusable subquery that restricts review IDs to the given repos.
-	// When repos is empty, the subquery is omitted (global stats).
-	var repoFilter string
+	// Build reusable filter clauses for the given repos.
+	// repoFilter: for queries on reviews only (uses subquery on prs table).
+	// repoFilterJoined: for queries that already JOIN prs p (direct p.repo IN).
+	var repoFilter, repoFilterJoined string
 	var repoArgs []any
 	if len(repos) > 0 {
 		placeholders := make([]string, len(repos))
@@ -246,6 +247,7 @@ func (s *Store) ComputeStats(repos []string) (*Stats, error) {
 		}
 		inClause := strings.Join(placeholders, ",")
 		repoFilter = " AND r.pr_id IN (SELECT id FROM prs WHERE repo IN (" + inClause + "))"
+		repoFilterJoined = " AND p.repo IN (" + inClause + ")"
 	}
 
 	// Total reviews
@@ -279,7 +281,7 @@ func (s *Store) ComputeStats(repos []string) (*Stats, error) {
 	topRepoQuery := `
 		SELECT p.repo, COUNT(r.id) as cnt
 		FROM reviews r JOIN prs p ON p.id = r.pr_id
-		WHERE p.repo != ''` + repoFilter + `
+		WHERE p.repo != ''` + repoFilterJoined + `
 		GROUP BY p.repo ORDER BY cnt DESC LIMIT 8`
 	rows3, _ := s.db.Query(topRepoQuery, repoArgs...)
 	if rows3 != nil {
@@ -324,7 +326,7 @@ func (s *Store) ComputeStats(repos []string) (*Stats, error) {
 		JOIN prs p ON p.id = r.pr_id
 		WHERE r.github_review_id > 0
 		  AND p.fetched_at IS NOT NULL
-		  AND p.fetched_at != ''` + repoFilter + `
+		  AND p.fetched_at != ''` + repoFilterJoined + `
 		ORDER BY r.created_at DESC
 		LIMIT 200`
 	timingRows, _ := s.db.Query(timingQuery, repoArgs...)

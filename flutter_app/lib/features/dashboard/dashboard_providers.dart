@@ -144,9 +144,27 @@ final statsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   ref.watch(prListRefreshProvider); // refresh stats when reviews complete
   final filters = ref.watch(statsFiltersProvider);
   final api = ref.watch(apiClientProvider);
-  final repos = filters.repos.isNotEmpty
-      ? filters.repos.toList()
-      : <String>[];
+
+  // Effective repos: explicit repo selection takes priority. If only orgs
+  // are selected, derive the repo list from known PRs + issues so the
+  // org filter actually scopes the stats.
+  List<String> repos;
+  if (filters.repos.isNotEmpty) {
+    repos = filters.repos.toList();
+  } else if (filters.orgs.isNotEmpty) {
+    final prs = ref.read(prsProvider).valueOrNull ?? [];
+    final issues = ref.read(issuesProvider).valueOrNull ?? [];
+    final allRepos = <String>{
+      ...prs.map((p) => p.repo),
+      ...issues.map((i) => i.repo),
+    }..remove('');
+    repos = allRepos.where((r) {
+      final org = r.contains('/') ? r.split('/').first : r;
+      return filters.orgs.contains(org);
+    }).toList();
+  } else {
+    repos = [];
+  }
   return api.fetchStats(repos: repos);
 });
 

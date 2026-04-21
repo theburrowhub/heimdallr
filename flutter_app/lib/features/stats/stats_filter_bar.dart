@@ -34,14 +34,13 @@ class StatsFilterBar extends ConsumerWidget {
 
           // Org multi-select
           if (_allOrgs.isNotEmpty)
-            _multiSelectPopup(
+            _filterChip(
               context: context,
               label: 'Org',
               icon: Icons.business,
               allItems: _allOrgs.toList()..sort(),
               selected: filters.orgs,
               onChanged: (orgs) {
-                // Clear repos that no longer match the selected orgs
                 final validRepos = filters.repos.where((r) {
                   final org = r.contains('/') ? r.split('/').first : r;
                   return orgs.isEmpty || orgs.contains(org);
@@ -53,7 +52,7 @@ class StatsFilterBar extends ConsumerWidget {
 
           // Repo multi-select
           if (_filteredRepos(filters).isNotEmpty)
-            _multiSelectPopup(
+            _filterChip(
               context: context,
               label: 'Repo',
               icon: Icons.folder_outlined,
@@ -81,7 +80,7 @@ class StatsFilterBar extends ConsumerWidget {
     );
   }
 
-  Widget _multiSelectPopup({
+  Widget _filterChip({
     required BuildContext context,
     required String label,
     required IconData icon,
@@ -90,34 +89,18 @@ class StatsFilterBar extends ConsumerWidget {
     required ValueChanged<Set<String>> onChanged,
   }) {
     final isActive = selected.isNotEmpty;
-    return PopupMenuButton<String>(
-      tooltip: label,
-      offset: const Offset(0, 36),
-      constraints: const BoxConstraints(minWidth: 220, maxWidth: 320),
-      itemBuilder: (_) => allItems.map((item) {
-        final checked = selected.contains(item);
-        return PopupMenuItem<String>(
-          value: item,
-          padding: EdgeInsets.zero,
-          child: StatefulBuilder(
-            builder: (ctx, setMenuState) => CheckboxListTile(
-              dense: true,
-              title: Text(item, style: const TextStyle(fontSize: 13)),
-              value: checked,
-              onChanged: (val) {
-                final updated = Set<String>.from(selected);
-                if (val == true) {
-                  updated.add(item);
-                } else {
-                  updated.remove(item);
-                }
-                onChanged(updated);
-                setMenuState(() {});
-              },
-            ),
+    return GestureDetector(
+      onTap: () async {
+        final result = await showDialog<Set<String>>(
+          context: context,
+          builder: (_) => _MultiSelectDialog(
+            title: label,
+            items: allItems,
+            selected: selected,
           ),
         );
-      }).toList(),
+        if (result != null) onChanged(result);
+      },
       child: Chip(
         avatar: Icon(icon, size: 14,
             color: isActive ? Theme.of(context).colorScheme.primary : Colors.grey),
@@ -133,6 +116,73 @@ class StatsFilterBar extends ConsumerWidget {
             ? BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5))
             : const BorderSide(color: Colors.transparent),
       ),
+    );
+  }
+}
+
+class _MultiSelectDialog extends StatefulWidget {
+  final String title;
+  final List<String> items;
+  final Set<String> selected;
+
+  const _MultiSelectDialog({
+    required this.title,
+    required this.items,
+    required this.selected,
+  });
+
+  @override
+  State<_MultiSelectDialog> createState() => _MultiSelectDialogState();
+}
+
+class _MultiSelectDialogState extends State<_MultiSelectDialog> {
+  late Set<String> _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = Set<String>.from(widget.selected);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title, style: const TextStyle(fontSize: 16)),
+      contentPadding: const EdgeInsets.only(top: 12),
+      content: SizedBox(
+        width: 300,
+        child: ListView.builder(
+          shrinkWrap: true,
+          itemCount: widget.items.length,
+          itemBuilder: (_, i) {
+            final item = widget.items[i];
+            return CheckboxListTile(
+              dense: true,
+              title: Text(item, style: const TextStyle(fontSize: 13)),
+              value: _selected.contains(item),
+              onChanged: (val) {
+                setState(() {
+                  if (val == true) {
+                    _selected.add(item);
+                  } else {
+                    _selected.remove(item);
+                  }
+                });
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, null),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _selected),
+          child: const Text('Apply'),
+        ),
+      ],
     );
   }
 }
