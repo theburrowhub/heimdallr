@@ -1222,7 +1222,9 @@ func TestResolveLocalDir_BaseBeforeDefault(t *testing.T) {
 func TestResolveLocalDir_FallbackToDefault(t *testing.T) {
 	defaultPath := t.TempDir()
 	repoDir := filepath.Join(defaultPath, "repo")
-	os.MkdirAll(repoDir, 0755)
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	old := DefaultReposMountPath
 	DefaultReposMountPath = defaultPath
