@@ -6,6 +6,7 @@ import '../../core/models/pr.dart';
 import '../../core/platform/platform_services_provider.dart';
 import '../../main.dart' show sendPRNotification;
 import '../issues/issues_providers.dart';
+import '../stats/stats_filters.dart';
 
 final apiClientProvider = Provider<ApiClient>((ref) {
   return ApiClient(platform: ref.watch(platformServicesProvider));
@@ -141,8 +142,12 @@ final prsProvider = FutureProvider<List<PR>>((ref) async {
 
 final statsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   ref.watch(prListRefreshProvider); // refresh stats when reviews complete
+  final filters = ref.watch(statsFiltersProvider);
   final api = ref.watch(apiClientProvider);
-  return api.fetchStats();
+  final repos = filters.repos.isNotEmpty
+      ? filters.repos.toList()
+      : <String>[];
+  return api.fetchStats(repos: repos);
 });
 
 void _rebuildTray(Ref ref, List<PR> prs) {
