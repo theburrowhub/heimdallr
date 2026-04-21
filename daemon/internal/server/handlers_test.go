@@ -1145,3 +1145,105 @@ func TestHandlePatchRepoConfig_CreatesNewSection(t *testing.T) {
 		t.Errorf("pr_draft = %v, want true", newRepo["pr_draft"])
 	}
 }
+
+func TestHandleDeleteRepoField_TopLevel(t *testing.T) {
+	tomlContent := "[ai]\nprimary = \"claude\"\n\n[ai.repos.\"org/repo1\"]\nprimary = \"gemini\"\npr_draft = true\n"
+	tomlPath := writeTempTOML(t, tomlContent)
+
+	srv := setupServerWithToken(t, "test-token")
+	srv.SetConfigPath(tomlPath)
+
+	req := httptest.NewRequest("DELETE", "/config/repos/"+url.PathEscape("org/repo1")+"/pr_draft", nil)
+	req.Header.Set("X-Heimdallm-Token", "test-token")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	m, err := config.ReadTOMLMap(tomlPath)
+	if err != nil {
+		t.Fatalf("read TOML after DELETE: %v", err)
+	}
+	ai, ok := m["ai"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai] section, got %v", m)
+	}
+	repos, ok := ai["repos"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai.repos] section, got %v", ai)
+	}
+	repo1, ok := repos["org/repo1"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai.repos.\"org/repo1\"] section, got %v", repos)
+	}
+	if _, found := repo1["pr_draft"]; found {
+		t.Errorf("pr_draft should have been deleted, still present: %v", repo1)
+	}
+	if repo1["primary"] != "gemini" {
+		t.Errorf("primary = %v, want gemini (should be preserved)", repo1["primary"])
+	}
+}
+
+func TestHandleDeleteRepoField_NestedPath(t *testing.T) {
+	tomlContent := "[ai]\nprimary = \"claude\"\n\n[ai.repos.\"org/repo1\".issue_tracking]\ndevelop_labels = [\"ready\"]\nfilter_mode = \"exclusive\"\n"
+	tomlPath := writeTempTOML(t, tomlContent)
+
+	srv := setupServerWithToken(t, "test-token")
+	srv.SetConfigPath(tomlPath)
+
+	req := httptest.NewRequest("DELETE", "/config/repos/"+url.PathEscape("org/repo1")+"/issue_tracking/develop_labels", nil)
+	req.Header.Set("X-Heimdallm-Token", "test-token")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	m, err := config.ReadTOMLMap(tomlPath)
+	if err != nil {
+		t.Fatalf("read TOML after DELETE: %v", err)
+	}
+	ai, ok := m["ai"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai] section, got %v", m)
+	}
+	repos, ok := ai["repos"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai.repos] section, got %v", ai)
+	}
+	repo1, ok := repos["org/repo1"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected [ai.repos.\"org/repo1\"] section, got %v", repos)
+	}
+	issueTracking, ok := repo1["issue_tracking"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected issue_tracking section, got %v", repo1)
+	}
+	if _, found := issueTracking["develop_labels"]; found {
+		t.Errorf("develop_labels should have been deleted, still present: %v", issueTracking)
+	}
+	if issueTracking["filter_mode"] != "exclusive" {
+		t.Errorf("filter_mode = %v, want exclusive (should be preserved)", issueTracking["filter_mode"])
+	}
+}
+
+func TestHandleDeleteRepoField_Idempotent(t *testing.T) {
+	tomlContent := "[ai]\nprimary = \"claude\"\n"
+	tomlPath := writeTempTOML(t, tomlContent)
+
+	srv := setupServerWithToken(t, "test-token")
+	srv.SetConfigPath(tomlPath)
+
+	// DELETE for a non-existent repo/field — should be idempotent and return 200.
+	req := httptest.NewRequest("DELETE", "/config/repos/"+url.PathEscape("org/nonexistent")+"/pr_draft", nil)
+	req.Header.Set("X-Heimdallm-Token", "test-token")
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (idempotent), got %d (body: %s)", w.Code, w.Body.String())
+	}
+}

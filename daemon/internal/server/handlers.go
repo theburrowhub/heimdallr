@@ -246,6 +246,7 @@ func (srv *Server) buildRouter() chi.Router {
 	r.Put("/config", srv.handlePutConfig)
 	r.Patch("/config", srv.handlePatchConfig)
 	r.Patch("/config/repos/{repo}", srv.handlePatchRepoConfig)
+	r.Delete("/config/repos/{repo}/*", srv.handleDeleteRepoField)
 	r.Post("/reload", srv.handleReload)
 	r.Get("/events", srv.handleSSE)
 	r.Get("/logs/stream", srv.handleLogsStream)
@@ -601,6 +602,41 @@ func (srv *Server) handlePatchRepoConfig(w http.ResponseWriter, r *http.Request)
 	})
 	if err != nil {
 		slog.Error("PATCH /config/repos failed", "repo", repo, "err", err)
+		if strings.Contains(err.Error(), "config:") {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		} else {
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (srv *Server) handleDeleteRepoField(w http.ResponseWriter, r *http.Request) {
+	if srv.configPath == "" {
+		http.Error(w, `{"error":"DELETE not available — configPath not set"}`, http.StatusServiceUnavailable)
+		return
+	}
+	repo, err := url.PathUnescape(chi.URLParam(r, "repo"))
+	if err != nil || repo == "" {
+		http.Error(w, `{"error":"invalid repo parameter"}`, http.StatusBadRequest)
+		return
+	}
+	field := chi.URLParam(r, "*")
+	if field == "" {
+		http.Error(w, `{"error":"field path required"}`, http.StatusBadRequest)
+		return
+	}
+	// Build the full path: ai → repos → <repo> → <field segments>
+	segments := append([]string{"ai", "repos", repo}, strings.Split(field, "/")...)
+
+	result, err := srv.patchTOML(func(m map[string]any) error {
+		config.DeleteNestedKey(m, segments)
+		// Idempotent: not finding the key is not an error
+		return nil
+	})
+	if err != nil {
+		slog.Error("DELETE /config/repos field failed", "repo", repo, "field", field, "err", err)
 		if strings.Contains(err.Error(), "config:") {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		} else {
