@@ -1,7 +1,9 @@
 # Native Linux Install Target — Design Spec
 
 **Date**: 2026-04-21
-**Scope**: New `install-linux` and `uninstall-linux` Makefile targets for building and installing Heimdallm natively on Linux, user-local, outside a container.
+**Scope**: New `install-linux` and `uninstall-linux` Makefile targets that install Heimdallm user-local on Linux. The install target reuses the existing `verify-linux` Docker build — no host Flutter toolchain required — and stages the resulting artifacts into `~/.local/` so the app runs natively outside a container.
+
+**Revision 2026-04-21**: earlier draft used host-native `build-daemon build-app` as the build step, which forced users to install Flutter + GTK dev headers on their workstation. Pivoted to reuse the existing `verify-linux` Docker build, matching `run-linux`'s pattern of consuming artifacts from the `heimdallm-verify` image. `uninstall-linux` design unchanged — it doesn't care how install happened.
 
 ---
 
@@ -14,9 +16,9 @@ The repo currently offers two Linux-related Makefile targets:
 
 CI (`.github/workflows/release.yml` → `build-linux`) produces `.deb`, `.rpm`, and `.AppImage` for end users, and `LLM-HOW-TO-INSTALL.md` documents the download-and-install flow against those release artifacts.
 
-Missing: a path for developers who have this repo cloned, have the Linux build toolchain installed, and want to compile + install natively without Docker. `build-daemon` and `build-app` produce artifacts in `daemon/bin/` and `flutter_app/build/linux/…`, but nothing embeds the daemon into the bundle, places binaries on the system, or creates launcher integration.
+Missing: a path for developers who have this repo cloned, have Docker (like `verify-linux` already requires), and want the app installed natively on the host so it launches like any other desktop application — without running from inside a container. `verify-linux` builds a complete Flutter bundle and Go daemon *inside* the `heimdallm-verify` image, but those artifacts never leave the container. `run-linux` re-launches them from inside the container with X11 forwarding. Neither target produces a host-installed, launcher-integrated app.
 
-This spec fills that gap.
+This spec fills that gap by extracting the `verify-linux` build artifacts onto the host and staging them into `~/.local/` with launcher integration.
 
 ---
 
@@ -27,7 +29,7 @@ The design questions answered during brainstorming:
 | Question | Decision |
 |---|---|
 | Installation scope | **User-local** (`~/.local/…`) — no sudo, reversible, single-user. |
-| Build responsibility | **Make dependency graph**: `install-linux: build-daemon build-app`. Incremental rebuilds for free, same idiom as the existing `install-service` on macOS. |
+| Build responsibility | **Reuse `verify-linux` Docker build**: `install-linux: _check-linux verify-linux`. No host Flutter toolchain required. Same compatibility surface as CI's `.deb` (Ubuntu 22.04 base image). |
 | Uninstall companion | **Yes** — `uninstall-linux` removes app; `PURGE=1` also wipes config and data. Mirrors Debian `apt remove` vs. `apt purge`. |
 
 ---
@@ -35,9 +37,9 @@ The design questions answered during brainstorming:
 ## 1. Install layout
 
 ```
-~/.local/opt/heimdallm/                            # bundle root
+~/.local/opt/heimdallm/                            # bundle root (artifacts from heimdallm-verify image)
 ├── heimdallm                                      # Flutter binary (entry point)
-├── heimdalld                                      # Go daemon (renamed from daemon/bin/heimdallm)
+├── heimdalld                                      # Go daemon (copied from /app/daemon/bin/heimdallm, renamed)
 ├── data/                                          # Flutter assets (flutter_assets, icudtl.dat, …)
 └── lib/                                           # libapp.so, libflutter_linux_gtk.so, …
 
@@ -62,42 +64,52 @@ Key properties:
 Declaration:
 
 ```make
-install-linux: build-daemon build-app
+install-linux: _check-linux verify-linux
 ```
 
-Make's dependency graph rebuilds `daemon/bin/heimdallm` and the Flutter Linux bundle only when their inputs changed. The recipe body runs only the staging/install steps.
+Make's dependency graph invokes `verify-linux` first, which builds (or rebuilds) the `heimdallm-verify` Docker image. Docker's own layer cache skips work that has not changed — on a no-op rerun, `verify-linux` returns in seconds. The `install-linux` recipe body then extracts the artifacts from the image and stages them into `~/.local/`.
+
+Artifacts in the image, set by `Dockerfile.linux-verify`:
+- Flutter bundle: `/app/flutter_app/build/linux/x64/release/bundle/`
+- Go daemon: `/app/daemon/bin/heimdallm`
 
 Steps (all idempotent — every rerun leaves the same end state):
 
 1. **Preflight.** Assert `uname -s` is Linux via a new `_check-linux` guard. On macOS, print: "This target requires Linux. On macOS, use `make release-local` or `make run-linux`." and exit 1. Mirrors the existing `_check-macos`.
-2. **Verify build artifacts.** `[ -d flutter_app/build/linux/x64/release/bundle ] && [ -f daemon/bin/heimdallm ]` — fail with which artifact is missing. Defends against the (rare) case where `build-app` / `build-daemon` report success but the expected path isn't there.
-3. **Stage the bundle.** `rm -rf ~/.local/opt/heimdallm && mkdir -p ~/.local/opt/heimdallm && cp -r flutter_app/build/linux/x64/release/bundle/. ~/.local/opt/heimdallm/`.
-4. **Embed the daemon.** `cp daemon/bin/heimdallm ~/.local/opt/heimdallm/heimdalld && chmod +x ~/.local/opt/heimdallm/heimdalld`. Note the rename — source is `heimdallm`, destination is `heimdalld` — matching CI staging and `daemon_lifecycle.dart`'s lookup.
-5. **Case-collision guard.** `cmp -s ~/.local/opt/heimdallm/heimdallm ~/.local/opt/heimdallm/heimdalld` must report a difference; if bytes match, fail with "Both binaries are identical — would fork-bomb on launch". Same guard CI's release pipeline uses; protects against a silently-broken rename.
-6. **PATH shim.** `mkdir -p ~/.local/bin && ln -sf ~/.local/opt/heimdallm/heimdallm ~/.local/bin/heimdallm`. `ln -sf` atomically replaces any prior symlink.
-7. **Icons.** For each size in `{48, 128, 256, 512}`: `mkdir -p ~/.local/share/icons/hicolor/<N>x<N>/apps/ && cp flutter_app/assets/icons/<N>.png ~/.local/share/icons/hicolor/<N>x<N>/apps/heimdallm.png`.
-8. **Desktop entry.** Write `~/.local/share/applications/com.theburrowhub.heimdallm.desktop` (contents below, with `$$HOME` expanded at Make-recipe-execution time, not stored as `%h`):
-   ```ini
-   [Desktop Entry]
-   Name=Heimdallm
-   Comment=AI-powered GitHub PR review agent
-   Exec=<expanded $HOME>/.local/opt/heimdallm/heimdallm
-   Icon=heimdallm
-   Type=Application
-   Categories=Development;
-   StartupWMClass=com.theburrowhub.heimdallm
-   StartupNotify=true
-   ```
-9. **Refresh caches (best-effort).**
-   - `command -v update-desktop-database >/dev/null && update-desktop-database ~/.local/share/applications/ 2>/dev/null || true`
-   - `command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t ~/.local/share/icons/hicolor/ 2>/dev/null || true`
-   - Silent no-op if the tools aren't installed. The app appears in the launcher either way after a re-login; the refresh just makes it immediate.
-10. **Final report.** Print:
+2. **Preflight — Docker.** `command -v docker >/dev/null 2>&1` — fail with the same message the other Docker-dependent targets use. `verify-linux` would fail here anyway, but surfacing this first gives a clearer error.
+3. **Extract artifacts from the image.** Create a stopped container with `docker create heimdallm-verify` (captures its ID in a shell variable). `docker cp` the bundle directory and the daemon binary out into a temporary extraction directory on the host. Remove the container via a shell `trap` so the container is cleaned up even if `cp` fails mid-way. Use a dedicated path under `/tmp` (e.g. `/tmp/heimdallm-install-extract`) rather than `mktemp -d` — a fixed path makes debugging simpler, and the target's first step (`rm -rf` on it) handles leftover state from prior partial runs.
+4. **Stage the bundle.** `rm -rf ~/.local/opt/heimdallm && mkdir -p ~/.local/opt/heimdallm && cp -r <extract-dir>/bundle/. ~/.local/opt/heimdallm/`.
+5. **Embed the daemon.** `cp <extract-dir>/daemon ~/.local/opt/heimdallm/heimdalld && chmod +x ~/.local/opt/heimdallm/heimdalld`. The rename (source `heimdallm` → destination `heimdalld`) matches `DaemonLifecycle.defaultBinaryPath()`'s lookup and the CI `.deb`'s layout.
+6. **Case-collision guard.** `cmp -s ~/.local/opt/heimdallm/heimdallm ~/.local/opt/heimdallm/heimdalld` must report a difference; if bytes match, fail with "Both binaries are identical — would fork-bomb on launch". Same guard CI's release pipeline uses; protects against a silently-broken rename.
+7. **Clean up extraction directory.** `rm -rf <extract-dir>` — the staged copy under `~/.local/opt/heimdallm/` is the source of truth now; the temp dir is no longer needed.
+8. **PATH shim.** `mkdir -p ~/.local/bin && ln -sf ~/.local/opt/heimdallm/heimdallm ~/.local/bin/heimdallm`. `ln -sf` atomically replaces any prior symlink.
+9. **Icons.** For each size in `{48, 128, 256, 512}`: `mkdir -p ~/.local/share/icons/hicolor/<N>x<N>/apps/ && cp flutter_app/assets/icons/<N>.png ~/.local/share/icons/hicolor/<N>x<N>/apps/heimdallm.png`. (Icons are sourced from the *host's* repo checkout, not from the Docker image — `flutter_app/assets/icons/` is a committed directory, present wherever the repo is cloned.)
+10. **Desktop entry.** Write `~/.local/share/applications/com.theburrowhub.heimdallm.desktop` (contents below, with `$$HOME` expanded at Make-recipe-execution time, not stored as `%h`):
+    ```ini
+    [Desktop Entry]
+    Name=Heimdallm
+    Comment=AI-powered GitHub PR review agent
+    Exec=<expanded $HOME>/.local/opt/heimdallm/heimdallm
+    Icon=heimdallm
+    Type=Application
+    Categories=Development;
+    StartupWMClass=com.theburrowhub.heimdallm
+    StartupNotify=true
+    ```
+11. **Refresh caches (best-effort).**
+    - `command -v update-desktop-database >/dev/null && update-desktop-database ~/.local/share/applications/ 2>/dev/null || true`
+    - `command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t ~/.local/share/icons/hicolor/ 2>/dev/null || true`
+    - Silent no-op if the tools aren't installed. The app appears in the launcher either way after a re-login; the refresh just makes it immediate.
+12. **Final report.** Print:
     - The four path groups written (bundle, bin symlink, desktop entry, icons).
     - A "Launch with: `heimdallm` (or from your app launcher)" hint.
     - **If `~/.local/bin` is not on `$PATH`**, a warning plus the snippet `export PATH="$HOME/.local/bin:$PATH"` and a reminder to add it to `~/.bashrc` / `~/.zshrc`. Detection: `case ":$$PATH:" in *":$$HOME/.local/bin:"*) ;; *) warn ;; esac`.
 
-No output suppression via `@` on the core staging commands — users should see what's happening. `@echo` is fine for informational banners.
+No output suppression via `@` on the core staging commands — users should see what's happening. `@echo` is fine for informational banners. The `docker create` / `docker cp` / `docker rm` block inside step 3 runs under `@` because the raw Docker command output (container hash, cp progress) is noisy and the shell script's own `echo "▶  Extracting…"` banner is sufficient.
+
+### Binary compatibility
+
+The `heimdallm-verify` image is built from `ubuntu:22.04`. The Flutter bundle's binaries link dynamically against the image's glibc, libgtk-3, libgdk-3, libstdc++, etc. When copied to the host and executed there, the host must provide compatible versions of those libraries. This is the same compatibility envelope as the CI-built `.deb` (which itself runs on ubuntu-22.04). In practice the target works on any reasonably current Debian/Ubuntu/Fedora/Arch. Hosts with an older libc than Ubuntu 22.04 may see missing-symbol errors at launch — this is an acceptable trade for not requiring Flutter on the host, and affects the same population of users who cannot install the CI `.deb`.
 
 ---
 
@@ -144,11 +156,14 @@ Key safety properties:
 ## 4. Error handling & edge cases
 
 - **Not Linux.** `_check-linux` fails fast with a platform-specific message redirecting to `release-local` / `run-linux`. Same shape as `_check-macos`.
-- **Flutter not installed / build deps missing.** Handled by `build-app` itself — Flutter emits a clear error naming the missing dep (`libgtk-3-dev`, `clang`, etc.). The install target does not reimplement this check; our preflight only verifies that *artifacts exist* post-build, which is a faster and more reliable signal than duck-typing the toolchain.
-- **Case-collision guard trips.** Fatal. The staged bundle is left in place (not on the user's `$PATH` yet — that's step 6, after the guard). User fixes and reruns; step 3 starts with `rm -rf`, so state is clean.
+- **Docker not installed.** Preflight `command -v docker` check fails with the same message the other Docker-dependent targets use (`verify-linux`, `run-linux`, `test-docker`). Without this explicit check, `verify-linux` would fail first with a less friendly message.
+- **Docker image build fails (inside `verify-linux`).** The error surfaces from `verify-linux` itself — `install-linux`'s recipe never runs. This preserves the existing `verify-linux` error semantics; the install target does not try to catch or re-explain them.
+- **`docker cp` fails mid-extraction.** The shell `trap` around the `docker create … cp … cp …` block runs `docker rm` on the container even on failure, so no orphaned containers accumulate. The staged `~/.local/opt/heimdallm/` is untouched (step 4 runs only after extraction succeeds).
+- **Case-collision guard trips.** Fatal. The staged bundle is left in place (not on the user's `$PATH` yet — that's step 8, after the guard). User fixes and reruns; step 4 starts with `rm -rf`, so state is clean.
 - **`~/.local/bin` not on `$PATH`.** Warning only, not an error. The symlink is still created; the desktop entry uses an absolute `Exec=` path, so launcher menu integration works regardless. User can still launch via `~/.local/opt/heimdallm/heimdallm`.
-- **Already installed.** `install-linux` overwrites cleanly: `rm -rf` on the bundle dir, `ln -sf` on the symlink, fresh desktop entry / icons. No version-check logic — source installs always reflect current `HEAD`.
+- **Already installed.** `install-linux` overwrites cleanly: `rm -rf` on the bundle dir, `ln -sf` on the symlink, fresh desktop entry / icons. No version-check logic — source installs always reflect whatever the current `heimdallm-verify` image was built from.
 - **Daemon running at install time.** `rm -rf ~/.local/opt/heimdallm/` while the daemon is running is safe on Linux (unlinks the directory entry; the running process continues on its now-unlinked inode until it exits normally). The install target does *not* stop running processes — a rebuild-reinstall during active use won't interrupt a review in progress. Stopping processes is the `uninstall-linux` job.
+- **Host glibc too old for the Ubuntu-22.04-built binaries.** Surfaces as a missing-symbol error at first launch (not at install). Out of scope for automatic detection; documented as a caveat in §2 "Binary compatibility".
 
 ---
 
@@ -177,6 +192,6 @@ This target interacts with the user's filesystem and launcher. No automated test
 ## Out of scope
 
 - **System-wide install** (`/opt/heimdallm/`, `/usr/local/bin/heimdallm`). Developers who want that path should use the CI-built `.deb` / `.rpm`.
-- **Build from source on non-Debian/non-RPM distros** without Flutter pre-installed. The target assumes `flutter` and the Linux desktop build deps are already present — installing those is a one-time user setup, not something this target attempts to automate.
+- **Host-native Flutter build path.** Users who have Flutter installed locally can run `cd flutter_app && flutter build linux --release` themselves and copy the result into `~/.local/opt/heimdallm/` by hand if they prefer. The `install-linux` target does *not* offer this as an alternate mode — one path, Docker-reuse, keeps the target small.
 - **Automatic daemon autostart / systemd unit.** The Flutter app spawns the daemon itself (`daemon_lifecycle.dart`); no separate service file is needed for the install path. `install-service` on macOS creates a LaunchAgent, but Linux doesn't need one for the spawn-from-app model.
-- **Verifying `flutter build linux` runs green.** That's `make verify-linux`'s job. This target trusts the build succeeded if the artifact exists.
+- **Running `verify-linux` in a custom configuration.** The install target depends on the default `verify-linux` as-is. Users who want a different Go / Flutter version for the build should edit `Dockerfile.linux-verify` — not an `install-linux` variable.

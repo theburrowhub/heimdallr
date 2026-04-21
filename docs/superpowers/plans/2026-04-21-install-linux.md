@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add `install-linux` and `uninstall-linux` Makefile targets that build Heimdallm from source and install it user-local (`~/.local/…`) on Linux, outside a container.
+**Goal:** Add `install-linux` and `uninstall-linux` Makefile targets that install Heimdallm user-local (`~/.local/…`) on Linux. The install target reuses the existing `verify-linux` Docker build — no host Flutter toolchain required.
 
-**Architecture:** Two new Make targets plus one shared preflight guard (`_check-linux`), all added to `Makefile`. `install-linux` depends on `build-daemon` and `build-app` so Make's own dependency graph handles incremental rebuilds. `uninstall-linux` supports a `PURGE=1` flag to also wipe user config/data, mirroring Debian's `apt purge` convention. Layout mirrors the CI `.deb` under the user's `~/.local/` so `DaemonLifecycle.defaultBinaryPath()` finds `heimdalld` next to the Flutter binary with no app-code change.
+**Architecture:** Two new Make targets plus one shared preflight guard (`_check-linux`), all added to `Makefile`. `install-linux` depends on `_check-linux verify-linux`; its recipe extracts the Flutter bundle and Go daemon from the `heimdallm-verify` Docker image via `docker create` + `docker cp` + `docker rm`, then stages them into `~/.local/opt/heimdallm/`. `uninstall-linux` supports a `PURGE=1` flag to also wipe user config/data, mirroring Debian's `apt purge` convention. Layout mirrors the CI `.deb` under the user's `~/.local/` so `DaemonLifecycle.defaultBinaryPath()` finds `heimdalld` next to the Flutter binary with no app-code change.
 
-**Tech Stack:** GNU Make, POSIX shell. No new files, no new tools. Spec: `docs/superpowers/specs/2026-04-21-install-linux-design.md`.
+**Tech Stack:** GNU Make, POSIX shell, Docker CLI. No new files, no new build tools. Spec: `docs/superpowers/specs/2026-04-21-install-linux-design.md` (Revision 2026-04-21 pivoted from host-native build to Docker-reuse).
 
 ---
 
@@ -15,9 +15,12 @@
 Only one file is touched by this plan.
 
 - **Modify: `Makefile`**
-  - Add `install-linux uninstall-linux _check-linux` to the `.PHONY` list (line 19–22).
-  - Add a `_check-linux` guard recipe alongside the existing `_check-macos` (around line 206).
-  - Add a new "Native Linux install / uninstall" section with `install-linux` and `uninstall-linux` recipes, placed between the existing `run-linux` (ends line 473) and `clean` (line 475) sections so all Linux-related targets live together.
+  - Add `install-linux uninstall-linux _check-linux` to the `.PHONY` list (original line 19–22 before Task 1 shifted line numbers).
+  - Add a `_check-linux` guard recipe alongside the existing `_check-macos` (original line 206 region).
+  - Add a new "Native Linux install / uninstall" section after the existing `run-linux` recipe and before `clean:` so all Linux-related targets live together. The section introduces:
+    - `EXTRACT_DIR := /tmp/heimdallm-install-extract` — Make variable used by the install recipe as the temporary staging location for artifacts copied out of the Docker image.
+    - `install-linux` recipe.
+    - `uninstall-linux` recipe.
 
 No new files. No changes to `daemon/`, `flutter_app/`, `docker/`, or CI workflows — the runtime contract (`heimdalld` next to `heimdallm`) is already satisfied by the layout this plan creates.
 
@@ -120,27 +123,30 @@ EOF
 
 ---
 
-## Task 2: Add the `install-linux` target
+## Task 2: Add the `install-linux` target (reuses `verify-linux` Docker build)
 
 **Files:**
-- Modify: `Makefile` (add a new section between `run-linux` at line 473 and `clean` at line 475)
+- Modify: `Makefile` — add a new section between the end of the `run-linux` recipe and the start of `clean:`. Do not rely on hard-coded line numbers; Task 1 shifted them. Locate anchors by content:
+  - End of `run-linux` is the line containing `$(LINUX_BUNDLE)/heimdallm` (last command of its `docker run` pipeline).
+  - `clean:` is a target declaration — grep for it.
 
 - [ ] **Step 1: Insert the section header and recipe**
 
-Open `Makefile`, find the end of the `run-linux` recipe (line 473 — the `$(LINUX_BUNDLE)/heimdallm` line). Directly after line 473 (before line 475's `clean:`), insert:
+Insert immediately after `run-linux`'s last line (with one leading blank line before the section-header comment), and immediately before `clean:`:
 
 ```make
 
 # ── Native Linux install / uninstall (user-local, no sudo) ────────────────────
 #
-# Builds the Flutter bundle + daemon on the host and stages them into
-# ~/.local/ so the app launches like any other desktop Linux application.
-# No container, no sudo, no system-wide writes.
+# Extracts the Flutter bundle and Go daemon from the heimdallm-verify Docker
+# image (built by `make verify-linux`) and stages them into ~/.local/ so the
+# app launches like any other desktop Linux application. No host Flutter
+# toolchain required; Docker does the build.
 #
 # Layout written:
 #   ~/.local/opt/heimdallm/                  # bundle root (matches CI .deb)
 #     heimdallm                              # Flutter binary
-#     heimdalld                              # Go daemon (renamed from daemon/bin/heimdallm)
+#     heimdalld                              # Go daemon (copied from /app/daemon/bin/heimdallm in image, renamed)
 #   ~/.local/bin/heimdallm                   # → symlink into the bundle
 #   ~/.local/share/applications/com.theburrowhub.heimdallm.desktop
 #   ~/.local/share/icons/hicolor/{48,128,256,512}x{same}/apps/heimdallm.png
@@ -150,19 +156,32 @@ Open `Makefile`, find the end of the `run-linux` recipe (line 473 — the `$(LIN
 # "heimdalld" next to its own binary, so the rename at install time is what
 # makes the spawn work without any env var override.
 #
+# Binary compatibility: the heimdallm-verify image is ubuntu:22.04, so the
+# binaries link dynamically against that distro's glibc/gtk versions. Works
+# on any reasonably current Debian/Ubuntu/Fedora/Arch; hosts with a much
+# older libc may see missing-symbol errors at first launch.
+#
 # Usage:
 #   make install-linux
 #
 # To remove: see `uninstall-linux` below.
 
-install-linux: _check-linux build-daemon build-app
+EXTRACT_DIR := /tmp/heimdallm-install-extract
+
+install-linux: _check-linux verify-linux
+	@command -v docker >/dev/null 2>&1 || { echo "❌  Docker is required. Install from https://docs.docker.com/get-docker/"; exit 1; }
+	@echo "▶  Extracting Heimdallm artifacts from heimdallm-verify image..."
+	@rm -rf "$(EXTRACT_DIR)"
+	@mkdir -p "$(EXTRACT_DIR)"
+	@CID=$$(docker create heimdallm-verify) ; \
+	 trap 'docker rm "$$CID" >/dev/null 2>&1 || true' EXIT ; \
+	 docker cp "$$CID:/app/flutter_app/build/linux/x64/release/bundle/." "$(EXTRACT_DIR)/bundle/" && \
+	 docker cp "$$CID:/app/daemon/bin/heimdallm" "$(EXTRACT_DIR)/daemon"
 	@echo "▶  Staging Heimdallm into $$HOME/.local/opt/heimdallm..."
-	@test -d $(APP_BUNDLE) || { echo "❌  Bundle not found at $(APP_BUNDLE) — build-app did not produce artifacts."; exit 1; }
-	@test -f $(DAEMON_BIN) || { echo "❌  Daemon not found at $(DAEMON_BIN) — build-daemon did not produce artifacts."; exit 1; }
 	rm -rf "$$HOME/.local/opt/heimdallm"
 	mkdir -p "$$HOME/.local/opt/heimdallm"
-	cp -r $(APP_BUNDLE)/. "$$HOME/.local/opt/heimdallm/"
-	cp $(DAEMON_BIN) "$$HOME/.local/opt/heimdallm/heimdalld"
+	cp -r "$(EXTRACT_DIR)/bundle/." "$$HOME/.local/opt/heimdallm/"
+	cp "$(EXTRACT_DIR)/daemon" "$$HOME/.local/opt/heimdallm/heimdalld"
 	chmod +x "$$HOME/.local/opt/heimdallm/heimdalld"
 	@# Fork-bomb guard: same check CI's release pipeline runs.
 	@# If both binaries are byte-identical, the "spawn heimdalld" call from
@@ -172,6 +191,7 @@ install-linux: _check-linux build-daemon build-app
 	  echo "❌  Both binaries are identical — case-collision fork-bomb state. Aborting."; \
 	  exit 1; \
 	fi
+	rm -rf "$(EXTRACT_DIR)"
 	mkdir -p "$$HOME/.local/bin"
 	ln -sf "$$HOME/.local/opt/heimdallm/heimdallm" "$$HOME/.local/bin/heimdallm"
 	@for SIZE in 48 128 256 512; do \
@@ -214,7 +234,13 @@ install-linux: _check-linux build-daemon build-app
 	esac
 ```
 
-**Critical formatting:** Every recipe line (anything after `install-linux:`) begins with a literal TAB. The backslash-continued shell commands inside a single recipe line are one shell invocation; the `\` at end of line is required so Make knows the recipe line continues.
+**Critical formatting:**
+- Every recipe line (anything indented under `install-linux:`) begins with a literal **TAB**. Single TAB per line, no spaces.
+- `$$VAR` (double-dollar) in Makefile = `$VAR` in shell (e.g. `$$HOME`, `$$PATH`, `$${SIZE}`, `$$(docker create …)`, `$$CID`).
+- `$(EXTRACT_DIR)` is a **Make** variable reference (single dollar) — defined once at the top of the block so both the recipe body and any future consumers reference the same path.
+- The `docker create` / `docker cp` / `docker rm` block is one multi-line shell statement joined with `\` so the `trap` installs the cleanup handler that runs even if either `cp` fails. Do NOT break it into separate recipe lines — each Make recipe line is a fresh shell, and the trap wouldn't span them.
+- The `&&` between the two `docker cp` calls ensures that if the first `cp` fails, the second does not run and the trap still fires to remove the container. If you write `;` instead of `&&`, a failing first `cp` would cascade into a confusing second-cp error.
+- Inside the `docker create` block, `$$CID` (double-dollar) captures the container ID in a shell variable; the subsequent `"$$CID:/app/..."` references interpolate it. Writing `$(CID)` instead would make Make look for a non-existent Make variable and silently produce an empty string.
 
 - [ ] **Step 2: Dry-run the target to catch syntax errors**
 
@@ -222,7 +248,9 @@ install-linux: _check-linux build-daemon build-app
 make -n install-linux
 ```
 
-Expected: Make prints the commands it would run (build-daemon, build-app, rm, mkdir, cp, etc.) with no `*** missing separator` or `*** recipe commences before first target` errors. If you see either, you have a spaces-vs-tabs problem — re-indent with TAB.
+Expected: Make prints commands for `verify-linux` (docker build), the Docker-extract block, and the staging steps. No `*** missing separator` or `*** recipe commences before first target` errors. The `$(EXTRACT_DIR)` references should have expanded to `/tmp/heimdallm-install-extract` in the dry-run output.
+
+If you see a Make syntax error, it's almost always TAB vs. spaces — re-check the recipe body with `sed -n '<line-range>p' Makefile | cat -A` and confirm every body line starts with `^I`.
 
 - [ ] **Step 3: Run the target end-to-end on Linux**
 
@@ -231,11 +259,10 @@ make install-linux
 ```
 
 Expected sequence:
-1. `build-daemon` output (`cd daemon && make build`).
-2. `build-app` output (Flutter build linux — takes a minute or two on first run).
-3. `▶  Staging Heimdallm into $HOME/.local/opt/heimdallm...`
-4. Various `rm -rf` / `cp` / `chmod` / `ln -sf` lines.
-5. Final report:
+1. `verify-linux` runs. If the `heimdallm-verify` image doesn't exist yet, Docker builds it now — this takes ~5 minutes the first time (pulling ubuntu:22.04, installing deps, Go 1.21, Flutter, then running tests + building). Subsequent runs are seconds (Docker layer cache).
+2. `▶  Extracting Heimdallm artifacts from heimdallm-verify image...` — the `docker create`/`cp`/`rm` block runs. The `docker cp` lines are silent because they're under `@`.
+3. `▶  Staging Heimdallm into $HOME/.local/opt/heimdallm...` — the staging `rm -rf`/`mkdir`/`cp`/`chmod` lines echo to the terminal.
+4. Final report:
    ```
    ✅  Heimdallm installed:
        Bundle:  /home/<user>/.local/opt/heimdallm/
@@ -253,6 +280,7 @@ ls -la ~/.local/opt/heimdallm/heimdallm ~/.local/opt/heimdallm/heimdalld
 ls -la ~/.local/bin/heimdallm
 cat ~/.local/share/applications/com.theburrowhub.heimdallm.desktop
 ls ~/.local/share/icons/hicolor/{48x48,128x128,256x256,512x512}/apps/heimdallm.png
+ls /tmp/heimdallm-install-extract 2>&1 | head -1
 ```
 
 Expected:
@@ -260,6 +288,15 @@ Expected:
 - `~/.local/bin/heimdallm` is a symlink (first column starts with `l`) pointing at `~/.local/opt/heimdallm/heimdallm`.
 - The `.desktop` file has `Exec=` with an absolute path into the bundle.
 - All four icon files exist.
+- `/tmp/heimdallm-install-extract` does NOT exist (cleaned up by step 7 of the install spec). If it does, the cleanup step misfired — check the recipe.
+
+Confirm no orphaned Docker containers from the install:
+
+```bash
+docker ps -a --filter "ancestor=heimdallm-verify" --format "{{.ID}} {{.Status}}"
+```
+
+Expected: empty output — the trap removed the extraction container.
 
 - [ ] **Step 5: Launch the app**
 
@@ -279,25 +316,26 @@ Close the app window before moving on.
 make install-linux
 ```
 
-Expected: reruns cleanly, no errors, same final report. The target starts with `rm -rf` on the bundle dir, so overwriting is clean.
+Expected: `verify-linux` re-runs (fast — layer cache hits); extract + stage rerun cleanly; same final report. The recipe's `rm -rf` on both the extract dir and the bundle dir ensures overwrites are clean.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add Makefile
 git commit -m "$(cat <<'EOF'
-feat(make): add install-linux for native user-local install from source
+feat(make): add install-linux (reuses verify-linux Docker build)
 
-install-linux: _check-linux build-daemon build-app
+install-linux: _check-linux verify-linux
 
-Stages the Flutter bundle + Go daemon into ~/.local/opt/heimdallm/,
-adds a ~/.local/bin/heimdallm symlink, writes a desktop entry with an
-absolute Exec= path, and installs the four icon sizes under
-~/.local/share/icons/hicolor/. Fills the from-source install gap left
-by verify-linux / run-linux (both Docker-based).
+Extracts the Flutter bundle and Go daemon from the heimdallm-verify
+image (verify-linux builds it) via docker create + docker cp + docker rm,
+then stages into ~/.local/opt/heimdallm/ with a ~/.local/bin symlink,
+a desktop entry with an absolute Exec= path, and the four icon sizes
+under ~/.local/share/icons/hicolor/. Fills the host-install gap left
+by verify-linux (Docker-only) and run-linux (in-container runtime).
 
 Layout mirrors the CI .deb so DaemonLifecycle's "heimdalld next to
-heimdallm" lookup works unchanged.
+heimdallm" lookup works unchanged. No host Flutter toolchain required.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -513,7 +551,9 @@ EOF
 
 This task runs every scenario in the spec's §5 testing plan back-to-back. Purpose: catch any cross-interaction between install and uninstall that the per-task tests missed.
 
-**Prerequisites:** Linux host with `flutter`, `clang`, `cmake`, `ninja-build`, `libgtk-3-dev` and the other build deps installed (same ones `Dockerfile.linux-verify` lists).
+**Prerequisites:** Linux host with Docker installed and running (same requirement as `make verify-linux` / `make run-linux`). No Flutter / Go / GTK dev toolchain needed — the Docker build handles everything.
+
+**First-run note:** if `heimdallm-verify` image does not exist yet, `make install-linux` will build it. Budget ~5 minutes for the first run. Subsequent runs hit Docker's layer cache and finish in seconds.
 
 - [ ] **Step 1: Capture clean-state baseline**
 
@@ -605,13 +645,15 @@ Do not introduce "manual-testing" commits — nothing changed in the tree.
 
 - **Spec coverage.**
   - §1 layout → covered by Task 2's recipe (bundle, symlink, desktop entry, icon paths all match).
-  - §2 install steps 1–10 → covered by Task 2 step 1 recipe body, in order.
+  - §2 install steps 1–12 (including the new Docker-extract steps 2–3 and the extraction-dir cleanup at step 7) → covered by Task 2 step 1 recipe body, in order.
   - §3 uninstall steps 1–8 (+ PURGE) → covered by Task 3 step 1 recipe body.
-  - §4 error handling → `_check-linux` (Task 1), artifact verification (Task 2 recipe), case-collision guard (Task 2 recipe), PATH warning (Task 2 recipe), symlink-only removal (Task 3 recipe).
+  - §4 error handling → `_check-linux` (Task 1), Docker preflight (Task 2 recipe), `verify-linux` failure surface (inherited from that target), trap-based container cleanup (Task 2 recipe), case-collision guard (Task 2 recipe), PATH warning (Task 2 recipe), symlink-only removal (Task 3 recipe).
   - §5 manual test plan → covered step-by-step by Task 4.
 - **Placeholder scan.** No TBD/TODO/"implement later". Every recipe body is complete code, every verification step names the expected output.
 - **Type / name consistency.**
   - Target name `install-linux` and `uninstall-linux` consistent across `.PHONY`, recipe definitions, commit messages, and manual-test commands.
+  - `EXTRACT_DIR := /tmp/heimdallm-install-extract` defined once in the install block and referenced via `$(EXTRACT_DIR)` throughout the recipe.
+  - Image name `heimdallm-verify` consistent with `verify-linux` and `run-linux`.
   - Symlink target path `$HOME/.local/opt/heimdallm/heimdallm` consistent between install (creates it), uninstall (checks it with `readlink`), and spec.
   - Desktop entry filename `com.theburrowhub.heimdallm.desktop` identical in install, uninstall, and CI staging (verified in spec).
   - Icon sizes `{48, 128, 256, 512}` identical in install loop, uninstall loop, and the source `flutter_app/assets/icons/` directory (verified with `ls`).
