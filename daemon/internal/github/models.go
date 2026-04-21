@@ -82,7 +82,8 @@ type Repo struct {
 }
 
 type Branch struct {
-	Repo Repo `json:"repo"`
+	Repo Repo   `json:"repo"`
+	SHA  string `json:"sha"`
 }
 
 type PullRequest struct {

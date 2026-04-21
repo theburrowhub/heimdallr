@@ -367,6 +367,29 @@ func (c *Client) fetchReposForOrg(topic, org string) ([]string, error) {
 	return repos, nil
 }
 
+// GetPRHeadSHA returns the PR's current HEAD commit SHA via the Pulls API.
+// The Search Issues API used by FetchPRsToReview does not populate head.sha,
+// so the pipeline needs this lookup to deduplicate reviews by commit rather
+// than by the PR's updated_at (which any peer reviewer bumps on every review).
+func (c *Client) GetPRHeadSHA(repo string, number int) (string, error) {
+	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
+	resp, err := c.do("GET", path, "application/vnd.github+json")
+	if err != nil {
+		return "", fmt.Errorf("github: get PR head sha: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if resp.StatusCode != http.StatusOK {
+		errBody := safeTruncate(string(body), maxErrBodyLen)
+		return "", fmt.Errorf("github: get PR head sha (%s #%d): status %d: %s", repo, number, resp.StatusCode, errBody)
+	}
+	var pr PullRequest
+	if err := json.Unmarshal(body, &pr); err != nil {
+		return "", fmt.Errorf("github: get PR head sha: unmarshal: %w", err)
+	}
+	return pr.Head.SHA, nil
+}
+
 // FetchDiff returns the unified diff for a PR.
 func (c *Client) FetchDiff(repo string, number int) (string, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)

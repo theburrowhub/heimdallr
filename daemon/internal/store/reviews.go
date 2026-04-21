@@ -24,15 +24,19 @@ type Review struct {
 	CreatedAt         time.Time `json:"created_at"`
 	GitHubReviewID    int64     `json:"github_review_id"`    // 0 = not yet published
 	GitHubReviewState string    `json:"github_review_state"` // '' until published
+	// HeadSHA is the PR's HEAD commit at review time. Used as the authoritative
+	// dedup key: if we've already reviewed this SHA, peer-bot review submissions
+	// bumping the PR's updated_at must not trigger a re-review.
+	HeadSHA string `json:"head_sha"`
 }
 
 // InsertReview inserts a new review record and returns its row ID.
 func (s *Store) InsertReview(r *Review) (int64, error) {
 	res, err := s.db.Exec(`
-		INSERT INTO reviews (pr_id, cli_used, summary, issues, suggestions, severity, created_at, github_review_id, github_review_state)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO reviews (pr_id, cli_used, summary, issues, suggestions, severity, created_at, github_review_id, github_review_state, head_sha)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, r.PRID, r.CLIUsed, r.Summary, r.Issues, r.Suggestions, r.Severity,
-		r.CreatedAt.UTC().Format(sqliteTimeFormat), r.GitHubReviewID, r.GitHubReviewState,
+		r.CreatedAt.UTC().Format(sqliteTimeFormat), r.GitHubReviewID, r.GitHubReviewState, r.HeadSHA,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: insert review: %w", err)
@@ -43,7 +47,7 @@ func (s *Store) InsertReview(r *Review) (int64, error) {
 // ListUnpublishedReviews returns reviews not yet submitted to GitHub (github_review_id == 0).
 func (s *Store) ListUnpublishedReviews() ([]*Review, error) {
 	rows, err := s.db.Query(
-		"SELECT id, pr_id, cli_used, summary, issues, suggestions, severity, created_at, github_review_id, github_review_state FROM reviews WHERE github_review_id=0 ORDER BY created_at ASC",
+		"SELECT id, pr_id, cli_used, summary, issues, suggestions, severity, created_at, github_review_id, github_review_state, head_sha FROM reviews WHERE github_review_id=0 ORDER BY created_at ASC",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: list unpublished: %w", err)
@@ -75,7 +79,7 @@ func (s *Store) MarkReviewPublished(reviewID, ghReviewID int64, ghReviewState st
 // ListReviewsForPR returns all reviews for a given PR, ordered by created_at descending.
 func (s *Store) ListReviewsForPR(prID int64) ([]*Review, error) {
 	rows, err := s.db.Query(
-		"SELECT id, pr_id, cli_used, summary, issues, suggestions, severity, created_at, github_review_id, github_review_state FROM reviews WHERE pr_id = ? ORDER BY created_at DESC",
+		"SELECT id, pr_id, cli_used, summary, issues, suggestions, severity, created_at, github_review_id, github_review_state, head_sha FROM reviews WHERE pr_id = ? ORDER BY created_at DESC",
 		prID,
 	)
 	if err != nil {
@@ -96,7 +100,7 @@ func (s *Store) ListReviewsForPR(prID int64) ([]*Review, error) {
 // LatestReviewForPR returns the most recent review for a PR. Returns sql.ErrNoRows if none.
 func (s *Store) LatestReviewForPR(prID int64) (*Review, error) {
 	row := s.db.QueryRow(
-		"SELECT id, pr_id, cli_used, summary, issues, suggestions, severity, created_at, github_review_id, github_review_state FROM reviews WHERE pr_id = ? ORDER BY created_at DESC LIMIT 1",
+		"SELECT id, pr_id, cli_used, summary, issues, suggestions, severity, created_at, github_review_id, github_review_state, head_sha FROM reviews WHERE pr_id = ? ORDER BY created_at DESC LIMIT 1",
 		prID,
 	)
 	return scanReview(row)
@@ -122,7 +126,7 @@ func scanReview(s scanner) (*Review, error) {
 	var createdAt string
 	var err error
 	if err = s.Scan(&rev.ID, &rev.PRID, &rev.CLIUsed, &rev.Summary,
-		&rev.Issues, &rev.Suggestions, &rev.Severity, &createdAt, &rev.GitHubReviewID, &rev.GitHubReviewState); err != nil {
+		&rev.Issues, &rev.Suggestions, &rev.Severity, &createdAt, &rev.GitHubReviewID, &rev.GitHubReviewState, &rev.HeadSHA); err != nil {
 		return nil, fmt.Errorf("store: scan review: %w", err)
 	}
 	if rev.CreatedAt, err = time.Parse(sqliteTimeFormat, createdAt); err != nil {

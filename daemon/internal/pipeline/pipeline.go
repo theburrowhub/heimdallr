@@ -17,6 +17,13 @@ type DiffFetcher interface {
 	FetchDiff(repo string, number int) (string, error)
 }
 
+// HeadSHAResolver fetches a PR's current HEAD commit SHA. The Search Issues
+// API (used by Tier 2 to discover review requests) does not populate head.sha,
+// so the pipeline needs an explicit lookup before it can dedup by commit.
+type HeadSHAResolver interface {
+	GetPRHeadSHA(repo string, number int) (string, error)
+}
+
 // CLIExecutor detects and runs an AI CLI tool.
 type CLIExecutor interface {
 	Detect(primary, fallback string) (string, error)
@@ -47,6 +54,7 @@ type Pipeline struct {
 		DiffFetcher
 		GitHubReviewer
 		CommentFetcher
+		HeadSHAResolver
 	}
 	executor CLIExecutor
 	notify   Notifier
@@ -58,6 +66,7 @@ func New(s *store.Store, gh interface {
 	DiffFetcher
 	GitHubReviewer
 	CommentFetcher
+	HeadSHAResolver
 }, exec CLIExecutor, n Notifier) *Pipeline {
 	return &Pipeline{store: s, gh: gh, executor: exec, notify: n}
 }
@@ -156,6 +165,30 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 		return nil, fmt.Errorf("pipeline: fetch diff: %w", err)
 	}
 
+	// 2a. Authoritative dedup by HEAD commit SHA. The Tier 2/3 dedup uses
+	// updated_at — but any peer reviewer submitting a review (human or another
+	// heimdallm instance) bumps updated_at, which would otherwise cause us to
+	// re-review the same commit indefinitely (see theburrowhub/heimdallm#139).
+	// If the last stored review is for the same HEAD SHA, return it unchanged.
+	//
+	// The Search Issues API used by Tier 2 does not populate head.sha, so we
+	// resolve it on-demand. Resolver failure degrades gracefully — we fall
+	// through and run the review rather than block on a transient API error.
+	if pr.Head.SHA == "" {
+		if sha, err := p.gh.GetPRHeadSHA(pr.Repo, pr.Number); err != nil {
+			slog.Warn("pipeline: could not resolve HEAD SHA, skipping dedup guard",
+				"repo", pr.Repo, "pr", pr.Number, "err", err)
+		} else {
+			pr.Head.SHA = sha
+		}
+	}
+	prevReview, _ := p.store.LatestReviewForPR(prID)
+	if prevReview != nil && pr.Head.SHA != "" && prevReview.HeadSHA == pr.Head.SHA {
+		slog.Info("pipeline: skipping re-review, HEAD SHA unchanged",
+			"repo", pr.Repo, "pr", pr.Number, "head_sha", pr.Head.SHA)
+		return prevReview, nil
+	}
+
 	// 2b. Fetch PR comments for context (non-fatal: proceed without if unavailable)
 	prComments, err := p.gh.FetchComments(pr.Repo, pr.Number)
 	if err != nil {
@@ -166,7 +199,7 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 
 	// 2c. Build re-review context if a previous review exists for this PR.
 	var reviewCtx string
-	if prevReview, err := p.store.LatestReviewForPR(prID); err == nil && prevReview != nil {
+	if prevReview != nil {
 		reviewCtx = buildReviewContext(
 			prevReview.Issues,
 			prevReview.Severity,
@@ -238,6 +271,7 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 		Severity:       result.Severity,
 		CreatedAt:      time.Now().UTC(),
 		GitHubReviewID: 0, // will be set after GitHub publish
+		HeadSHA:        pr.Head.SHA,
 	}
 	rev.ID, err = p.store.InsertReview(rev)
 	if err != nil {

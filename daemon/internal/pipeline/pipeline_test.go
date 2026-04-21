@@ -44,6 +44,8 @@ func (f *fakeGH) FetchComments(repo string, number int) ([]github.Comment, error
 	return f.comments, nil
 }
 
+func (f *fakeGH) GetPRHeadSHA(repo string, number int) (string, error) { return "", nil }
+
 type fakeExec struct{}
 
 func (f *fakeExec) Detect(primary, fallback string) (string, error) {
@@ -142,6 +144,8 @@ func (f *fakeGHCommentsError) FetchComments(repo string, number int) ([]github.C
 	return nil, fmt.Errorf("network error")
 }
 
+func (f *fakeGHCommentsError) GetPRHeadSHA(repo string, number int) (string, error) { return "", nil }
+
 func TestPipeline_Run_CommentsInjectedIntoPrompt(t *testing.T) {
 	s, err := store.Open(":memory:")
 	if err != nil {
@@ -191,5 +195,184 @@ func TestPipeline_Run_CommentsFetchErrorIsNonFatal(t *testing.T) {
 	_, err = p.Run(pr, pipeline.RunOptions{Primary: "claude", Fallback: "gemini"})
 	if err != nil {
 		t.Fatalf("expected pipeline to succeed despite comments fetch error, got: %v", err)
+	}
+}
+
+// fakeGHWithHeadSHA resolves a HEAD SHA via GetPRHeadSHA, simulating the
+// real GitHub client — the Search Issues API used by Tier 2 does not return
+// head.sha, so the pipeline must hydrate it before the dedup guard can fire.
+type fakeGHWithHeadSHA struct {
+	diff   string
+	sha    string
+	shaErr error
+	// calls tracks GetPRHeadSHA invocations so tests can assert hydration
+	// only happens when pr.Head.SHA is empty.
+	shaCalls int
+	submits  int
+}
+
+func (f *fakeGHWithHeadSHA) FetchDiff(repo string, number int) (string, error) {
+	return f.diff, nil
+}
+func (f *fakeGHWithHeadSHA) SubmitReview(repo string, number int, body, event string) (int64, string, error) {
+	f.submits++
+	return 1, "COMMENTED", nil
+}
+func (f *fakeGHWithHeadSHA) PostComment(repo string, number int, body string) error { return nil }
+func (f *fakeGHWithHeadSHA) FetchComments(repo string, number int) ([]github.Comment, error) {
+	return nil, nil
+}
+func (f *fakeGHWithHeadSHA) GetPRHeadSHA(repo string, number int) (string, error) {
+	f.shaCalls++
+	return f.sha, f.shaErr
+}
+
+// TestPipeline_Run_HydratesHeadSHAWhenMissing covers the production path: the
+// Search Issues API doesn't populate head.sha, so Tier 2 hands the pipeline a
+// PR with Head.SHA == "". The pipeline must fetch it so the dedup guard and
+// the stored review row both record the correct SHA.
+func TestPipeline_Run_HydratesHeadSHAWhenMissing(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	gh := &fakeGHWithHeadSHA{diff: "+line", sha: "abc123"}
+	p := pipeline.New(s, gh, &fakeExec{}, &fakeNotify{})
+
+	pr := &github.PullRequest{
+		ID: 7, Number: 7, Title: "t", Repo: "org/repo",
+		User: github.User{Login: "alice"}, State: "open",
+		UpdatedAt: time.Now(), HTMLURL: "https://github.com/org/repo/pull/7",
+		// Head.SHA intentionally empty — mirrors Search API payload.
+	}
+	rev, err := p.Run(pr, pipeline.RunOptions{Primary: "claude", Fallback: "gemini"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gh.shaCalls != 1 {
+		t.Errorf("expected 1 GetPRHeadSHA call, got %d", gh.shaCalls)
+	}
+	if rev.HeadSHA != "abc123" {
+		t.Errorf("stored HeadSHA = %q, want %q", rev.HeadSHA, "abc123")
+	}
+
+	// Second run: the PR now has the SHA inline (as if hydrated upstream).
+	// Pipeline must NOT call GetPRHeadSHA again, and must skip on SHA match.
+	pr.Head.SHA = "abc123"
+	_, err = p.Run(pr, pipeline.RunOptions{Primary: "claude", Fallback: "gemini"})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if gh.shaCalls != 1 {
+		t.Errorf("GetPRHeadSHA called redundantly: %d", gh.shaCalls)
+	}
+	if gh.submits != 1 {
+		t.Errorf("SubmitReview called on same SHA: %d", gh.submits)
+	}
+}
+
+// fakeExecCounter records how many times Execute was called so tests can
+// assert whether the pipeline short-circuited before invoking the CLI.
+type fakeExecCounter struct {
+	calls int
+}
+
+func (f *fakeExecCounter) Detect(primary, fallback string) (string, error) {
+	return "fake_claude", nil
+}
+
+func (f *fakeExecCounter) Execute(cli, prompt string, _ executor.ExecOptions) (*executor.ReviewResult, error) {
+	f.calls++
+	return &executor.ReviewResult{Summary: "ok", Severity: "low"}, nil
+}
+
+// fakeGHCounter records SubmitReview calls so tests can verify no publish
+// happens on a skipped re-review.
+type fakeGHCounter struct {
+	diff     string
+	submits  int
+}
+
+func (f *fakeGHCounter) FetchDiff(repo string, number int) (string, error) { return f.diff, nil }
+func (f *fakeGHCounter) SubmitReview(repo string, number int, body, event string) (int64, string, error) {
+	f.submits++
+	return 1, "COMMENTED", nil
+}
+func (f *fakeGHCounter) PostComment(repo string, number int, body string) error { return nil }
+func (f *fakeGHCounter) FetchComments(repo string, number int) ([]github.Comment, error) { return nil, nil }
+func (f *fakeGHCounter) GetPRHeadSHA(repo string, number int) (string, error)            { return "", nil }
+
+// TestPipeline_Run_SkipsReviewOnSameHeadSHA is the regression guard for the
+// bot-feedback loop bug seen on theburrowhub/heimdallm#139: any review
+// submission bumps the PR's updated_at, so the timestamp-based dedup let
+// multiple bots re-review the same commit over and over. The authoritative
+// guard must be the HEAD commit SHA — if we've already reviewed this exact
+// commit, the pipeline must not run the CLI or publish a new review.
+func TestPipeline_Run_SkipsReviewOnSameHeadSHA(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	exec := &fakeExecCounter{}
+	gh := &fakeGHCounter{diff: "+line"}
+	p := pipeline.New(s, gh, exec, &fakeNotify{})
+
+	pr := &github.PullRequest{
+		ID: 42, Number: 42, Title: "Feature", Repo: "org/repo",
+		User: github.User{Login: "alice"}, State: "open",
+		UpdatedAt: time.Now(), HTMLURL: "https://github.com/org/repo/pull/42",
+		Head: github.Branch{SHA: "deadbeef"},
+	}
+
+	// First run — produces the initial review on commit deadbeef.
+	rev1, err := p.Run(pr, pipeline.RunOptions{Primary: "claude", Fallback: "gemini"})
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if rev1 == nil || rev1.HeadSHA != "deadbeef" {
+		t.Fatalf("first review HeadSHA = %q, want %q", func() string { if rev1 == nil { return "<nil>" }; return rev1.HeadSHA }(), "deadbeef")
+	}
+	if exec.calls != 1 || gh.submits != 1 {
+		t.Fatalf("first run: exec=%d submits=%d, want 1/1", exec.calls, gh.submits)
+	}
+
+	// Simulate another bot posting a review, bumping updated_at. HEAD SHA unchanged.
+	pr.UpdatedAt = time.Now().Add(5 * time.Minute)
+
+	// Second run on the same HEAD SHA — must short-circuit. No CLI call, no
+	// publish, no new review row.
+	rev2, err := p.Run(pr, pipeline.RunOptions{Primary: "claude", Fallback: "gemini"})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if exec.calls != 1 {
+		t.Errorf("executor called again on same SHA: calls=%d", exec.calls)
+	}
+	if gh.submits != 1 {
+		t.Errorf("SubmitReview called again on same SHA: submits=%d", gh.submits)
+	}
+	reviews, _ := s.ListReviewsForPR(rev1.PRID)
+	if len(reviews) != 1 {
+		t.Errorf("duplicate review row inserted on same SHA: got %d reviews", len(reviews))
+	}
+	if rev2 == nil || rev2.ID != rev1.ID {
+		t.Errorf("expected Run to return the existing review on same SHA; got rev2=%+v", rev2)
+	}
+
+	// Third run with a new HEAD SHA — must proceed normally.
+	pr.Head.SHA = "cafef00d"
+	_, err = p.Run(pr, pipeline.RunOptions{Primary: "claude", Fallback: "gemini"})
+	if err != nil {
+		t.Fatalf("third run: %v", err)
+	}
+	if exec.calls != 2 {
+		t.Errorf("executor not invoked on new SHA: calls=%d", exec.calls)
+	}
+	if gh.submits != 2 {
+		t.Errorf("SubmitReview not invoked on new SHA: submits=%d", gh.submits)
 	}
 }
