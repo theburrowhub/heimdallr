@@ -840,11 +840,12 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 	a.cfgMu.Lock()
 	c := *a.cfg
 	aiCfg := c.AIForRepo(pr.Repo)
+	localDirBase := c.GitHub.LocalDirBase
 	a.cfgMu.Unlock()
 	// /repos/<short-name> fallback when local_dir is unset (stat-based,
 	// keep outside the mutex). Lets HEIMDALLM_REPOS_DIR give every
 	// monitored repo full-repo context without a per-repo override.
-	aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, pr.Repo, c.GitHub.LocalDirBase)
+	aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, pr.Repo, localDirBase)
 
 	ghPR := &gh.PullRequest{
 		ID:        pr.ID,
@@ -907,10 +908,11 @@ func (a *tier2Adapter) ProcessRepo(ctx context.Context, repo string) (int, error
 			aiCfg.Primary = c.AI.Primary
 		}
 		agentCfg := c.AgentConfigFor(aiCfg.Primary)
+		localDirBase := c.GitHub.LocalDirBase
 		a.cfgMu.Unlock()
 		// /repos/<short-name> fallback when local_dir is unset (stat-based,
 		// keep outside the mutex).
-		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, issue.Repo, c.GitHub.LocalDirBase)
+		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, issue.Repo, localDirBase)
 
 		extraFlags := agentCfg.ExtraFlags
 		if extraFlags != "" {

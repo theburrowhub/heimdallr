@@ -1180,7 +1180,9 @@ func TestResolveLocalDir_LocalDirBase(t *testing.T) {
 	// Create temp dirs simulating workspace
 	base := t.TempDir()
 	repoDir := filepath.Join(base, "my-repo")
-	os.MkdirAll(repoDir, 0755)
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	got := ResolveLocalDir("", "org/my-repo", []string{base})
 	if got != repoDir {
@@ -1199,9 +1201,13 @@ func TestResolveLocalDir_BaseBeforeDefault(t *testing.T) {
 	base := t.TempDir()
 	defaultPath := t.TempDir()
 	repoDir := filepath.Join(base, "repo")
-	os.MkdirAll(repoDir, 0755)
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	defaultRepoDir := filepath.Join(defaultPath, "repo")
-	os.MkdirAll(defaultRepoDir, 0755)
+	if err := os.MkdirAll(defaultRepoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	old := DefaultReposMountPath
 	DefaultReposMountPath = defaultPath
@@ -1248,9 +1254,13 @@ func TestResolveLocalDir_MultipleBases(t *testing.T) {
 	group1 := t.TempDir()
 	group2 := t.TempDir()
 	// repo-a only in group1
-	os.MkdirAll(filepath.Join(group1, "repo-a"), 0755)
+	if err := os.MkdirAll(filepath.Join(group1, "repo-a"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	// repo-b only in group2
-	os.MkdirAll(filepath.Join(group2, "repo-b"), 0755)
+	if err := os.MkdirAll(filepath.Join(group2, "repo-b"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	bases := []string{group1, group2}
 
