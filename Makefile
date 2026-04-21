@@ -577,6 +577,72 @@ install-linux: _check-linux verify-linux
 	     echo "     export PATH=\"\$$HOME/.local/bin:\$$PATH\"" ;; \
 	esac
 
+# ── Native Linux uninstall ────────────────────────────────────────────────────
+#
+# Removes everything install-linux created under ~/.local/, but preserves
+# user configuration (~/.config/heimdallm) and runtime data
+# (~/.local/share/heimdallm) by default.
+#
+# Usage:
+#   make uninstall-linux              # app only — config and data preserved
+#   make uninstall-linux PURGE=1      # also wipes ~/.config + ~/.local/share state
+#
+# The PURGE flag mirrors Debian's `apt remove` vs. `apt purge` distinction.
+
+uninstall-linux: _check-linux
+	@echo "▶  Uninstalling Heimdallm from $$HOME/.local/..."
+	@# Stop running instances (best-effort — ignored if nothing is running,
+	@# prevents "Text file busy" on the bundle on step 5).
+	@pkill -f "$$HOME/.local/opt/heimdallm/heimdallm" 2>/dev/null || true
+	@pkill -f "$$HOME/.local/opt/heimdallm/heimdalld" 2>/dev/null || true
+	@rm -f "$$HOME/.local/share/heimdallm/ui.pid"
+	rm -f "$$HOME/.local/share/applications/com.theburrowhub.heimdallm.desktop"
+	@for SIZE in 48 128 256 512; do \
+	  rm -f "$$HOME/.local/share/icons/hicolor/$${SIZE}x$${SIZE}/apps/heimdallm.png"; \
+	done
+	@# Only remove the PATH shim if it's our symlink — never clobber an
+	@# unrelated file that happens to share the name.
+	@if [ -L "$$HOME/.local/bin/heimdallm" ]; then \
+	  TARGET=$$(readlink "$$HOME/.local/bin/heimdallm"); \
+	  case "$$TARGET" in \
+	    "$$HOME/.local/opt/heimdallm/"*) \
+	      rm -f "$$HOME/.local/bin/heimdallm"; \
+	      echo "↓  Removed $$HOME/.local/bin/heimdallm" ;; \
+	    *) \
+	      echo "⚠  $$HOME/.local/bin/heimdallm points to $$TARGET — leaving it alone." ;; \
+	  esac; \
+	elif [ -e "$$HOME/.local/bin/heimdallm" ]; then \
+	  echo "⚠  $$HOME/.local/bin/heimdallm exists but is not a symlink — leaving it alone."; \
+	fi
+	rm -rf "$$HOME/.local/opt/heimdallm"
+	@# Refresh launcher caches so the stale entry disappears from menus.
+	@command -v update-desktop-database >/dev/null 2>&1 && \
+	  update-desktop-database "$$HOME/.local/share/applications/" 2>/dev/null || true
+	@command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+	  gtk-update-icon-cache -q -t "$$HOME/.local/share/icons/hicolor/" 2>/dev/null || true
+	@if [ "$(PURGE)" = "1" ]; then \
+	  echo ""; \
+	  echo "⚠  PURGE=1 — wiping user config and runtime data..."; \
+	  if [ -d "$$HOME/.config/heimdallm" ]; then \
+	    rm -rf "$$HOME/.config/heimdallm"; \
+	    echo "    Removed $$HOME/.config/heimdallm"; \
+	  fi; \
+	  if [ -d "$$HOME/.local/share/heimdallm" ]; then \
+	    rm -rf "$$HOME/.local/share/heimdallm"; \
+	    echo "    Removed $$HOME/.local/share/heimdallm"; \
+	  fi; \
+	  echo ""; \
+	  echo "✅  Heimdallm fully uninstalled (config and data wiped)."; \
+	else \
+	  echo ""; \
+	  echo "✅  Heimdallm uninstalled (config and data preserved)."; \
+	  echo ""; \
+	  echo "    Config: $$HOME/.config/heimdallm/"; \
+	  echo "    Data:   $$HOME/.local/share/heimdallm/"; \
+	  echo ""; \
+	  echo "    To wipe these too: make uninstall-linux PURGE=1"; \
+	fi
+
 clean:
 	cd daemon && make clean
 	cd flutter_app && flutter clean
