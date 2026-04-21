@@ -13,13 +13,9 @@ import 'platform_services.dart';
 class DesktopPlatformServices implements PlatformServices {
   DesktopPlatformServices({
     int apiPort = 7842,
-    String? tokenPath,
-  })  : _apiPort = apiPort,
-        _tokenPath = tokenPath;
+  }) : _apiPort = apiPort;
 
   final int _apiPort;
-  // ignore: unused_field
-  final String? _tokenPath;
 
   @override
   String get apiBaseUrl => 'http://127.0.0.1:$_apiPort';
