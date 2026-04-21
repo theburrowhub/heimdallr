@@ -162,6 +162,12 @@ type fakeExec struct {
 	lastPrompt string
 	lastOpts   executor.ExecOptions
 	lastCLI    string
+
+	// rawOutputs, when non-nil, supplies successive return values.
+	// Index advances with each ExecuteRaw call. Falls back to rawOutput
+	// when exhausted.
+	rawOutputs [][]byte
+	callCount  int
 }
 
 func (f *fakeExec) Detect(primary, fallback string) (string, error) {
@@ -178,8 +184,13 @@ func (f *fakeExec) ExecuteRaw(cli, prompt string, opts executor.ExecOptions) ([]
 	f.lastCLI = cli
 	f.lastPrompt = prompt
 	f.lastOpts = opts
+	idx := f.callCount
+	f.callCount++
 	if f.rawErr != nil {
 		return nil, f.rawErr
+	}
+	if f.rawOutputs != nil && idx < len(f.rawOutputs) {
+		return f.rawOutputs[idx], nil
 	}
 	return f.rawOutput, nil
 }
@@ -218,13 +229,16 @@ type fakeGit struct {
 	commitCalls   []string // commit messages
 	pushCalls     []string // branches pushed
 	deleteCalls   []string // branches deleted from remote
+	diffCalls     []string // base refs passed to Diff
 	hasChanges    bool
+	diffOutput    string
 
 	checkoutErr   error
 	hasChangesErr error
 	commitErr     error
 	pushErr       error
 	deleteErr     error
+	diffErr       error
 }
 
 func (g *fakeGit) CheckoutNewBranch(ctx context.Context, dir, repo, branch, base, token string) error {
@@ -245,6 +259,13 @@ func (g *fakeGit) Push(ctx context.Context, dir, repo, branch, token string) err
 func (g *fakeGit) DeleteRemoteBranch(ctx context.Context, dir, repo, branch, token string) error {
 	g.deleteCalls = append(g.deleteCalls, branch)
 	return g.deleteErr
+}
+func (g *fakeGit) Diff(ctx context.Context, dir, base string) (string, error) {
+	g.diffCalls = append(g.diffCalls, base)
+	if g.diffErr != nil {
+		return "", g.diffErr
+	}
+	return g.diffOutput, nil
 }
 
 // validResult is a sample JSON triage payload returned by the fake executor.
@@ -742,6 +763,9 @@ func (g *contextCheckingGit) Push(ctx context.Context, dir, repo, branch, token 
 func (g *contextCheckingGit) DeleteRemoteBranch(ctx context.Context, dir, repo, branch, token string) error {
 	return nil
 }
+func (g *contextCheckingGit) Diff(ctx context.Context, dir, base string) (string, error) {
+	return "", nil
+}
 
 func TestPipeline_AutoImplementUsesCustomPromptOverride(t *testing.T) {
 	gh := &fakeGH{defaultBranch: "main", createPRNumber: 123}
@@ -811,6 +835,9 @@ func (g *tokenSniffingGit) Push(ctx context.Context, dir, repo, branch, token st
 }
 func (g *tokenSniffingGit) DeleteRemoteBranch(ctx context.Context, dir, repo, branch, token string) error {
 	return nil
+}
+func (g *tokenSniffingGit) Diff(ctx context.Context, dir, base string) (string, error) {
+	return "", nil
 }
 
 func TestPipeline_IgnoreModeRejectedWithItsOwnError(t *testing.T) {
@@ -1055,6 +1082,135 @@ func TestAutoImplement_SkipsEmptyMetadata(t *testing.T) {
 	}
 	if len(gh.assigneesCalls) != 0 {
 		t.Errorf("expected 0 assignees calls, got %d", len(gh.assigneesCalls))
+	}
+}
+
+// ── LLM-generated PR descriptions (#158) ────────────────────────────────────
+
+func TestPipeline_AutoImplementGeneratesPRDescription(t *testing.T) {
+	descJSON := `{"title":"feat: add Bubbletea TUI dashboard","body":"## Summary\nAdds a TUI.\n\n## Changes\n- cli/main.go: entry point"}`
+	gh := &fakeGH{defaultBranch: "main", createPRNumber: 42}
+	exec := &fakeExec{
+		detectCLI:  "claude",
+		rawOutputs: [][]byte{[]byte("done"), []byte(descJSON)},
+	}
+	git := &fakeGit{hasChanges: true, diffOutput: "diff --git a/cli/main.go ..."}
+	broker := &fakeBroker{}
+	p := issues.New(&fakeStore{}, gh, exec, git, broker, nil)
+
+	opts := autoImplementRunOptions()
+	opts.GeneratePRDescription = true
+
+	rev, err := p.Run(context.Background(), newIssue(config.IssueModeDevelop), opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if rev.PRCreated != 42 {
+		t.Errorf("PRCreated=%d, want 42", rev.PRCreated)
+	}
+
+	// The LLM-generated title must be used in CreatePR.
+	if len(gh.createPRCalls) != 1 {
+		t.Fatalf("expected 1 CreatePR, got %d", len(gh.createPRCalls))
+	}
+	call := gh.createPRCalls[0]
+	if call.Title != "feat: add Bubbletea TUI dashboard" {
+		t.Errorf("PR title = %q, want LLM-generated title", call.Title)
+	}
+	if !strings.Contains(call.Body, "Adds a TUI") {
+		t.Errorf("PR body missing LLM summary: %q", call.Body)
+	}
+	// Closes #N must always be appended.
+	if !strings.Contains(call.Body, "Closes #7") {
+		t.Errorf("PR body missing Closes #7: %q", call.Body)
+	}
+
+	// The diff was obtained using FETCH_HEAD as base.
+	if len(git.diffCalls) != 1 || git.diffCalls[0] != "FETCH_HEAD" {
+		t.Errorf("Diff base = %v, want [FETCH_HEAD]", git.diffCalls)
+	}
+
+	// Two ExecuteRaw calls: implement + description.
+	if exec.callCount != 2 {
+		t.Errorf("ExecuteRaw called %d times, want 2", exec.callCount)
+	}
+}
+
+func TestPipeline_AutoImplementDescriptionFallsBackOnLLMError(t *testing.T) {
+	gh := &fakeGH{defaultBranch: "main", createPRNumber: 55}
+	exec := &fakeExec{
+		detectCLI:  "claude",
+		rawOutputs: [][]byte{[]byte("done"), []byte("not valid json")},
+	}
+	git := &fakeGit{hasChanges: true, diffOutput: "some diff"}
+	p := issues.New(&fakeStore{}, gh, exec, git, &fakeBroker{}, nil)
+
+	opts := autoImplementRunOptions()
+	opts.GeneratePRDescription = true
+
+	rev, err := p.Run(context.Background(), newIssue(config.IssueModeDevelop), opts)
+	if err != nil {
+		t.Fatalf("run should succeed despite description failure: %v", err)
+	}
+	if rev.PRCreated != 55 {
+		t.Errorf("PRCreated=%d, want 55", rev.PRCreated)
+	}
+
+	// Falls back to template title.
+	call := gh.createPRCalls[0]
+	if !strings.Contains(call.Title, "feat: implement #7") {
+		t.Errorf("fallback title not used: %q", call.Title)
+	}
+	if !strings.Contains(call.Body, "Auto-generated by Heimdallm") {
+		t.Errorf("fallback body not used: %q", call.Body)
+	}
+}
+
+func TestPipeline_AutoImplementDescriptionFallsBackOnDiffError(t *testing.T) {
+	gh := &fakeGH{defaultBranch: "main", createPRNumber: 66}
+	exec := &fakeExec{detectCLI: "claude", rawOutput: []byte("done")}
+	git := &fakeGit{hasChanges: true, diffErr: errors.New("FETCH_HEAD missing")}
+	p := issues.New(&fakeStore{}, gh, exec, git, &fakeBroker{}, nil)
+
+	opts := autoImplementRunOptions()
+	opts.GeneratePRDescription = true
+
+	rev, err := p.Run(context.Background(), newIssue(config.IssueModeDevelop), opts)
+	if err != nil {
+		t.Fatalf("run should succeed despite diff failure: %v", err)
+	}
+	if rev.PRCreated != 66 {
+		t.Errorf("PRCreated=%d, want 66", rev.PRCreated)
+	}
+
+	// Falls back to template.
+	call := gh.createPRCalls[0]
+	if !strings.Contains(call.Title, "feat: implement #7") {
+		t.Errorf("fallback title not used: %q", call.Title)
+	}
+}
+
+func TestPipeline_AutoImplementDescriptionNotCalledWhenDisabled(t *testing.T) {
+	gh := &fakeGH{defaultBranch: "main", createPRNumber: 77}
+	exec := &fakeExec{detectCLI: "claude", rawOutput: []byte("done")}
+	git := &fakeGit{hasChanges: true}
+	p := issues.New(&fakeStore{}, gh, exec, git, &fakeBroker{}, nil)
+
+	opts := autoImplementRunOptions()
+	opts.GeneratePRDescription = false // default
+
+	_, err := p.Run(context.Background(), newIssue(config.IssueModeDevelop), opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Only 1 ExecuteRaw call (the implement call), no description call.
+	if exec.callCount != 1 {
+		t.Errorf("ExecuteRaw called %d times, want 1 (no description call)", exec.callCount)
+	}
+	// No diff call.
+	if len(git.diffCalls) != 0 {
+		t.Errorf("Diff should not be called when disabled, got %v", git.diffCalls)
 	}
 }
 

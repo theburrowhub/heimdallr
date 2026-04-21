@@ -239,6 +239,45 @@ func buildDefaultImplementPrompt(ctx PromptContext, customInstructions string) s
 	return sb.String()
 }
 
+// maxDiffBytesForDescription caps the diff sent to the LLM for PR description
+// generation. Matches the PR review prompt limit (32 KB).
+const maxDiffBytesForDescription = 32 * 1024
+
+// BuildPRDescriptionPrompt builds the prompt for the second LLM call that
+// generates a rich PR title and description from the implementation diff.
+// The LLM must respond with a JSON object: {"title": "...", "body": "..."}.
+func BuildPRDescriptionPrompt(issueNumber int, issueTitle, diff string) string {
+	var sb strings.Builder
+
+	sb.WriteString("You just implemented changes for a GitHub issue.\n\n")
+	sb.WriteString(fmt.Sprintf("Issue #%d: %s\n\n", issueNumber, issueTitle))
+
+	if len(diff) > maxDiffBytesForDescription {
+		diff = diff[:maxDiffBytesForDescription] + "\n... (diff truncated)"
+	}
+
+	sb.WriteString("Here is the diff of what you implemented:\n")
+	sb.WriteString("<diff>\n")
+	sb.WriteString(diff)
+	sb.WriteString("\n</diff>\n\n")
+
+	sb.WriteString("Write a pull request title and description.\n\n")
+	sb.WriteString("Guidelines:\n")
+	sb.WriteString("- Title: concise, conventional commit style (e.g. 'feat: add CLI client with Bubbletea TUI dashboard')\n")
+	sb.WriteString("- Summary: 2-3 sentences explaining what was implemented and why\n")
+	sb.WriteString("- Changes: bullet list of key files and their purpose\n")
+	sb.WriteString("- Test plan: how to verify the changes work\n")
+	sb.WriteString("- Notes: caveats or follow-ups, if any\n\n")
+	sb.WriteString("Return a single JSON object, and nothing else:\n")
+	sb.WriteString("{\n")
+	sb.WriteString(`  "title": "concise conventional commit title",` + "\n")
+	sb.WriteString(`  "body": "full PR description in Markdown"` + "\n")
+	sb.WriteString("}\n")
+	sb.WriteString("Do not wrap the JSON in prose or code fences.\n")
+
+	return sb.String()
+}
+
 // formatComments renders the comment thread as a prompt section, trimming to
 // the configured byte cap. Empty input returns empty string so the prompt
 // does not show an empty "Existing discussion:" header.
