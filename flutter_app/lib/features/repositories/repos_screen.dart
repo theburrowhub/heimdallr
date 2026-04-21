@@ -32,19 +32,34 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
   Timer? _savedResetTimer;
 
   final Set<String> _selected = {};
+  Set<String> _dismissedNew = {};
 
   @override
   void initState() {
     super.initState();
     SharedPreferences.getInstance().then((p) {
-      final v = p.getString('repos_view');
-      if (v != null && mounted) setState(() => _viewMode = v);
+      if (!mounted) return;
+      setState(() {
+        _viewMode = p.getString('repos_view') ?? 'list';
+        _dismissedNew = (p.getStringList('repos_dismissed_new') ?? []).toSet();
+      });
     });
   }
 
   void _setViewMode(String v) {
     setState(() => _viewMode = v);
     SharedPreferences.getInstance().then((p) => p.setString('repos_view', v));
+  }
+
+  bool _shouldShowNew(String repo, RepoConfig c) =>
+      c.firstSeenAt != null && !_dismissedNew.contains(repo);
+
+  void _dismissNew(String repo) {
+    if (_dismissedNew.contains(repo)) return;
+    setState(() => _dismissedNew = {..._dismissedNew, repo});
+    SharedPreferences.getInstance().then(
+      (p) => p.setStringList('repos_dismissed_new', _dismissedNew.toList()),
+    );
   }
 
   void _toggleSelection(String repo) {
@@ -248,6 +263,8 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
                           appConfig: config,
                           selected: _selected,
                           onSelectionToggle: _toggleSelection,
+                          showNewFor: _shouldShowNew,
+                          onDismissNew: _dismissNew,
                         )
                       : _RepoListWithSections(
                           repos: filtered,
@@ -256,6 +273,8 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
                           onChanged: _onChange,
                           selected: _selected,
                           onSelectionToggle: _toggleSelection,
+                          showNewFor: _shouldShowNew,
+                          onDismissNew: _dismissNew,
                         ),
             ),
           ],
@@ -274,6 +293,8 @@ class _RepoListWithSections extends ConsumerStatefulWidget {
   final void Function(String repo, RepoConfig rc) onChanged;
   final Set<String> selected;
   final ValueChanged<String> onSelectionToggle;
+  final bool Function(String repo, RepoConfig config) showNewFor;
+  final ValueChanged<String> onDismissNew;
 
   const _RepoListWithSections({
     required this.repos,
@@ -282,6 +303,8 @@ class _RepoListWithSections extends ConsumerStatefulWidget {
     required this.onChanged,
     required this.selected,
     required this.onSelectionToggle,
+    required this.showNewFor,
+    required this.onDismissNew,
   });
 
   @override
@@ -373,8 +396,12 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
             config: widget.configs[r]!,
             appConfig: widget.appConfig,
             selected: widget.selected.contains(r),
+            showNew: widget.showNewFor(r, widget.configs[r]!),
             onSelectionToggle: () => widget.onSelectionToggle(r),
-            onTap: () => context.push('/repos/${Uri.encodeComponent(r)}'),
+            onTap: () {
+              widget.onDismissNew(r);
+              context.push('/repos/${Uri.encodeComponent(r)}');
+            },
           ));
         }
       }
@@ -464,6 +491,8 @@ class _ReposGrid extends StatelessWidget {
   final AppConfig appConfig;
   final Set<String> selected;
   final ValueChanged<String> onSelectionToggle;
+  final bool Function(String repo, RepoConfig config) showNewFor;
+  final ValueChanged<String> onDismissNew;
 
   const _ReposGrid({
     required this.repos,
@@ -471,6 +500,8 @@ class _ReposGrid extends StatelessWidget {
     required this.appConfig,
     required this.selected,
     required this.onSelectionToggle,
+    required this.showNewFor,
+    required this.onDismissNew,
   });
 
   @override
@@ -512,8 +543,12 @@ class _ReposGrid extends StatelessWidget {
                     config: configs[r]!,
                     appConfig: appConfig,
                     selected: selected.contains(r),
+                    showNew: showNewFor(r, configs[r]!),
                     onSelectionToggle: () => onSelectionToggle(r),
-                    onTap: () => ctx.push('/repos/${Uri.encodeComponent(r)}'),
+                    onTap: () {
+                      onDismissNew(r);
+                      ctx.push('/repos/${Uri.encodeComponent(r)}');
+                    },
                   );
                 },
                 childCount: monitored.length,
@@ -553,8 +588,12 @@ class _ReposGrid extends StatelessWidget {
                     config: configs[r]!,
                     appConfig: appConfig,
                     selected: selected.contains(r),
+                    showNew: showNewFor(r, configs[r]!),
                     onSelectionToggle: () => onSelectionToggle(r),
-                    onTap: () => ctx.push('/repos/${Uri.encodeComponent(r)}'),
+                    onTap: () {
+                      onDismissNew(r);
+                      ctx.push('/repos/${Uri.encodeComponent(r)}');
+                    },
                   );
                 },
                 childCount: disabled.length,

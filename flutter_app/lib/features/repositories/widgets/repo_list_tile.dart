@@ -10,6 +10,7 @@ class RepoListTile extends StatelessWidget {
   final RepoConfig config;
   final AppConfig appConfig;
   final bool selected;
+  final bool showNew;
   final VoidCallback onSelectionToggle;
   final VoidCallback onTap;
 
@@ -19,6 +20,7 @@ class RepoListTile extends StatelessWidget {
     required this.config,
     required this.appConfig,
     required this.selected,
+    required this.showNew,
     required this.onSelectionToggle,
     required this.onTap,
   });
@@ -81,14 +83,24 @@ class RepoListTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      repo,
-                      style: TextStyle(
-                        fontWeight:
-                            config.isMonitored ? FontWeight.w600 : FontWeight.normal,
-                        color: config.isMonitored ? null : Colors.grey,
+                    Row(children: [
+                      Flexible(
+                        child: Text(
+                          repo,
+                          style: TextStyle(
+                            fontWeight: config.isMonitored
+                                ? FontWeight.w600
+                                : FontWeight.normal,
+                            color: config.isMonitored ? null : Colors.grey,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
+                      if (showNew) ...[
+                        const SizedBox(width: 6),
+                        const _NewBadge(),
+                      ],
+                    ]),
                     const SizedBox(height: 2),
                     Row(children: [
                       Icon(
@@ -184,6 +196,30 @@ class _CheckboxIcon extends StatelessWidget {
       child: selected
           ? const Icon(Icons.check, size: 12, color: Colors.white)
           : null,
+    );
+  }
+}
+
+class _NewBadge extends StatelessWidget {
+  const _NewBadge();
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+      decoration: BoxDecoration(
+        color: primary.withOpacity(0.22),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        'NEW',
+        style: TextStyle(
+          color: primary,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.4,
+        ),
+      ),
     );
   }
 }

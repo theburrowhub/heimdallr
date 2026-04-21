@@ -27,6 +27,7 @@ void main() {
       config: const RepoConfig(prEnabled: true, localDir: '/tmp/heimdallm'),
       appConfig: appConfig,
       selected: false,
+      showNew: false,
       onSelectionToggle: () {},
       onTap: () {},
     )));
@@ -40,6 +41,7 @@ void main() {
       config: const RepoConfig(prEnabled: true),
       appConfig: appConfig,
       selected: false,
+      showNew: false,
       onSelectionToggle: () => toggled = true,
       onTap: () {},
     )));
@@ -53,10 +55,40 @@ void main() {
       config: const RepoConfig(prEnabled: true),
       appConfig: appConfig,
       selected: true,
+      showNew: false,
       onSelectionToggle: () {},
       onTap: () {},
     )));
     final card = tester.widget<Card>(find.byType(Card));
     expect(card.color, isNotNull);
+  });
+
+  testWidgets('shows NEW badge when showNew=true', (tester) async {
+    await tester.pumpWidget(_host(RepoListTile(
+      repo: 'a/b',
+      config: RepoConfig(
+        prEnabled: true,
+        firstSeenAt: DateTime.now(),
+      ),
+      appConfig: appConfig,
+      selected: false,
+      showNew: true,
+      onSelectionToggle: () {},
+      onTap: () {},
+    )));
+    expect(find.text('NEW'), findsOneWidget);
+  });
+
+  testWidgets('hides NEW badge when showNew=false', (tester) async {
+    await tester.pumpWidget(_host(RepoListTile(
+      repo: 'a/b',
+      config: const RepoConfig(prEnabled: true),
+      appConfig: appConfig,
+      selected: false,
+      showNew: false,
+      onSelectionToggle: () {},
+      onTap: () {},
+    )));
+    expect(find.text('NEW'), findsNothing);
   });
 }

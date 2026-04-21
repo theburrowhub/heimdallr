@@ -8,6 +8,7 @@ class RepoGridTile extends StatelessWidget {
   final RepoConfig config;
   final AppConfig appConfig;
   final bool selected;
+  final bool showNew;
   final VoidCallback onSelectionToggle;
   final VoidCallback onTap;
 
@@ -17,6 +18,7 @@ class RepoGridTile extends StatelessWidget {
     required this.config,
     required this.appConfig,
     required this.selected,
+    required this.showNew,
     required this.onSelectionToggle,
     required this.onTap,
   });
@@ -87,15 +89,25 @@ class RepoGridTile extends StatelessWidget {
               ),
             ]),
             const SizedBox(height: 10),
-            Text(
-              name,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: config.isMonitored ? FontWeight.w600 : FontWeight.w500,
-                color: config.isMonitored ? null : Colors.grey.shade500,
+            Row(children: [
+              Flexible(
+                child: Text(
+                  name,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: config.isMonitored
+                        ? FontWeight.w600
+                        : FontWeight.w500,
+                    color: config.isMonitored ? null : Colors.grey.shade500,
+                  ),
+                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                ),
               ),
-              maxLines: 2, overflow: TextOverflow.ellipsis,
-            ),
+              if (showNew) ...[
+                const SizedBox(width: 4),
+                const _NewBadge(),
+              ],
+            ]),
             const SizedBox(height: 2),
             Text(
               org,
@@ -172,5 +184,29 @@ class RepoGridTile extends StatelessWidget {
             ? 'Source: inherited from global issue tracking'
             : 'Source: globally disabled';
     }
+  }
+}
+
+class _NewBadge extends StatelessWidget {
+  const _NewBadge();
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+      decoration: BoxDecoration(
+        color: primary.withOpacity(0.22),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        'NEW',
+        style: TextStyle(
+          color: primary,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.4,
+        ),
+      ),
+    );
   }
 }

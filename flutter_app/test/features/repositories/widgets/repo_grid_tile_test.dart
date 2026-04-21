@@ -23,6 +23,7 @@ void main() {
       config: const RepoConfig(prEnabled: true),
       appConfig: appConfig,
       selected: false,
+      showNew: false,
       onSelectionToggle: () {},
       onTap: () {},
     )));
@@ -38,6 +39,7 @@ void main() {
       config: const RepoConfig(prEnabled: true),
       appConfig: appConfig,
       selected: false,
+      showNew: false,
       onSelectionToggle: () {},
       onTap: () => tapped = true,
     )));
