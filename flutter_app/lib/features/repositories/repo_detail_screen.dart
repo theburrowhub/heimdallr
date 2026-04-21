@@ -25,6 +25,8 @@ class RepoDetailScreen extends ConsumerStatefulWidget {
 
 class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
   RepoConfig _config = const RepoConfig();
+  // ignore: unused_field
+  RepoConfig _previousConfig = const RepoConfig();
   bool _initialized = false;
   Timer? _debounce;
   List<String> _repoLabels = [];
@@ -40,6 +42,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
     if (_initialized) return;
     _initialized = true;
     _config = config.repoConfigs[widget.repoName] ?? const RepoConfig();
+    _previousConfig = _config;
     _loadRepoMeta();
   }
 
@@ -62,23 +65,132 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
   }
 
   void _update(RepoConfig updated) {
+    final previous = _config;
     setState(() => _config = updated);
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 800), _autoSave);
+    _debounce = Timer(const Duration(milliseconds: 800), () => _autoSave(previous));
   }
 
-  Future<void> _autoSave() async {
-    final current = ref.read(configNotifierProvider).valueOrNull;
-    if (current == null) return;
-    final updatedRepos = Map<String, RepoConfig>.from(current.repoConfigs);
-    updatedRepos[widget.repoName] = _config;
-    final updated = current.copyWith(repoConfigs: updatedRepos);
+  Future<void> _autoSave(RepoConfig previous) async {
+    final api = ref.read(apiClientProvider);
     try {
-      await ref.read(configNotifierProvider.notifier).save(updated);
+      final repoDiff = _computeRepoDiff(previous, _config);
+      Map<String, dynamic>? lastResponse;
+      if (repoDiff.isNotEmpty) {
+        lastResponse = await api.patchRepoConfig(widget.repoName, repoDiff);
+      }
+
+      final monitoringChanged = previous.isMonitored != _config.isMonitored;
+      if (monitoringChanged) {
+        final current = ref.read(configNotifierProvider).valueOrNull;
+        if (current != null) {
+          final updatedRepos = Map<String, RepoConfig>.from(current.repoConfigs);
+          updatedRepos[widget.repoName] = _config;
+          final monitored = updatedRepos.entries
+              .where((e) => e.value.isMonitored)
+              .map((e) => e.key)
+              .toList()..sort();
+          final nonMonitored = updatedRepos.entries
+              .where((e) => !e.value.isMonitored)
+              .map((e) => e.key)
+              .toList()..sort();
+          lastResponse = await api.patchConfig({
+            'github': {
+              'repositories': monitored,
+              'non_monitored': nonMonitored,
+            },
+          });
+        }
+      }
+
+      if (lastResponse != null) {
+        ref.read(configNotifierProvider.notifier).updateFromServer(lastResponse);
+      }
+      _previousConfig = _config;
       if (mounted) showToast(context, 'Saved');
     } catch (e) {
       if (mounted) showToast(context, 'Error: $e', isError: true);
     }
+  }
+
+  Future<void> _resetField(String fieldPath) async {
+    final api = ref.read(apiClientProvider);
+    try {
+      final freshJson = await api.deleteRepoField(widget.repoName, fieldPath);
+      ref.read(configNotifierProvider.notifier).updateFromServer(freshJson);
+      final freshConfig = AppConfig.fromJson(freshJson);
+      setState(() {
+        _config = freshConfig.repoConfigs[widget.repoName] ?? const RepoConfig();
+        _previousConfig = _config;
+      });
+      if (mounted) showToast(context, 'Reset to global');
+    } catch (e) {
+      if (mounted) showToast(context, 'Error: $e', isError: true);
+    }
+  }
+
+  Map<String, dynamic> _computeRepoDiff(RepoConfig old, RepoConfig updated) {
+    final diff = <String, dynamic>{};
+    if (old.aiPrimary != updated.aiPrimary) diff['primary'] = updated.aiPrimary ?? '';
+    if (old.aiFallback != updated.aiFallback) diff['fallback'] = updated.aiFallback ?? '';
+    if (old.reviewMode != updated.reviewMode) diff['review_mode'] = updated.reviewMode ?? '';
+    if (old.promptId != updated.promptId) diff['prompt'] = updated.promptId ?? '';
+    if (old.localDir != updated.localDir) diff['local_dir'] = updated.localDir ?? '';
+    if (old.prAssignee != updated.prAssignee) diff['pr_assignee'] = updated.prAssignee ?? '';
+    if (old.prDraft != updated.prDraft && updated.prDraft != null) diff['pr_draft'] = updated.prDraft!;
+    if (old.developPromptId != updated.developPromptId) diff['implement_prompt'] = updated.developPromptId ?? '';
+
+    if (!_listsEqual(old.prReviewers, updated.prReviewers)) {
+      diff['pr_reviewers'] = updated.prReviewers ?? <String>[];
+    }
+    if (!_listsEqual(old.prLabels, updated.prLabels)) {
+      diff['pr_labels'] = updated.prLabels ?? <String>[];
+    }
+
+    final itDiff = <String, dynamic>{};
+    if (old.itEnabled != updated.itEnabled && updated.itEnabled != null) {
+      itDiff['enabled'] = updated.itEnabled!;
+    }
+    if (old.devEnabled != updated.devEnabled && updated.devEnabled != null) {
+      itDiff['develop_enabled'] = updated.devEnabled!;
+    }
+    if (old.issueFilterMode != updated.issueFilterMode) {
+      itDiff['filter_mode'] = updated.issueFilterMode ?? '';
+    }
+    if (old.issueDefaultAction != updated.issueDefaultAction) {
+      itDiff['default_action'] = updated.issueDefaultAction ?? '';
+    }
+    if (old.issuePromptId != updated.issuePromptId) {
+      itDiff['issue_prompt'] = updated.issuePromptId ?? '';
+    }
+    if (!_listsEqual(old.reviewOnlyLabels, updated.reviewOnlyLabels)) {
+      itDiff['review_only_labels'] = updated.reviewOnlyLabels ?? <String>[];
+    }
+    if (!_listsEqual(old.skipLabels, updated.skipLabels)) {
+      itDiff['skip_labels'] = updated.skipLabels ?? <String>[];
+    }
+    if (!_listsEqual(old.developLabels, updated.developLabels)) {
+      itDiff['develop_labels'] = updated.developLabels ?? <String>[];
+    }
+    if (!_listsEqual(old.issueOrganizations, updated.issueOrganizations)) {
+      itDiff['organizations'] = updated.issueOrganizations ?? <String>[];
+    }
+    if (!_listsEqual(old.issueAssignees, updated.issueAssignees)) {
+      itDiff['assignees'] = updated.issueAssignees ?? <String>[];
+    }
+
+    if (itDiff.isNotEmpty) diff['issue_tracking'] = itDiff;
+    return diff;
+  }
+
+  bool _listsEqual(List<String>? a, List<String>? b) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return false;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -196,6 +308,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['claude', 'gemini', 'codex'],
                     onChanged: (v) =>
                         _update(_config.copyWith(aiPrimary: v)),
+                    onReset: () => _resetField('primary'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -207,6 +320,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['claude', 'gemini', 'codex'],
                     onChanged: (v) =>
                         _update(_config.copyWith(aiFallback: v)),
+                    onReset: () => _resetField('fallback'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -216,6 +330,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['single', 'multi'],
                     onChanged: (v) =>
                         _update(_config.copyWith(reviewMode: v)),
+                    onReset: () => _resetField('review_mode'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -225,6 +340,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: prompts.map((p) => p.id).toList(),
                     onChanged: (v) =>
                         _update(_config.copyWith(promptId: v)),
+                    onReset: () => _resetField('prompt'),
                   ),
                 ], accent: FeaturePalette.prReview),
 
@@ -251,7 +367,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     isOverridden: _config.reviewOnlyLabels != null,
                     globalHint: _joinList(appConfig.issueTracking.reviewOnlyLabels),
                     onChanged: (v) => _update(_config.copyWith(reviewOnlyLabels: v)),
-                    onReset: () => _update(_config.copyWith(reviewOnlyLabels: null)),
+                    onReset: () => _resetField('issue_tracking/review_only_labels'),
                   ),
                   const SizedBox(height: 10),
                   AutocompleteChipField(
@@ -262,7 +378,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     isOverridden: _config.skipLabels != null,
                     globalHint: _joinList(appConfig.issueTracking.skipLabels),
                     onChanged: (v) => _update(_config.copyWith(skipLabels: v)),
-                    onReset: () => _update(_config.copyWith(skipLabels: null)),
+                    onReset: () => _resetField('issue_tracking/skip_labels'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -273,6 +389,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['exclusive', 'inclusive'],
                     onChanged: (v) => _update(
                         _config.copyWith(issueFilterMode: v)),
+                    onReset: () => _resetField('issue_tracking/filter_mode'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -283,6 +400,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['ignore', 'review_only'],
                     onChanged: (v) => _update(
                         _config.copyWith(issueDefaultAction: v)),
+                    onReset: () => _resetField('issue_tracking/default_action'),
                   ),
                   const SizedBox(height: 10),
                   OverrideTextField(
@@ -302,7 +420,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     isOverridden: _config.issueAssignees != null,
                     globalHint: _joinList(appConfig.issueTracking.assignees),
                     onChanged: (v) => _update(_config.copyWith(issueAssignees: v)),
-                    onReset: () => _update(_config.copyWith(issueAssignees: null)),
+                    onReset: () => _resetField('issue_tracking/assignees'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -312,6 +430,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: prompts.map((p) => p.id).toList(),
                     onChanged: (v) =>
                         _update(_config.copyWith(issuePromptId: v)),
+                    onReset: () => _resetField('issue_tracking/issue_prompt'),
                   ),
                 ], accent: FeaturePalette.issueTracking),
 
@@ -338,7 +457,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     isOverridden: _config.developLabels != null,
                     globalHint: _joinList(appConfig.issueTracking.developLabels),
                     onChanged: (v) => _update(_config.copyWith(developLabels: v)),
-                    onReset: () => _update(_config.copyWith(developLabels: null)),
+                    onReset: () => _resetField('issue_tracking/develop_labels'),
                   ),
                   const SizedBox(height: 10),
                   AutocompleteChipField(
@@ -348,7 +467,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     availableOptions: _repoCollaborators,
                     isOverridden: _config.prReviewers != null,
                     onChanged: (v) => _update(_config.copyWith(prReviewers: v)),
-                    onReset: () => _update(_config.copyWith(prReviewers: null)),
+                    onReset: () => _resetField('pr_reviewers'),
                   ),
                   const SizedBox(height: 10),
                   AutocompleteChipField(
@@ -359,7 +478,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     isOverridden: _config.prAssignee != null,
                     onChanged: (v) => _update(_config.copyWith(
                         prAssignee: v != null && v.isNotEmpty ? v.first : null)),
-                    onReset: () => _update(_config.copyWith(prAssignee: null)),
+                    onReset: () => _resetField('pr_assignee'),
                   ),
                   const SizedBox(height: 10),
                   AutocompleteChipField(
@@ -369,7 +488,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     availableOptions: _repoLabels,
                     isOverridden: _config.prLabels != null,
                     onChanged: (v) => _update(_config.copyWith(prLabels: v)),
-                    onReset: () => _update(_config.copyWith(prLabels: null)),
+                    onReset: () => _resetField('pr_labels'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -379,6 +498,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['true', 'false'],
                     onChanged: (v) => _update(_config.copyWith(
                         prDraft: v != null ? v == 'true' : null)),
+                    onReset: () => _resetField('pr_draft'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -388,6 +508,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: prompts.map((p) => p.id).toList(),
                     onChanged: (v) =>
                         _update(_config.copyWith(developPromptId: v)),
+                    onReset: () => _resetField('implement_prompt'),
                   ),
                 ], accent: FeaturePalette.develop),
               ],
