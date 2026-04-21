@@ -775,6 +775,435 @@ func TestAIForRepo_PerRepoInheritsGlobal(t *testing.T) {
 	}
 }
 
+// ── AIForRepo 3-level PR metadata resolution ────────────────────────────────
+
+func TestAIForRepo_GlobalPRMetadata(t *testing.T) {
+	draft := true
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:     "claude",
+			PRReviewers: []string{"alice", "bob"},
+			PRLabels:    []string{"auto-generated"},
+			PRAssignee:  "charlie",
+			PRDraft:     &draft,
+		},
+	}
+
+	r := cfg.AIForRepo("any/repo")
+	if len(r.PRReviewers) != 2 || r.PRReviewers[0] != "alice" {
+		t.Errorf("PRReviewers = %v, want [alice bob]", r.PRReviewers)
+	}
+	if len(r.PRLabels) != 1 || r.PRLabels[0] != "auto-generated" {
+		t.Errorf("PRLabels = %v, want [auto-generated]", r.PRLabels)
+	}
+	if r.PRAssignee != "charlie" {
+		t.Errorf("PRAssignee = %q, want charlie", r.PRAssignee)
+	}
+	if !r.PRDraft {
+		t.Error("PRDraft should be true from global")
+	}
+}
+
+func TestAIForRepo_GlobalPRMetadataFromNestedSection(t *testing.T) {
+	draft := true
+	cfg := &Config{
+		AI: AIConfig{
+			Primary: "claude",
+			PRMetadata: PRMetadataConfig{
+				Reviewers: []string{"alice"},
+				Labels:    []string{"nested-label"},
+				Assignee:  "nested-assignee",
+				Draft:     &draft,
+			},
+		},
+	}
+
+	r := cfg.AIForRepo("any/repo")
+	if len(r.PRReviewers) != 1 || r.PRReviewers[0] != "alice" {
+		t.Errorf("PRReviewers = %v, want [alice]", r.PRReviewers)
+	}
+	if len(r.PRLabels) != 1 || r.PRLabels[0] != "nested-label" {
+		t.Errorf("PRLabels = %v, want [nested-label]", r.PRLabels)
+	}
+	if r.PRAssignee != "nested-assignee" {
+		t.Errorf("PRAssignee = %q, want nested-assignee", r.PRAssignee)
+	}
+	if !r.PRDraft {
+		t.Error("PRDraft should be true from nested section")
+	}
+}
+
+func TestAIForRepo_FlatFieldsWinOverNestedSection(t *testing.T) {
+	nestedDraft := true
+	flatDraft := false
+	cfg := &Config{
+		AI: AIConfig{
+			Primary: "claude",
+			PRMetadata: PRMetadataConfig{
+				Reviewers: []string{"nested"},
+				Labels:    []string{"nested-label"},
+				Assignee:  "nested-assignee",
+				Draft:     &nestedDraft,
+			},
+			PRReviewers: []string{"flat"},
+			PRLabels:    []string{"flat-label"},
+			PRAssignee:  "flat-assignee",
+			PRDraft:     &flatDraft,
+		},
+	}
+
+	r := cfg.AIForRepo("any/repo")
+	if r.PRReviewers[0] != "flat" {
+		t.Errorf("PRReviewers = %v, want [flat] (flat wins over nested)", r.PRReviewers)
+	}
+	if r.PRLabels[0] != "flat-label" {
+		t.Errorf("PRLabels = %v, want [flat-label]", r.PRLabels)
+	}
+	if r.PRAssignee != "flat-assignee" {
+		t.Errorf("PRAssignee = %q, want flat-assignee", r.PRAssignee)
+	}
+	if r.PRDraft {
+		t.Error("PRDraft should be false (flat wins over nested)")
+	}
+}
+
+func TestAIForRepo_OrgOverridesGlobal(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:     "claude",
+			PRReviewers: []string{"global-r1"},
+			PRLabels:    []string{"global-label"},
+			PRAssignee:  "global-assignee",
+			Orgs: map[string]OrgAI{
+				"myorg": {
+					PRReviewers: []string{"org-r1", "org-r2"},
+					PRLabels:    []string{"org-label"},
+					PRAssignee:  "org-assignee",
+				},
+			},
+		},
+	}
+
+	r := cfg.AIForRepo("myorg/some-repo")
+	if len(r.PRReviewers) != 2 || r.PRReviewers[0] != "org-r1" {
+		t.Errorf("PRReviewers = %v, want [org-r1 org-r2]", r.PRReviewers)
+	}
+	if r.PRLabels[0] != "org-label" {
+		t.Errorf("PRLabels = %v, want [org-label]", r.PRLabels)
+	}
+	if r.PRAssignee != "org-assignee" {
+		t.Errorf("PRAssignee = %q, want org-assignee", r.PRAssignee)
+	}
+}
+
+func TestAIForRepo_OrgInheritsGlobalForUnsetFields(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:     "claude",
+			PRReviewers: []string{"global-r1"},
+			PRLabels:    []string{"global-label"},
+			PRAssignee:  "global-assignee",
+			Orgs: map[string]OrgAI{
+				"myorg": {
+					PRReviewers: []string{"org-r1"},
+					// PRLabels and PRAssignee not set → inherit global
+				},
+			},
+		},
+	}
+
+	r := cfg.AIForRepo("myorg/repo")
+	if r.PRReviewers[0] != "org-r1" {
+		t.Errorf("PRReviewers = %v, want [org-r1] (org override)", r.PRReviewers)
+	}
+	if r.PRLabels[0] != "global-label" {
+		t.Errorf("PRLabels = %v, want [global-label] (inherited from global)", r.PRLabels)
+	}
+	if r.PRAssignee != "global-assignee" {
+		t.Errorf("PRAssignee = %q, want global-assignee (inherited)", r.PRAssignee)
+	}
+}
+
+func TestAIForRepo_RepoOverridesOrg(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:     "claude",
+			PRReviewers: []string{"global-r1"},
+			PRLabels:    []string{"global-label"},
+			PRAssignee:  "global-assignee",
+			Orgs: map[string]OrgAI{
+				"myorg": {
+					PRReviewers: []string{"org-r1", "org-r2"},
+					PRLabels:    []string{"org-label"},
+					PRAssignee:  "org-assignee",
+				},
+			},
+			Repos: map[string]RepoAI{
+				"myorg/special": {
+					PRReviewers: []string{"repo-r1"},
+				},
+			},
+		},
+	}
+
+	r := cfg.AIForRepo("myorg/special")
+	if len(r.PRReviewers) != 1 || r.PRReviewers[0] != "repo-r1" {
+		t.Errorf("PRReviewers = %v, want [repo-r1] (repo override)", r.PRReviewers)
+	}
+	// PRLabels not set per-repo → inherits org
+	if r.PRLabels[0] != "org-label" {
+		t.Errorf("PRLabels = %v, want [org-label] (inherited from org)", r.PRLabels)
+	}
+	// PRAssignee not set per-repo → inherits org
+	if r.PRAssignee != "org-assignee" {
+		t.Errorf("PRAssignee = %q, want org-assignee (inherited from org)", r.PRAssignee)
+	}
+}
+
+func TestAIForRepo_RepoOverridesOrgAndGlobal(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:     "claude",
+			PRReviewers: []string{"global-r1"},
+			PRLabels:    []string{"global-label"},
+			PRAssignee:  "global-assignee",
+			Orgs: map[string]OrgAI{
+				"myorg": {
+					PRReviewers: []string{"org-r1"},
+					PRLabels:    []string{"org-label"},
+					PRAssignee:  "org-assignee",
+				},
+			},
+			Repos: map[string]RepoAI{
+				"myorg/special": {
+					PRReviewers: []string{"repo-r1"},
+					PRLabels:    []string{"repo-label"},
+					PRAssignee:  "repo-assignee",
+				},
+			},
+		},
+	}
+
+	r := cfg.AIForRepo("myorg/special")
+	if r.PRReviewers[0] != "repo-r1" {
+		t.Errorf("PRReviewers = %v, want [repo-r1]", r.PRReviewers)
+	}
+	if r.PRLabels[0] != "repo-label" {
+		t.Errorf("PRLabels = %v, want [repo-label]", r.PRLabels)
+	}
+	if r.PRAssignee != "repo-assignee" {
+		t.Errorf("PRAssignee = %q, want repo-assignee", r.PRAssignee)
+	}
+}
+
+func TestAIForRepo_OrgDraftOverride(t *testing.T) {
+	globalDraft := false
+	orgDraft := true
+	cfg := &Config{
+		AI: AIConfig{
+			Primary: "claude",
+			PRDraft: &globalDraft,
+			Orgs: map[string]OrgAI{
+				"myorg": {PRDraft: &orgDraft},
+			},
+		},
+	}
+
+	r := cfg.AIForRepo("myorg/repo")
+	if !r.PRDraft {
+		t.Error("PRDraft should be true (org override)")
+	}
+
+	r2 := cfg.AIForRepo("other/repo")
+	if r2.PRDraft {
+		t.Error("PRDraft should be false for repo in different org (global)")
+	}
+}
+
+func TestAIForRepo_IndependentFieldResolution(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:     "claude",
+			PRReviewers: []string{"global-r1"},
+			PRLabels:    []string{"global-label"},
+			PRAssignee:  "global-assignee",
+			Orgs: map[string]OrgAI{
+				"myorg": {
+					PRLabels: []string{"org-label"},
+				},
+			},
+			Repos: map[string]RepoAI{
+				"myorg/special": {
+					PRAssignee: "repo-assignee",
+				},
+			},
+		},
+	}
+
+	r := cfg.AIForRepo("myorg/special")
+	if r.PRReviewers[0] != "global-r1" {
+		t.Errorf("PRReviewers = %v, want [global-r1] (global, no org/repo override)", r.PRReviewers)
+	}
+	if r.PRLabels[0] != "org-label" {
+		t.Errorf("PRLabels = %v, want [org-label] (org level, no repo override)", r.PRLabels)
+	}
+	if r.PRAssignee != "repo-assignee" {
+		t.Errorf("PRAssignee = %q, want repo-assignee (repo level)", r.PRAssignee)
+	}
+}
+
+func TestAIForRepo_NoOrgMatch_FallsToGlobal(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:     "claude",
+			PRReviewers: []string{"global-r1"},
+			Orgs: map[string]OrgAI{
+				"differentorg": {PRReviewers: []string{"other-r1"}},
+			},
+		},
+	}
+
+	r := cfg.AIForRepo("myorg/repo")
+	if r.PRReviewers[0] != "global-r1" {
+		t.Errorf("PRReviewers = %v, want [global-r1] (no org match)", r.PRReviewers)
+	}
+}
+
+func TestApplyEnvOverrides_PRAssigneeAndDraft(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+
+	t.Setenv("HEIMDALLM_PR_REVIEWERS", "alice,bob")
+	t.Setenv("HEIMDALLM_PR_LABELS", "auto-generated")
+	t.Setenv("HEIMDALLM_PR_ASSIGNEE", "charlie")
+	t.Setenv("HEIMDALLM_PR_DRAFT", "true")
+
+	cfg.applyEnvOverrides()
+
+	if len(cfg.AI.PRReviewers) != 2 || cfg.AI.PRReviewers[0] != "alice" {
+		t.Errorf("PRReviewers = %v, want [alice bob]", cfg.AI.PRReviewers)
+	}
+	if len(cfg.AI.PRLabels) != 1 || cfg.AI.PRLabels[0] != "auto-generated" {
+		t.Errorf("PRLabels = %v, want [auto-generated]", cfg.AI.PRLabels)
+	}
+	if cfg.AI.PRAssignee != "charlie" {
+		t.Errorf("PRAssignee = %q, want charlie", cfg.AI.PRAssignee)
+	}
+	if cfg.AI.PRDraft == nil || !*cfg.AI.PRDraft {
+		t.Error("PRDraft should be true from env")
+	}
+}
+
+func TestAIForRepo_EnvPRMetadataFlowsToRepo(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	cfg.AI.Primary = "claude"
+
+	t.Setenv("HEIMDALLM_PR_REVIEWERS", "env-r1,env-r2")
+	t.Setenv("HEIMDALLM_PR_LABELS", "env-label")
+	t.Setenv("HEIMDALLM_PR_ASSIGNEE", "env-assignee")
+	t.Setenv("HEIMDALLM_PR_DRAFT", "true")
+
+	cfg.applyEnvOverrides()
+
+	r := cfg.AIForRepo("any/repo")
+	if len(r.PRReviewers) != 2 || r.PRReviewers[0] != "env-r1" {
+		t.Errorf("PRReviewers = %v, want [env-r1 env-r2]", r.PRReviewers)
+	}
+	if r.PRLabels[0] != "env-label" {
+		t.Errorf("PRLabels = %v, want [env-label]", r.PRLabels)
+	}
+	if r.PRAssignee != "env-assignee" {
+		t.Errorf("PRAssignee = %q, want env-assignee", r.PRAssignee)
+	}
+	if !r.PRDraft {
+		t.Error("PRDraft should be true from env")
+	}
+}
+
+func TestAIForRepo_TOMLThreeLevelResolution(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	content := `
+[ai]
+primary = "claude"
+pr_reviewers = ["global-r1", "global-r2"]
+pr_labels = ["global-label"]
+pr_assignee = "global-assignee"
+pr_draft = false
+
+[ai.orgs."freepik-company"]
+pr_reviewers = ["org-r1"]
+pr_labels = ["org-label", "ai-platform"]
+
+[ai.orgs."theburrowhub"]
+pr_reviewers = ["org-r1", "org-r2", "org-r3"]
+
+[ai.repos."freepik-company/data_contracts"]
+pr_reviewers = ["data-lead"]
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Per-repo override
+	r := cfg.AIForRepo("freepik-company/data_contracts")
+	if len(r.PRReviewers) != 1 || r.PRReviewers[0] != "data-lead" {
+		t.Errorf("PRReviewers = %v, want [data-lead] (per-repo)", r.PRReviewers)
+	}
+	if len(r.PRLabels) != 2 || r.PRLabels[0] != "org-label" {
+		t.Errorf("PRLabels = %v, want [org-label ai-platform] (from org)", r.PRLabels)
+	}
+	if r.PRAssignee != "global-assignee" {
+		t.Errorf("PRAssignee = %q, want global-assignee (inherited)", r.PRAssignee)
+	}
+
+	// Org-level (no per-repo)
+	r2 := cfg.AIForRepo("freepik-company/other-repo")
+	if len(r2.PRReviewers) != 1 || r2.PRReviewers[0] != "org-r1" {
+		t.Errorf("PRReviewers = %v, want [org-r1] (org level)", r2.PRReviewers)
+	}
+	if r2.PRLabels[0] != "org-label" {
+		t.Errorf("PRLabels = %v, want [org-label ai-platform]", r2.PRLabels)
+	}
+
+	// Different org
+	r3 := cfg.AIForRepo("theburrowhub/heimdallm")
+	if len(r3.PRReviewers) != 3 || r3.PRReviewers[0] != "org-r1" {
+		t.Errorf("PRReviewers = %v, want [org-r1 org-r2 org-r3]", r3.PRReviewers)
+	}
+	if r3.PRLabels[0] != "global-label" {
+		t.Errorf("PRLabels = %v, want [global-label] (no org override for labels)", r3.PRLabels)
+	}
+
+	// Unknown org → global
+	r4 := cfg.AIForRepo("unknown/repo")
+	if len(r4.PRReviewers) != 2 || r4.PRReviewers[0] != "global-r1" {
+		t.Errorf("PRReviewers = %v, want [global-r1 global-r2] (global)", r4.PRReviewers)
+	}
+}
+
+func TestRepoOrg(t *testing.T) {
+	cases := map[string]string{
+		"org/repo":   "org",
+		"a/b/c":      "a",
+		"noslash":     "",
+		"":            "",
+		"/leading":    "",
+	}
+	for input, want := range cases {
+		if got := repoOrg(input); got != want {
+			t.Errorf("repoOrg(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 // ── IssueTrackingForRepo ─────────────────────────────────────────────────────
 
 func TestIssueTrackingForRepo_GlobalOnly(t *testing.T) {
