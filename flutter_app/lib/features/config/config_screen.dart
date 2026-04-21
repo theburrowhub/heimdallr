@@ -518,18 +518,21 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
   }
 
   Widget _settingsCard(String title, List<Widget> children) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: const TextStyle(
-                fontWeight: FontWeight.w600, fontSize: 15)),
-            const SizedBox(height: 12),
-            ...children,
-          ],
+    return SizedBox(
+      width: double.infinity,
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(
+                  fontWeight: FontWeight.w600, fontSize: 15)),
+              const SizedBox(height: 12),
+              ...children,
+            ],
+          ),
         ),
       ),
     );
