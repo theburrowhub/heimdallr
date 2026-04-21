@@ -6,6 +6,7 @@ import 'package:heimdallm/core/platform/platform_services_provider.dart';
 import 'package:heimdallm/features/config/config_providers.dart';
 import 'package:heimdallm/features/repositories/repos_screen.dart';
 import 'package:heimdallm/features/repositories/widgets/bulk_actions_bar.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/platform/fake_platform_services.dart';
 
 Widget _host(AppConfig cfg) => ProviderScope(
@@ -89,5 +90,18 @@ void main() {
 
     expect(find.text('a/one'), findsOneWidget);
     expect(find.text('a/two'), findsNothing);
+  });
+
+  testWidgets('view toggle persists choice in SharedPreferences',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(_host(_cfg()));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('repos_view_toggle_grid')));
+    await tester.pumpAndSettle();
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('repos_view'), 'grid');
   });
 }

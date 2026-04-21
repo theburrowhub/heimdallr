@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/models/config_model.dart';
 import '../../shared/widgets/toast.dart';
 import '../config/config_providers.dart';
@@ -24,11 +25,26 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
   bool _initialized = false;
   String _search = '';
   String _filter = 'all'; // 'all' | 'monitored' | 'not_monitored'
+  String _viewMode = 'list'; // 'list' | 'grid'
   _SyncStatus _syncStatus = _SyncStatus.idle;
   Timer? _debounce;
   Timer? _savedResetTimer;
 
   final Set<String> _selected = {};
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((p) {
+      final v = p.getString('repos_view');
+      if (v != null && mounted) setState(() => _viewMode = v);
+    });
+  }
+
+  void _setViewMode(String v) {
+    setState(() => _viewMode = v);
+    SharedPreferences.getInstance().then((p) => p.setString('repos_view', v));
+  }
 
   void _toggleSelection(String repo) {
     setState(() {
@@ -184,6 +200,21 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
                     current: _filter,
                     onChanged: (v) => setState(() => _filter = v),
                   ),
+                  const SizedBox(width: 8),
+                  Row(children: [
+                    _ViewToggleButton(
+                      icon: Icons.view_list,
+                      active: _viewMode == 'list',
+                      onTap: () => _setViewMode('list'),
+                      buttonKey: const Key('repos_view_toggle_list'),
+                    ),
+                    _ViewToggleButton(
+                      icon: Icons.grid_view,
+                      active: _viewMode == 'grid',
+                      onTap: () => _setViewMode('grid'),
+                      buttonKey: const Key('repos_view_toggle_grid'),
+                    ),
+                  ]),
                   const SizedBox(width: 12),
                   // Auto-save status indicator
                   SizedBox(
@@ -386,6 +417,33 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
           Text('$count',
               style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
         ]),
+      ),
+    );
+  }
+}
+
+class _ViewToggleButton extends StatelessWidget {
+  final IconData icon;
+  final bool active;
+  final VoidCallback onTap;
+  final Key buttonKey;
+  const _ViewToggleButton({
+    required this.icon,
+    required this.active,
+    required this.onTap,
+    required this.buttonKey,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return InkWell(
+      key: buttonKey,
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        color: active ? primary.withOpacity(0.22) : null,
+        child: Icon(icon,
+            size: 18, color: active ? primary : Colors.grey.shade500),
       ),
     );
   }
