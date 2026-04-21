@@ -276,6 +276,7 @@ func main() {
 	// Tier 2 / Tier 3 interfaces.
 	adapter := &tier2Adapter{
 		ghClient:  ghClient,
+		ghToken:   token,
 		pipeline:  p,
 		issuePipe: issuePipe,
 		fetcher:   issueFetcher,
@@ -613,8 +614,9 @@ func main() {
 		implPrompt, implInstructions := resolveImplementPrompt(s, aiCfg.ImplementPrompt, agentCfg.PromptID)
 
 		opts := issuepipeline.RunOptions{
-			Primary:  aiCfg.Primary,
-			Fallback: aiCfg.Fallback,
+			GitHubToken: token,
+			Primary:     aiCfg.Primary,
+			Fallback:    aiCfg.Fallback,
 			ExecOpts: executor.ExecOptions{
 				Model:                agentCfg.Model,
 				MaxTurns:             agentCfg.MaxTurns,
@@ -796,6 +798,7 @@ func parseWatchInterval(s string) time.Duration {
 
 type tier2Adapter struct {
 	ghClient  *gh.Client
+	ghToken   string
 	pipeline  *pipeline.Pipeline
 	issuePipe *issuepipeline.Pipeline
 	fetcher   *issuepipeline.Fetcher
@@ -966,8 +969,9 @@ func (a *tier2Adapter) ProcessRepo(ctx context.Context, repo string) (int, error
 		implPrompt, implInstructions := resolveImplementPrompt(a.store, aiCfg.ImplementPrompt, agentCfg.PromptID)
 
 		return issuepipeline.RunOptions{
-			Primary:  aiCfg.Primary,
-			Fallback: aiCfg.Fallback,
+			GitHubToken: a.ghToken,
+			Primary:     aiCfg.Primary,
+			Fallback:    aiCfg.Fallback,
 			ExecOpts: executor.ExecOptions{
 				Model:                agentCfg.Model,
 				MaxTurns:             agentCfg.MaxTurns,
