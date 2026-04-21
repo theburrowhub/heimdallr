@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /heimdallm ./cmd/heimd
 # ─── Stage 2: Runtime with AI CLIs ───────────────────────────────────────────
 FROM node:20-alpine
 
-RUN apk add --no-cache ca-certificates tzdata bash curl coreutils
+RUN apk add --no-cache ca-certificates tzdata bash curl coreutils git
 
 # ── Install AI CLI tools ──────────────────────────────────────────────────────
 # Claude Code CLI (Anthropic) — requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN at runtime
