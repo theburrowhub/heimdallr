@@ -113,6 +113,22 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
     }
   }
 
+  Future<void> _resetField(String fieldPath) async {
+    final api = ref.read(apiClientProvider);
+    try {
+      final freshJson = await api.deleteRepoField(widget.repoName, fieldPath);
+      ref.read(configNotifierProvider.notifier).updateFromServer(freshJson);
+      final freshConfig = AppConfig.fromJson(freshJson);
+      setState(() {
+        _config = freshConfig.repoConfigs[widget.repoName] ?? const RepoConfig();
+        _previousConfig = _config;
+      });
+      if (mounted) showToast(context, 'Reset to global');
+    } catch (e) {
+      if (mounted) showToast(context, 'Error: $e', isError: true);
+    }
+  }
+
   Map<String, dynamic> _computeRepoDiff(RepoConfig old, RepoConfig updated) {
     final diff = <String, dynamic>{};
     if (old.aiPrimary != updated.aiPrimary) diff['primary'] = updated.aiPrimary ?? '';
@@ -292,6 +308,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['claude', 'gemini', 'codex'],
                     onChanged: (v) =>
                         _update(_config.copyWith(aiPrimary: v)),
+                    onReset: () => _resetField('primary'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -303,6 +320,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['claude', 'gemini', 'codex'],
                     onChanged: (v) =>
                         _update(_config.copyWith(aiFallback: v)),
+                    onReset: () => _resetField('fallback'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -312,6 +330,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['single', 'multi'],
                     onChanged: (v) =>
                         _update(_config.copyWith(reviewMode: v)),
+                    onReset: () => _resetField('review_mode'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -321,6 +340,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: prompts.map((p) => p.id).toList(),
                     onChanged: (v) =>
                         _update(_config.copyWith(promptId: v)),
+                    onReset: () => _resetField('prompt'),
                   ),
                 ], accent: FeaturePalette.prReview),
 
@@ -369,6 +389,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['exclusive', 'inclusive'],
                     onChanged: (v) => _update(
                         _config.copyWith(issueFilterMode: v)),
+                    onReset: () => _resetField('issue_tracking/filter_mode'),
                   ),
                   const SizedBox(height: 10),
                   OverrideDropdown(
@@ -379,6 +400,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: const ['ignore', 'review_only'],
                     onChanged: (v) => _update(
                         _config.copyWith(issueDefaultAction: v)),
+                    onReset: () => _resetField('issue_tracking/default_action'),
                   ),
                   const SizedBox(height: 10),
                   OverrideTextField(
@@ -408,6 +430,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: prompts.map((p) => p.id).toList(),
                     onChanged: (v) =>
                         _update(_config.copyWith(issuePromptId: v)),
+                    onReset: () => _resetField('issue_tracking/issue_prompt'),
                   ),
                 ], accent: FeaturePalette.issueTracking),
 
@@ -484,6 +507,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     options: prompts.map((p) => p.id).toList(),
                     onChanged: (v) =>
                         _update(_config.copyWith(developPromptId: v)),
+                    onReset: () => _resetField('implement_prompt'),
                   ),
                 ], accent: FeaturePalette.develop),
               ],

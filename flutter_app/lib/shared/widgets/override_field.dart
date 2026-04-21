@@ -12,6 +12,7 @@ class OverrideTextField extends StatefulWidget {
   final String globalValue;
   final String? overrideValue;
   final ValueChanged<String?> onChanged;
+  final VoidCallback? onReset;
 
   const OverrideTextField({
     super.key,
@@ -20,6 +21,7 @@ class OverrideTextField extends StatefulWidget {
     required this.globalValue,
     required this.overrideValue,
     required this.onChanged,
+    this.onReset,
   });
 
   @override
@@ -62,7 +64,11 @@ class _OverrideTextFieldState extends State<OverrideTextField> {
 
   void _reset() {
     _ctrl.text = widget.globalValue;
-    widget.onChanged(null);
+    if (widget.onReset != null) {
+      widget.onReset!();
+    } else {
+      widget.onChanged(null);
+    }
   }
 
   void _handleChange(String value) {
@@ -160,6 +166,7 @@ class OverrideDropdown extends StatelessWidget {
   final String? overrideValue;
   final List<String> options;
   final ValueChanged<String?> onChanged;
+  final VoidCallback? onReset;
 
   const OverrideDropdown({
     super.key,
@@ -168,6 +175,7 @@ class OverrideDropdown extends StatelessWidget {
     required this.overrideValue,
     required this.options,
     required this.onChanged,
+    this.onReset,
   });
 
   bool get _isOverridden => overrideValue != null;
@@ -206,7 +214,13 @@ class OverrideDropdown extends StatelessWidget {
                 ),
                 const SizedBox(width: 6),
                 GestureDetector(
-                  onTap: () => onChanged(null),
+                  onTap: () {
+                    if (onReset != null) {
+                      onReset!();
+                    } else {
+                      onChanged(null);
+                    }
+                  },
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                     decoration: BoxDecoration(
