@@ -245,7 +245,15 @@ type AIConfig struct {
 	ExecutionTimeout string                    `toml:"execution_timeout"`  // e.g. "20m", "1h"
 	Agents           map[string]CLIAgentConfig `toml:"agents"`             // keyed by CLI name
 	Repos            map[string]RepoAI         `toml:"repos"`
+	Orgs             map[string]OrgAI          `toml:"orgs"`               // per-org PR metadata overrides
 	PRMetadata       PRMetadataConfig          `toml:"pr_metadata"`        // global PR creation defaults
+
+	// Top-level PR metadata fields — flat alternatives to [ai.pr_metadata].
+	// Populated from HEIMDALLM_PR_* env vars or TOML keys directly under [ai].
+	PRReviewers []string `toml:"pr_reviewers"`
+	PRLabels    []string `toml:"pr_labels"`
+	PRAssignee  string   `toml:"pr_assignee"`
+	PRDraft     *bool    `toml:"pr_draft,omitempty"`
 }
 
 type RepoAI struct {
@@ -265,10 +273,10 @@ type RepoAI struct {
 	LocalDir    string `toml:"local_dir"`   // local repo path for full-repo analysis
 
 	// PR creation metadata (applied by auto_implement after CreatePR).
-	PRReviewers []string `toml:"pr_reviewers"` // GitHub logins to request review from
-	PRAssignee  string   `toml:"pr_assignee"`  // GitHub login to assign the PR to
-	PRLabels    []string `toml:"pr_labels"`    // labels to add to the PR
-	PRDraft     bool     `toml:"pr_draft"`     // create as draft PR
+	PRReviewers []string `toml:"pr_reviewers"`       // GitHub logins to request review from
+	PRAssignee  string   `toml:"pr_assignee"`         // GitHub login to assign the PR to
+	PRLabels    []string `toml:"pr_labels"`           // labels to add to the PR
+	PRDraft     *bool    `toml:"pr_draft,omitempty"`  // create as draft PR
 
 	// Per-repo issue tracking override. When set, non-zero fields replace
 	// the global [github.issue_tracking] values for this repo only.
@@ -277,12 +285,21 @@ type RepoAI struct {
 
 // PRMetadataConfig holds global defaults for PR creation metadata,
 // used as fallback when per-repo config is not set.
-// Only Reviewers and Labels have global defaults — Assignee and Draft are
-// per-repo only because assignee is team-specific and draft mode depends
-// on the repo's workflow (some repos auto-merge non-drafts).
 type PRMetadataConfig struct {
 	Reviewers []string `toml:"reviewers"`
 	Labels    []string `toml:"labels"`
+	Assignee  string   `toml:"assignee"`
+	Draft     *bool    `toml:"draft,omitempty"`
+}
+
+// OrgAI holds per-organisation PR metadata overrides, applied to all repos
+// in the org unless overridden per-repo. Keyed by GitHub org slug under
+// [ai.orgs."org-name"].
+type OrgAI struct {
+	PRReviewers []string `toml:"pr_reviewers"`
+	PRAssignee  string   `toml:"pr_assignee"`
+	PRLabels    []string `toml:"pr_labels"`
+	PRDraft     *bool    `toml:"pr_draft,omitempty"`
 }
 
 type RetentionConfig struct {
@@ -366,8 +383,66 @@ func ResolveLocalDir(configured, repo string, localDirBases []string) string {
 	return ""
 }
 
-// AIForRepo returns the AI config for a specific repo, falling back to global.
+// repoOrg extracts the organisation slug from an "org/repo" string.
+// Returns "" when the input has no slash.
+func repoOrg(repo string) string {
+	if i := strings.Index(repo, "/"); i > 0 {
+		return repo[:i]
+	}
+	return ""
+}
+
+// resolvedPRMetadata returns the effective global PR metadata by merging
+// flat [ai] fields on top of [ai.pr_metadata]. Flat fields win when set,
+// matching the contract that HEIMDALLM_PR_* env vars populate the flat
+// fields and should override the nested section.
+func (c *Config) resolvedPRMetadata() (reviewers, labels []string, assignee string, draft *bool) {
+	reviewers = c.AI.PRMetadata.Reviewers
+	labels = c.AI.PRMetadata.Labels
+	assignee = c.AI.PRMetadata.Assignee
+	if c.AI.PRMetadata.Draft != nil {
+		draft = c.AI.PRMetadata.Draft
+	}
+	if len(c.AI.PRReviewers) > 0 {
+		reviewers = c.AI.PRReviewers
+	}
+	if len(c.AI.PRLabels) > 0 {
+		labels = c.AI.PRLabels
+	}
+	if c.AI.PRAssignee != "" {
+		assignee = c.AI.PRAssignee
+	}
+	if c.AI.PRDraft != nil {
+		draft = c.AI.PRDraft
+	}
+	return
+}
+
+// AIForRepo returns the AI config for a specific repo, falling back through
+// three levels: per-repo > per-org > global defaults. Each PR metadata
+// field resolves independently.
 func (c *Config) AIForRepo(repo string) RepoAI {
+	gReviewers, gLabels, gAssignee, gDraft := c.resolvedPRMetadata()
+
+	// Org-level layer: start from global, overlay org-level fields.
+	orgReviewers, orgLabels, orgAssignee, orgDraft := gReviewers, gLabels, gAssignee, gDraft
+	if org := repoOrg(repo); org != "" && c.AI.Orgs != nil {
+		if o, ok := c.AI.Orgs[org]; ok {
+			if len(o.PRReviewers) > 0 {
+				orgReviewers = o.PRReviewers
+			}
+			if len(o.PRLabels) > 0 {
+				orgLabels = o.PRLabels
+			}
+			if o.PRAssignee != "" {
+				orgAssignee = o.PRAssignee
+			}
+			if o.PRDraft != nil {
+				orgDraft = o.PRDraft
+			}
+		}
+	}
+
 	if c.AI.Repos != nil {
 		if r, ok := c.AI.Repos[repo]; ok {
 			if r.Primary == "" {
@@ -379,19 +454,24 @@ func (c *Config) AIForRepo(repo string) RepoAI {
 			if r.ReviewMode == "" {
 				r.ReviewMode = c.AI.ReviewMode
 			}
-			// Fallback PR metadata to global defaults when repo-level is empty
 			if len(r.PRReviewers) == 0 {
-				r.PRReviewers = c.AI.PRMetadata.Reviewers
+				r.PRReviewers = orgReviewers
 			}
 			if len(r.PRLabels) == 0 {
-				r.PRLabels = c.AI.PRMetadata.Labels
+				r.PRLabels = orgLabels
+			}
+			if r.PRAssignee == "" {
+				r.PRAssignee = orgAssignee
+			}
+			if r.PRDraft == nil {
+				r.PRDraft = orgDraft
 			}
 			return r
 		}
 	}
 	return RepoAI{
 		Primary: c.AI.Primary, Fallback: c.AI.Fallback, ReviewMode: c.AI.ReviewMode,
-		PRReviewers: c.AI.PRMetadata.Reviewers, PRLabels: c.AI.PRMetadata.Labels,
+		PRReviewers: orgReviewers, PRLabels: orgLabels, PRAssignee: orgAssignee, PRDraft: orgDraft,
 	}
 }
 
@@ -577,13 +657,21 @@ func (c *Config) applyEnvOverrides() {
 	c.applyPRMetadataEnv()
 }
 
-// applyPRMetadataEnv maps HEIMDALLM_PR_* env vars into PRMetadataConfig globals.
+// applyPRMetadataEnv maps HEIMDALLM_PR_* env vars into the flat [ai] fields.
 func (c *Config) applyPRMetadataEnv() {
 	if list, ok := csvEnv("HEIMDALLM_PR_REVIEWERS"); ok {
-		c.AI.PRMetadata.Reviewers = list
+		c.AI.PRReviewers = list
 	}
 	if list, ok := csvEnv("HEIMDALLM_PR_LABELS"); ok {
-		c.AI.PRMetadata.Labels = list
+		c.AI.PRLabels = list
+	}
+	if v := os.Getenv("HEIMDALLM_PR_ASSIGNEE"); v != "" {
+		c.AI.PRAssignee = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("HEIMDALLM_PR_DRAFT"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.AI.PRDraft = &b
+		}
 	}
 }
 
