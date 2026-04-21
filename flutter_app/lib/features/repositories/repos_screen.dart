@@ -103,6 +103,15 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
       for (final r in _selected) {
         final c = _repoConfigs[r];
         if (c == null) continue;
+        // Develop requires a local dir to actually run. Enabling it on a
+        // repo without one would write a flag the daemon can't act on, so
+        // skip those silently — the row LED stays grey, making it obvious
+        // the bulk apply didn't affect that repo.
+        if (f == Feature.develop &&
+            enable &&
+            (c.localDir == null || c.localDir!.isEmpty)) {
+          continue;
+        }
         _repoConfigs[r] = switch (f) {
           Feature.prReview      => c.copyWith(prEnabled: enable),
           Feature.issueTracking => c.copyWith(itEnabled: enable),
@@ -115,6 +124,17 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
   }
 
   void _clearSelection() => setState(_selected.clear);
+
+  String _emptyStateText() {
+    if (_search.isNotEmpty) return 'No repos match “$_search”.';
+    return switch (_filter) {
+      'monitored' =>
+        'No repos currently monitored. Request a review on a PR and the daemon will add it here.',
+      'not_monitored' => 'No repos in the not-monitored list.',
+      _ =>
+        'No repos yet. Request a review on a PR and the daemon will add it automatically.',
+    };
+  }
 
   @override
   void dispose() {
@@ -255,7 +275,7 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
             // Repo list with section dividers
             Expanded(
               child: filtered.isEmpty
-                  ? const Center(child: Text('No repos to show.'))
+                  ? Center(child: Text(_emptyStateText()))
                   : _viewMode == 'grid'
                       ? _ReposGrid(
                           repos: filtered,

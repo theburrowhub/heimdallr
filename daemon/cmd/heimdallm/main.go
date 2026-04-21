@@ -878,10 +878,13 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 	// Snapshot the updated slices under the same mutex that guards the
 	// mutation so a concurrent reload-swap cannot race with the Marshal below.
 	a.cfgMu.Lock()
-	c := *a.cfg
-	added := upsertDiscoveredRepos(c, prs)
-	reposSnap := append([]string(nil), c.GitHub.Repositories...)
-	nonMonSnap := append([]string(nil), c.GitHub.NonMonitored...)
+	// a.cfg is **config.Config (a handle to the "current Config" pointer
+	// that config reloads can swap). Dereference once to get the *Config we
+	// mutate in place under the mutex.
+	cfg := *a.cfg
+	added := upsertDiscoveredRepos(cfg, prs)
+	reposSnap := append([]string(nil), cfg.GitHub.Repositories...)
+	nonMonSnap := append([]string(nil), cfg.GitHub.NonMonitored...)
 	a.cfgMu.Unlock()
 
 	if len(added) > 0 {
