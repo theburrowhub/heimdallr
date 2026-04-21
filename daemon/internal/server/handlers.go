@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -546,7 +547,8 @@ func (srv *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Error("PATCH /config failed", "err", err)
-		if strings.Contains(err.Error(), "config:") {
+		var ve *config.ValidationError
+		if errors.As(err, &ve) {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		} else {
 			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
@@ -602,7 +604,8 @@ func (srv *Server) handlePatchRepoConfig(w http.ResponseWriter, r *http.Request)
 	})
 	if err != nil {
 		slog.Error("PATCH /config/repos failed", "repo", repo, "err", err)
-		if strings.Contains(err.Error(), "config:") {
+		var ve *config.ValidationError
+		if errors.As(err, &ve) {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		} else {
 			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
@@ -637,7 +640,8 @@ func (srv *Server) handleDeleteRepoField(w http.ResponseWriter, r *http.Request)
 	})
 	if err != nil {
 		slog.Error("DELETE /config/repos field failed", "repo", repo, "field", field, "err", err)
-		if strings.Contains(err.Error(), "config:") {
+		var ve *config.ValidationError
+		if errors.As(err, &ve) {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		} else {
 			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)

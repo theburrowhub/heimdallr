@@ -9,6 +9,15 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// ValidationError wraps config validation failures. Handlers use errors.As
+// to distinguish user errors (400) from infrastructure errors (500).
+type ValidationError struct {
+	Err error
+}
+
+func (e *ValidationError) Error() string { return e.Err.Error() }
+func (e *ValidationError) Unwrap() error { return e.Err }
+
 // DeepMerge recursively merges patch into a copy of base and returns the
 // result. Only keys present in patch are updated. When both base and patch
 // have a map[string]any for the same key, the merge recurses. Otherwise the
@@ -121,6 +130,8 @@ func ReadTOMLMap(path string) (map[string]any, error) {
 // ValidateMap validates a generic config map by round-tripping it through the
 // Config struct: it marshals the map to TOML bytes, unmarshals into a Config,
 // applies defaults, then calls Validate(). Returns nil on success.
+// Validation and structural errors are wrapped in *ValidationError so callers
+// can use errors.As to distinguish 400 (bad input) from 500 (infra failure).
 func ValidateMap(m map[string]any) error {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
@@ -128,10 +139,13 @@ func ValidateMap(m map[string]any) error {
 	}
 	var cfg Config
 	if err := toml.Unmarshal(buf.Bytes(), &cfg); err != nil {
-		return fmt.Errorf("config: parse TOML into Config: %w", err)
+		return &ValidationError{Err: fmt.Errorf("config: invalid config structure: %w", err)}
 	}
 	cfg.applyDefaults()
-	return cfg.Validate()
+	if err := cfg.Validate(); err != nil {
+		return &ValidationError{Err: err}
+	}
+	return nil
 }
 
 // AtomicWriteTOML writes m as TOML to path using a temp file + os.Rename for
