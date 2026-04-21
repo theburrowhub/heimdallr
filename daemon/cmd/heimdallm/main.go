@@ -274,6 +274,11 @@ func main() {
 				cfgMu.Lock()
 				aiCfg := c.AIForRepo(pr.Repo)
 				cfgMu.Unlock()
+				// Apply the /repos/<short-name> fallback when local_dir
+				// is empty and the repo is visible in the container's
+				// bind-mount. Done outside the mutex — ResolveLocalDir
+				// does a filesystem stat.
+				aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, pr.Repo)
 				existing, _ := s.GetPRByGithubID(pr.ID)
 				if existing != nil {
 					// Skip PRs the user has dismissed
@@ -334,6 +339,9 @@ func main() {
 					}
 					agentCfg := c.AgentConfigFor(aiCfg.Primary)
 					cfgMu.Unlock()
+					// /repos/<short-name> fallback when local_dir is unset
+					// (stat-based, keep outside the mutex).
+					aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, issue.Repo)
 
 					extraFlags := agentCfg.ExtraFlags
 					if extraFlags != "" {
@@ -589,6 +597,9 @@ func main() {
 		cfgMu.Lock()
 		aiCfg := cfg.AIForRepo(pr.Repo)
 		cfgMu.Unlock()
+		// /repos/<short-name> fallback when local_dir is unset (stat-based,
+		// keep outside the mutex).
+		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, pr.Repo)
 
 		// Construct github.PullRequest from stored data
 		ghPR := &gh.PullRequest{
@@ -655,6 +666,9 @@ func main() {
 		}
 		agentCfg := cfg.AgentConfigFor(aiCfg.Primary)
 		cfgMu.Unlock()
+		// /repos/<short-name> fallback when local_dir is unset (stat-based,
+		// keep outside the mutex).
+		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, iss.Repo)
 
 		// Reconstruct github.Issue from store data for the pipeline
 		ghIssue := &gh.Issue{

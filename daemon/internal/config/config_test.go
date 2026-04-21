@@ -1069,3 +1069,107 @@ func TestLoadOrCreate_FailsWithoutPrimary(t *testing.T) {
 		t.Error("LoadOrCreate without ai.primary should fail")
 	}
 }
+
+// ── ShortRepoName ────────────────────────────────────────────────────────────
+
+func TestShortRepoName(t *testing.T) {
+	cases := map[string]string{
+		"org/name":       "name",
+		"org/name-dash":  "name-dash",
+		"simple":         "simple",
+		"":               "",
+		"a/b/c":          "c",
+		"trailing-slash/": "",
+	}
+	for in, want := range cases {
+		if got := ShortRepoName(in); got != want {
+			t.Errorf("ShortRepoName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// ── ResolveLocalDir ──────────────────────────────────────────────────────────
+
+func TestResolveLocalDir_PrefersConfigured(t *testing.T) {
+	// A configured value is always returned verbatim, even when the
+	// mount-root fallback would also match — the operator's explicit
+	// choice wins.
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "name"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	old := DefaultReposMountPath
+	DefaultReposMountPath = tmp
+	t.Cleanup(func() { DefaultReposMountPath = old })
+
+	if got := ResolveLocalDir("/explicit/path", "org/name"); got != "/explicit/path" {
+		t.Errorf("got %q, want /explicit/path", got)
+	}
+}
+
+func TestResolveLocalDir_AutoDetectFromMount(t *testing.T) {
+	tmp := t.TempDir()
+	repoDir := filepath.Join(tmp, "name")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	old := DefaultReposMountPath
+	DefaultReposMountPath = tmp
+	t.Cleanup(func() { DefaultReposMountPath = old })
+
+	if got := ResolveLocalDir("", "org/name"); got != repoDir {
+		t.Errorf("got %q, want %q", got, repoDir)
+	}
+}
+
+func TestResolveLocalDir_NoFallbackWhenDirMissing(t *testing.T) {
+	tmp := t.TempDir()
+	// Intentionally do NOT create tmp/name — mount exists but this repo
+	// hasn't been cloned under it, so we fall through to empty.
+	old := DefaultReposMountPath
+	DefaultReposMountPath = tmp
+	t.Cleanup(func() { DefaultReposMountPath = old })
+
+	if got := ResolveLocalDir("", "org/name"); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestResolveLocalDir_IgnoresFiles(t *testing.T) {
+	// A regular file at /repos/name must not be treated as a repo dir.
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "name"), []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	old := DefaultReposMountPath
+	DefaultReposMountPath = tmp
+	t.Cleanup(func() { DefaultReposMountPath = old })
+
+	if got := ResolveLocalDir("", "org/name"); got != "" {
+		t.Errorf("got %q, want empty (file, not dir)", got)
+	}
+}
+
+func TestResolveLocalDir_EmptyReposMountPath(t *testing.T) {
+	old := DefaultReposMountPath
+	DefaultReposMountPath = ""
+	t.Cleanup(func() { DefaultReposMountPath = old })
+
+	if got := ResolveLocalDir("", "org/name"); got != "" {
+		t.Errorf("got %q, want empty (mount path disabled)", got)
+	}
+}
+
+func TestResolveLocalDir_EmptyRepo(t *testing.T) {
+	// Defensive: an empty repo string should not accidentally resolve
+	// to DefaultReposMountPath itself (would point the agent at the
+	// mount root, exposing every repo to a single review).
+	tmp := t.TempDir()
+	old := DefaultReposMountPath
+	DefaultReposMountPath = tmp
+	t.Cleanup(func() { DefaultReposMountPath = old })
+
+	if got := ResolveLocalDir("", ""); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
