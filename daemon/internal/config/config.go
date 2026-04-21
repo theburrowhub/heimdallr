@@ -235,15 +235,17 @@ type CLIAgentConfig struct {
 	Bare                 bool   `toml:"bare"`                    // --bare
 	DangerouslySkipPerms bool   `toml:"dangerously_skip_perms"` // --dangerously-skip-permissions (cannot be set via HTTP API, see M-5)
 	NoSessionPersistence bool   `toml:"no_session_persistence"` // --no-session-persistence
+	ExecutionTimeout     string `toml:"execution_timeout"`      // per-agent override, e.g. "20m"
 }
 
 type AIConfig struct {
-	Primary    string                      `toml:"primary"`
-	Fallback   string                      `toml:"fallback"`
-	ReviewMode string                      `toml:"review_mode"` // "single" | "multi"
-	Agents     map[string]CLIAgentConfig   `toml:"agents"`      // keyed by CLI name
-	Repos      map[string]RepoAI           `toml:"repos"`
-	PRMetadata PRMetadataConfig            `toml:"pr_metadata"` // global PR creation defaults
+	Primary          string                    `toml:"primary"`
+	Fallback         string                    `toml:"fallback"`
+	ReviewMode       string                    `toml:"review_mode"`        // "single" | "multi"
+	ExecutionTimeout string                    `toml:"execution_timeout"`  // e.g. "20m", "1h"
+	Agents           map[string]CLIAgentConfig `toml:"agents"`             // keyed by CLI name
+	Repos            map[string]RepoAI         `toml:"repos"`
+	PRMetadata       PRMetadataConfig          `toml:"pr_metadata"`        // global PR creation defaults
 }
 
 type RepoAI struct {
@@ -529,6 +531,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("HEIMDALLM_REVIEW_MODE"); v != "" {
 		c.AI.ReviewMode = v
+	}
+	if v := os.Getenv("HEIMDALLM_EXECUTION_TIMEOUT"); v != "" {
+		c.AI.ExecutionTimeout = v
 	}
 	if v := os.Getenv("HEIMDALLM_RETENTION_DAYS"); v != "" {
 		if d, err := strconv.Atoi(v); err == nil {
