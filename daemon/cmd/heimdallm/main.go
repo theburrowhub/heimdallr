@@ -203,6 +203,7 @@ func main() {
 		}
 		cfgMu.Lock()
 		agentCfg := cfg.AgentConfigFor(cli)
+		globalTimeout := cfg.AI.ExecutionTimeout
 		cfgMu.Unlock()
 		extraFlags := agentCfg.ExtraFlags
 		if extraFlags != "" {
@@ -228,6 +229,7 @@ func main() {
 				Bare:                 agentCfg.Bare,
 				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
 				NoSessionPersistence: agentCfg.NoSessionPersistence,
+				Timeout:              resolveExecutionTimeout(globalTimeout, agentCfg.ExecutionTimeout),
 			},
 		}
 	}
@@ -631,6 +633,7 @@ func main() {
 		}
 		agentCfg := cfg.AgentConfigFor(aiCfg.Primary)
 		localDirBase := cfg.GitHub.LocalDirBase
+		globalTimeout := cfg.AI.ExecutionTimeout
 		cfgMu.Unlock()
 		// /repos/<short-name> fallback when local_dir is unset (stat-based,
 		// keep outside the mutex).
@@ -680,6 +683,7 @@ func main() {
 				Bare:                 agentCfg.Bare,
 				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
 				NoSessionPersistence: agentCfg.NoSessionPersistence,
+				Timeout:              resolveExecutionTimeout(globalTimeout, agentCfg.ExecutionTimeout),
 			},
 			IssuePromptOverride:     issuePrompt,
 			IssueInstructions:       issueInstructions,
@@ -844,6 +848,26 @@ func parseWatchInterval(s string) time.Duration {
 		return minWatch
 	}
 	return d
+}
+
+// resolveExecutionTimeout returns the effective execution timeout for the CLI
+// process. Per-agent timeout wins over the global timeout; zero means "use
+// executor default (5m)".
+func resolveExecutionTimeout(globalTimeout, agentTimeout string) time.Duration {
+	// Per-agent wins
+	if agentTimeout != "" {
+		if d, err := time.ParseDuration(agentTimeout); err == nil && d > 0 {
+			return d
+		}
+	}
+	// Global fallback
+	if globalTimeout != "" {
+		if d, err := time.ParseDuration(globalTimeout); err == nil && d > 0 {
+			return d
+		}
+	}
+	// Zero = executor uses its default (5m)
+	return 0
 }
 
 // upsertDiscoveredRepos adds PRs' repos to the monitored (or non-monitored)
@@ -1117,6 +1141,7 @@ func (a *tier2Adapter) ProcessRepo(ctx context.Context, repo string) (int, error
 		}
 		agentCfg := c.AgentConfigFor(aiCfg.Primary)
 		localDirBase := c.GitHub.LocalDirBase
+		globalTimeout := c.AI.ExecutionTimeout
 		a.cfgMu.Unlock()
 		// /repos/<short-name> fallback when local_dir is unset (stat-based,
 		// keep outside the mutex).
@@ -1148,6 +1173,7 @@ func (a *tier2Adapter) ProcessRepo(ctx context.Context, repo string) (int, error
 				Bare:                 agentCfg.Bare,
 				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
 				NoSessionPersistence: agentCfg.NoSessionPersistence,
+				Timeout:              resolveExecutionTimeout(globalTimeout, agentCfg.ExecutionTimeout),
 			},
 			IssuePromptOverride:     issuePrompt,
 			IssueInstructions:       issueInstructions,

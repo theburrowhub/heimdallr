@@ -46,6 +46,7 @@ repositories = ["org/repo1", "org/repo2"]
 primary = "claude"
 # fallback = "gemini"
 review_mode = "single"   # "single" or "multi"
+# execution_timeout = "20m"   # default: 5m; increase for complex auto_implement
 
 # Per-CLI settings (optional)
 # [ai.agents.claude]

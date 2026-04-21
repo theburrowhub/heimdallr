@@ -57,6 +57,10 @@ type ExecOptions struct {
 	// (CLIAgentConfig.DangerouslySkipPerms) which requires local file access.
 	DangerouslySkipPerms bool // --dangerously-skip-permissions
 	NoSessionPersistence bool // --no-session-persistence
+
+	// Timeout overrides the default execution timeout for the CLI process.
+	// Zero = use default (5 minutes).
+	Timeout time.Duration
 }
 
 // Executor runs AI CLI tools for code review.
@@ -345,7 +349,11 @@ func (e *Executor) Execute(cli, prompt string, opts ExecOptions) (*ReviewResult,
 // output, etc.). Callers should pass the bytes through StripToJSON before
 // json.Unmarshal — CLIs routinely wrap JSON in code fences or surrounding text.
 func (e *Executor) ExecuteRaw(cli, prompt string, opts ExecOptions) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), executionTimeout)
+	timeout := executionTimeout
+	if opts.Timeout > 0 {
+		timeout = opts.Timeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	// Resolve full path — uses login shell to find binaries in Homebrew/npm/etc.

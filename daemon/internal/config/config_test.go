@@ -1419,6 +1419,16 @@ retention_days = 0
 
 // ── AutoEnablePRForDiscovery ────────────────────────────────────────────────
 
+func TestApplyEnvOverrides_ExecutionTimeout(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	t.Setenv("HEIMDALLM_EXECUTION_TIMEOUT", "20m")
+	cfg.applyEnvOverrides()
+	if cfg.AI.ExecutionTimeout != "20m" {
+		t.Errorf("ExecutionTimeout = %q, want 20m", cfg.AI.ExecutionTimeout)
+	}
+}
+
 func TestAutoEnablePRForDiscovery_Default(t *testing.T) {
 	cfg := &GitHubConfig{}
 	if !cfg.AutoEnablePRForDiscovery() {
