@@ -809,18 +809,22 @@ type tier2Adapter struct {
 }
 
 // FetchPRsToReview implements scheduler.Tier2PRFetcher.
+// After fetching, any repos not yet in the config are auto-discovered and
+// persisted — the daemon never silently skips unknown repos again.
 func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 	prs, err := a.ghClient.FetchPRsToReview()
 	if err != nil {
 		return nil, err
 	}
 	out := make([]scheduler.Tier2PR, 0, len(prs))
+	seenRepos := make(map[string]struct{})
 	for _, pr := range prs {
 		pr.ResolveRepo()
 		if pr.Repo == "" {
 			slog.Warn("adapter: skipping PR with empty repo", "pr_number", pr.Number)
 			continue
 		}
+		seenRepos[pr.Repo] = struct{}{}
 		out = append(out, scheduler.Tier2PR{
 			ID:        pr.ID,
 			Number:    pr.Number,
@@ -832,6 +836,43 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 			UpdatedAt: pr.UpdatedAt,
 		})
 	}
+
+	// Auto-discovery: add repos seen in PRs that aren't in the config yet.
+	a.cfgMu.Lock()
+	c := *a.cfg
+	known := make(map[string]struct{}, len(c.GitHub.Repositories))
+	for _, r := range c.GitHub.Repositories {
+		known[r] = struct{}{}
+	}
+	// Also consider non-monitored repos as "known" — don't re-add blacklisted repos.
+	for _, r := range c.GitHub.NonMonitored {
+		known[r] = struct{}{}
+	}
+	a.cfgMu.Unlock()
+
+	var newRepos []string
+	for repo := range seenRepos {
+		if _, ok := known[repo]; !ok {
+			newRepos = append(newRepos, repo)
+		}
+	}
+	if len(newRepos) > 0 {
+		a.cfgMu.Lock()
+		c = *a.cfg
+		updated := append(append([]string(nil), c.GitHub.Repositories...), newRepos...)
+		c.GitHub.Repositories = updated
+		*a.cfg = c
+		a.cfgMu.Unlock()
+
+		// Persist to store so the repos survive a daemon restart.
+		reposJSON, _ := json.Marshal(updated)
+		if _, err := a.store.SetConfig("repositories", string(reposJSON)); err != nil {
+			slog.Warn("auto-discovery: failed to persist repos", "err", err)
+		} else {
+			slog.Info("auto-discovery: added repos from PRs", "repos", newRepos)
+		}
+	}
+
 	return out, nil
 }
 
