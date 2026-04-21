@@ -54,6 +54,23 @@ void main() {
     // Primary agent ('claude') moved to Agents tab — no longer in ConfigScreen
   });
 
+  test('RepoConfig parses first_seen_at when provided', () {
+    final json = {
+      'repositories': ['a/b'],
+      'repo_overrides': {
+        'a/b': {'first_seen_at': 1234567890},
+      },
+      'server_port': 1, 'poll_interval': '60s', 'retention_days': 30,
+      'ai_primary': 'claude', 'ai_fallback': '', 'review_mode': 'single',
+      'issue_tracking': {'enabled': false},
+    };
+    final cfg = AppConfig.fromJson(json);
+    expect(
+      cfg.repoConfigs['a/b']!.firstSeenAt,
+      DateTime.fromMillisecondsSinceEpoch(1234567890 * 1000),
+    );
+  });
+
   testWidgets('saveAndStartDaemon calls platform.spawnDaemon', (tester) async {
     final platform = FakePlatformServices(
       daemonBinaryPath: '/fake/bin/heimdalld',

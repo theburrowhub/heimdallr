@@ -92,6 +92,7 @@ class RepoConfig {
 
   // General
   final String? localDir;     // local repo directory for full-repo analysis
+  final DateTime? firstSeenAt; // when the daemon first discovered this repo (null = unknown)
 
   // PR Review config
   final String? aiPrimary;    // null = use global
@@ -140,6 +141,7 @@ class RepoConfig {
     this.prAssignee,
     this.prLabels,
     this.prDraft,
+    this.firstSeenAt,
   });
 
   /// True if any feature is actively enabled (per-repo or inherited).
@@ -206,6 +208,7 @@ class RepoConfig {
     Object? prAssignee         = _sentinel,
     Object? prLabels           = _sentinel,
     Object? prDraft            = _sentinel,
+    Object? firstSeenAt        = _sentinel,
   }) {
     return RepoConfig(
       prEnabled:          prEnabled          == _sentinel ? this.prEnabled          : prEnabled          as bool?,
@@ -229,6 +232,7 @@ class RepoConfig {
       prAssignee:         prAssignee         == _sentinel ? this.prAssignee         : prAssignee         as String?,
       prLabels:           prLabels           == _sentinel ? this.prLabels           : prLabels           as List<String>?,
       prDraft:            prDraft            == _sentinel ? this.prDraft            : prDraft            as bool?,
+      firstSeenAt:        firstSeenAt        == _sentinel ? this.firstSeenAt        : firstSeenAt        as DateTime?,
     );
   }
 }
@@ -430,6 +434,10 @@ class AppConfig {
         final hasDevLabels = _nullableStringList(itRaw?['develop_labels']) != null;
         final itExplicit = itRaw?['enabled'] as bool? ?? false;
         final devExplicit = itRaw?['develop_enabled'] as bool? ?? false;
+        final fsRaw = ov['first_seen_at'];
+        final firstSeen = fsRaw is int
+            ? DateTime.fromMillisecondsSinceEpoch(fsRaw * 1000)
+            : null;
         configs[entry.key] = RepoConfig(
           prEnabled:          existing?.prEnabled,
           itEnabled:          (itExplicit || hasReviewLabels) ? true : null,
@@ -452,6 +460,7 @@ class AppConfig {
           prAssignee:         _nonEmpty(ov['pr_assignee']),
           prLabels:           _nullableStringList(ov['pr_labels']),
           prDraft:            ov['pr_draft'] as bool?,
+          firstSeenAt:        firstSeen,
         );
       }
     }

@@ -84,6 +84,55 @@ func TestHandlerGetConfig(t *testing.T) {
 	}
 }
 
+// TestHandlerGetConfig_ExposesRepoFirstSeenAt guards the response shape that
+// main.go's configFn produces for auto-discovered repos: each entry in
+// repo_overrides gets a first_seen_at Unix-seconds integer enriched from the
+// repo_first_seen store row. The Flutter app reads this to show NEW badges,
+// so a silent rename or re-nesting would break the UI. The store-reading path
+// itself lives in cmd/heimdallm/main.go and is covered at runtime — this test
+// pins the JSON contract so that contract cannot drift.
+func TestHandlerGetConfig_ExposesRepoFirstSeenAt(t *testing.T) {
+	srv, _ := setupServer(t)
+	seen := int64(1713571200) // 2024-04-20T00:00:00Z, arbitrary but fixed
+	srv.SetConfigFn(func() map[string]any {
+		return map[string]any{
+			"repo_overrides": map[string]any{
+				"acme/api": map[string]any{
+					"first_seen_at": seen,
+				},
+			},
+		}
+	})
+
+	req := httptest.NewRequest("GET", "/config", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v (body: %s)", err, w.Body.String())
+	}
+	overrides, ok := body["repo_overrides"].(map[string]any)
+	if !ok {
+		t.Fatalf("repo_overrides missing or wrong type: %T: %v", body["repo_overrides"], body["repo_overrides"])
+	}
+	entry, ok := overrides["acme/api"].(map[string]any)
+	if !ok {
+		t.Fatalf("repo_overrides[acme/api] missing or wrong type: %T: %v", overrides["acme/api"], overrides["acme/api"])
+	}
+	// JSON numbers unmarshal to float64 when decoding into map[string]any.
+	got, ok := entry["first_seen_at"].(float64)
+	if !ok {
+		t.Fatalf("first_seen_at missing or wrong type: %T: %v", entry["first_seen_at"], entry["first_seen_at"])
+	}
+	if int64(got) != seen {
+		t.Errorf("first_seen_at = %d, want %d", int64(got), seen)
+	}
+}
+
 func TestHandlerPutConfig(t *testing.T) {
 	srv, _ := setupServer(t)
 	body := `{"poll_interval":"5m"}`

@@ -342,8 +342,17 @@ func main() {
 	srv.SetRepoMetaFns(ghClient.FetchLabels, ghClient.FetchCollaborators)
 
 	srv.SetConfigFn(func() map[string]any {
+		// Snapshot the mutable slice fields under cfgMu. The poll-cycle
+		// auto-discovery path (upsertDiscoveredRepos) appends to
+		// GitHub.Repositories / GitHub.NonMonitored while holding the same
+		// mutex — without this snapshot, reading those slices after the
+		// unlock would race with concurrent header writes. Cloning into a
+		// fresh backing array also means the returned map never shares
+		// state with the live Config after we release the lock.
 		cfgMu.Lock()
 		c := cfg
+		reposList := append([]string(nil), c.GitHub.Repositories...)
+		nonMonList := append([]string(nil), c.GitHub.NonMonitored...)
 		cfgMu.Unlock()
 		repoOverrides := make(map[string]map[string]any)
 		for repo, ai := range c.AI.Repos {
@@ -388,10 +397,10 @@ func main() {
 				localDirsDetected[repo] = d
 			}
 		}
-		for _, r := range c.GitHub.Repositories {
+		for _, r := range reposList {
 			addDetection(r)
 		}
-		for _, r := range c.GitHub.NonMonitored {
+		for _, r := range nonMonList {
 			addDetection(r)
 		}
 		for r := range c.AI.Repos {
@@ -412,11 +421,31 @@ func main() {
 				"no_session_persistence":   ac.NoSessionPersistence,
 			}
 		}
+		// Expose first-seen timestamps so the Flutter app can show NEW
+		// badges on auto-discovered repos. Read-only; populated by the
+		// poll cycle. Errors are logged (not propagated) so a transient
+		// store failure degrades gracefully — the response goes out
+		// without first_seen_at, NEW badges disappear, and the operator
+		// sees a Warn entry instead of silent UI breakage.
+		if rows, err := s.ListConfigs(); err != nil {
+			slog.Warn("config: list configs for repo_first_seen failed", "err", err)
+		} else if fsMap, err := config.ParseFirstSeen(rows["repo_first_seen"]); err != nil {
+			slog.Warn("config: parse repo_first_seen failed", "err", err)
+		} else {
+			for repo, ts := range fsMap {
+				ro := repoOverrides[repo]
+				if ro == nil {
+					ro = map[string]any{}
+				}
+				ro["first_seen_at"] = ts.Unix()
+				repoOverrides[repo] = ro
+			}
+		}
 		result := map[string]any{
 			"server_port":                 c.Server.Port,
 			"poll_interval":               c.GitHub.PollInterval,
-			"repositories":                c.GitHub.Repositories,
-			"non_monitored":               c.GitHub.NonMonitored,
+			"repositories":                reposList,
+			"non_monitored":               nonMonList,
 			"ai_primary":                  c.AI.Primary,
 			"ai_fallback":                 c.AI.Fallback,
 			"review_mode":                 c.AI.ReviewMode,
@@ -817,6 +846,46 @@ func parseWatchInterval(s string) time.Duration {
 	return d
 }
 
+// upsertDiscoveredRepos adds PRs' repos to the monitored (or non-monitored)
+// list when they're new. Returns the list of repos that were added.
+// Never removes; mutually-exclusive with NonMonitored when adding.
+//
+// The Flutter UI maps prEnabled via list membership: prEnabled=true ⇔
+// Repositories, prEnabled=false ⇔ NonMonitored, neither ⇔ undiscovered.
+// AutoEnablePRForDiscovery() controls which list a new repo lands in.
+//
+// Caller is responsible for persisting the updated Config and recording
+// first-seen timestamps. This helper is pure state mutation so it's easy
+// to test in isolation.
+func upsertDiscoveredRepos(c *config.Config, prs []*gh.PullRequest) []string {
+	known := make(map[string]struct{})
+	for _, r := range c.GitHub.Repositories {
+		known[r] = struct{}{}
+	}
+	for _, r := range c.GitHub.NonMonitored {
+		known[r] = struct{}{}
+	}
+
+	enable := c.GitHub.AutoEnablePRForDiscovery()
+	added := []string{}
+	for _, pr := range prs {
+		if pr.Repo == "" {
+			continue
+		}
+		if _, alreadyKnown := known[pr.Repo]; alreadyKnown {
+			continue
+		}
+		if enable {
+			c.GitHub.Repositories = append(c.GitHub.Repositories, pr.Repo)
+		} else {
+			c.GitHub.NonMonitored = append(c.GitHub.NonMonitored, pr.Repo)
+		}
+		known[pr.Repo] = struct{}{}
+		added = append(added, pr.Repo)
+	}
+	return added
+}
+
 // ── tier2Adapter bridges main.go's concrete types to Pipeline interfaces ──
 
 type tier2Adapter struct {
@@ -834,6 +903,84 @@ type tier2Adapter struct {
 	runReview func(pr *gh.PullRequest, aiCfg config.RepoAI)
 }
 
+// discoveryStore is the subset of *store.Store that processDiscoveredRepos
+// needs. Narrowing to this interface lets the discovery path be unit-tested
+// without standing up the full adapter (which pulls in ghClient, pipelines,
+// etc.).
+type discoveryStore interface {
+	SetConfig(key, value string) (int64, error)
+	ListConfigs() (map[string]string, error)
+}
+
+// processDiscoveredRepos persists newly-discovered repos to the K/V store
+// (monitored/non-monitored lists + first-seen map) and publishes one
+// EventRepoDiscovered per added repo on the broker.
+//
+// Inputs are already-snapshot slices so the caller can drop its config mutex
+// before invoking this helper. No-op when added is empty.
+func processDiscoveredRepos(
+	added []string,
+	reposSnap []string,
+	nonMonSnap []string,
+	st discoveryStore,
+	broker *sse.Broker,
+	now time.Time,
+) {
+	if len(added) == 0 {
+		return
+	}
+	// Persist the updated monitored/non-monitored lists via the K/V store
+	// so the Flutter app's cached view survives a daemon restart. On
+	// json.Marshal failure (theoretical — []string can't fail today, but
+	// belt-and-braces against future type changes) skip the write so we
+	// never persist "" into the store, which would break ApplyStore on
+	// next reload.
+	if reposJSON, err := json.Marshal(reposSnap); err != nil {
+		slog.Warn("poll: marshal repositories failed", "err", err)
+	} else if _, err := st.SetConfig("repositories", string(reposJSON)); err != nil {
+		slog.Warn("poll: persist repositories failed", "err", err)
+	}
+	if nmJSON, err := json.Marshal(nonMonSnap); err != nil {
+		slog.Warn("poll: marshal non_monitored failed", "err", err)
+	} else if _, err := st.SetConfig("non_monitored", string(nmJSON)); err != nil {
+		slog.Warn("poll: persist non_monitored failed", "err", err)
+	}
+
+	// Update first-seen map in the same store so GET /config can expose
+	// repo_overrides[repo].first_seen_at to the UI (NEW badge).
+	//
+	// Guard both reads: if either fails, bail out without writing.
+	// Writing a partial FirstSeenMap back would permanently erase every
+	// previously-stored timestamp — the UI would lose NEW badges for all
+	// historical repos the next time a single new repo is discovered.
+	rows, err := st.ListConfigs()
+	if err != nil {
+		slog.Warn("poll: list configs for repo_first_seen failed — skipping update", "err", err)
+	} else {
+		fs, err := config.ParseFirstSeen(rows["repo_first_seen"])
+		if err != nil {
+			slog.Warn("poll: parse repo_first_seen failed — skipping update to preserve stored data", "err", err)
+		} else {
+			for _, r := range added {
+				fs.Mark(r, now)
+			}
+			if fsStr, err := fs.Marshal(); err != nil {
+				slog.Warn("poll: marshal repo_first_seen failed", "err", err)
+			} else if _, err := st.SetConfig("repo_first_seen", fsStr); err != nil {
+				slog.Warn("poll: persist repo_first_seen failed", "err", err)
+			}
+		}
+	}
+
+	for _, r := range added {
+		broker.Publish(sse.Event{
+			Type: sse.EventRepoDiscovered,
+			Data: sseData(map[string]any{"repo": r}),
+		})
+		slog.Info("poll: auto-discovered repo", "repo", r)
+	}
+}
+
 // FetchPRsToReview implements scheduler.Tier2PRFetcher.
 // After fetching, any repos not yet in the config are auto-discovered and
 // persisted — the daemon never silently skips unknown repos again.
@@ -842,15 +989,45 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]scheduler.Tier2PR, 0, len(prs))
-	seenRepos := make(map[string]struct{})
+	// Resolve repo on every PR before the upsert step — upsertDiscoveredRepos
+	// reads pr.Repo and skips empty ones, so we must populate the field first.
 	for _, pr := range prs {
 		pr.ResolveRepo()
+	}
+
+	// Auto-discover repos we've never seen before. A PR whose repo is not in
+	// Repositories or NonMonitored gets appended to one of those lists based
+	// on AutoEnablePRForDiscovery(). This is how the Flutter UI learns about
+	// review-requested repos the operator never explicitly configured.
+	//
+	// Snapshot the updated slices under the same mutex that guards the
+	// mutation so a concurrent reload-swap cannot race with the Marshal below.
+	a.cfgMu.Lock()
+	// a.cfg is **config.Config (a handle to the "current Config" pointer
+	// that config reloads can swap). Dereference once to get the *Config we
+	// mutate in place under the mutex.
+	cfg := *a.cfg
+	added := upsertDiscoveredRepos(cfg, prs)
+	reposSnap := append([]string(nil), cfg.GitHub.Repositories...)
+	nonMonSnap := append([]string(nil), cfg.GitHub.NonMonitored...)
+	a.cfgMu.Unlock()
+
+	// Benign race window: between the Unlock above and the SetConfig calls
+	// inside processDiscoveredRepos, a config reload can swap *a.cfg to a
+	// fresh Config that does not contain the just-appended repos. On the
+	// next poll cycle they look new again, triggering one burst of
+	// duplicate repo_discovered SSE events. Self-heals via the store (the
+	// reloaded Config picks up "repositories"/"non_monitored" from it),
+	// so we accept the duplicate rather than hold cfgMu across the
+	// blocking store I/O below.
+	processDiscoveredRepos(added, reposSnap, nonMonSnap, a.store, a.broker, time.Now())
+
+	out := make([]scheduler.Tier2PR, 0, len(prs))
+	for _, pr := range prs {
 		if pr.Repo == "" {
 			slog.Warn("adapter: skipping PR with empty repo", "pr_number", pr.Number)
 			continue
 		}
-		seenRepos[pr.Repo] = struct{}{}
 		out = append(out, scheduler.Tier2PR{
 			ID:        pr.ID,
 			Number:    pr.Number,
@@ -861,41 +1038,6 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 			State:     pr.State,
 			UpdatedAt: pr.UpdatedAt,
 		})
-	}
-
-	// Auto-discovery: check + append under a single lock to avoid TOCTOU.
-	var updated []string
-	var newRepos []string
-	a.cfgMu.Lock()
-	c := *a.cfg
-	known := make(map[string]struct{}, len(c.GitHub.Repositories)+len(c.GitHub.NonMonitored))
-	for _, r := range c.GitHub.Repositories {
-		known[r] = struct{}{}
-	}
-	for _, r := range c.GitHub.NonMonitored {
-		known[r] = struct{}{}
-	}
-	for repo := range seenRepos {
-		if _, ok := known[repo]; !ok {
-			newRepos = append(newRepos, repo)
-		}
-	}
-	if len(newRepos) > 0 {
-		updated = append(append([]string(nil), c.GitHub.Repositories...), newRepos...)
-		c.GitHub.Repositories = updated
-		*a.cfg = c
-	}
-	a.cfgMu.Unlock()
-
-	if len(newRepos) > 0 {
-		reposJSON, err := json.Marshal(updated)
-		if err != nil {
-			slog.Error("auto-discovery: failed to marshal repos", "err", err)
-		} else if _, err := a.store.SetConfig("repositories", string(reposJSON)); err != nil {
-			slog.Warn("auto-discovery: failed to persist repos", "err", err)
-		} else {
-			slog.Info("auto-discovery: added repos from PRs", "repos", newRepos)
-		}
 	}
 
 	return out, nil

@@ -6,6 +6,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/models/config_model.dart';
 import '../../shared/widgets/toast.dart';
 import '../config/config_providers.dart';
+import 'widgets/bulk_actions_bar.dart';
+import 'widgets/feature_palette.dart';
+import 'widgets/filter_chips.dart';
+import 'widgets/repo_grid_tile.dart';
+import 'widgets/repo_list_tile.dart';
 
 class ReposScreen extends ConsumerStatefulWidget {
   const ReposScreen({super.key});
@@ -15,24 +20,121 @@ class ReposScreen extends ConsumerStatefulWidget {
 }
 
 enum _SyncStatus { idle, saving, saved }
-enum _FilterMode { all, monitored, notMonitored }
-enum _ViewMode { list, grid }
 
 class _ReposScreenState extends ConsumerState<ReposScreen> {
   Map<String, RepoConfig> _repoConfigs = {};
   bool _initialized = false;
   String _search = '';
+  String _filter = 'all'; // 'all' | 'monitored' | 'not_monitored'
+  String _viewMode = 'list'; // 'list' | 'grid'
   Set<String> _orgFilter = {}; // empty = all orgs
   _SyncStatus _syncStatus = _SyncStatus.idle;
-  _FilterMode _filterMode = _FilterMode.all;
-  _ViewMode _viewMode = _ViewMode.list;
   Timer? _debounce;
   Timer? _savedResetTimer;
+
+  final Set<String> _selected = {};
+  Set<String> _dismissedNew = {};
 
   @override
   void initState() {
     super.initState();
-    _loadViewPreference();
+    SharedPreferences.getInstance().then((p) {
+      if (!mounted) return;
+      setState(() {
+        _viewMode = p.getString('repos_view') ?? 'list';
+        _dismissedNew = (p.getStringList('repos_dismissed_new') ?? []).toSet();
+      });
+    });
+  }
+
+  void _setViewMode(String v) {
+    setState(() => _viewMode = v);
+    SharedPreferences.getInstance().then((p) => p.setString('repos_view', v));
+  }
+
+  bool _shouldShowNew(String repo, RepoConfig c) =>
+      c.firstSeenAt != null && !_dismissedNew.contains(repo);
+
+  void _dismissNew(String repo) {
+    if (_dismissedNew.contains(repo)) return;
+    setState(() => _dismissedNew = {..._dismissedNew, repo});
+    SharedPreferences.getInstance().then(
+      (p) => p.setStringList('repos_dismissed_new', _dismissedNew.toList()),
+    );
+  }
+
+  void _toggleSelection(String repo) {
+    setState(() {
+      if (!_selected.add(repo)) _selected.remove(repo);
+    });
+  }
+
+  /// Aggregate per-feature state across the current selection.
+  /// Returns `true` when every selected repo has the feature on,
+  /// `false` when every selected repo has it off, and `null` when
+  /// repos disagree (mixed state).
+  Map<Feature, bool?> _aggregate() {
+    bool? agg(bool Function(RepoConfig) pick) {
+      bool? result;
+      for (final r in _selected) {
+        final c = _repoConfigs[r];
+        if (c == null) continue;
+        final v = pick(c);
+        if (result == null) {
+          result = v;
+        } else if (result != v) {
+          return null;
+        }
+      }
+      return result ?? false;
+    }
+
+    bool hasDir(RepoConfig c) =>
+        c.localDir != null && c.localDir!.isNotEmpty;
+
+    return {
+      Feature.prReview:      agg((c) => c.prEnabled ?? false),
+      Feature.issueTracking: agg((c) => c.itEnabled ?? false),
+      Feature.develop:       agg((c) => (c.devEnabled ?? false) && hasDir(c)),
+    };
+  }
+
+  void _applyBulk(Feature f, bool enable) {
+    setState(() {
+      for (final r in _selected) {
+        final c = _repoConfigs[r];
+        if (c == null) continue;
+        // Develop requires a local dir to actually run. Enabling it on a
+        // repo without one would write a flag the daemon can't act on, so
+        // skip those silently — the row LED stays grey, making it obvious
+        // the bulk apply didn't affect that repo.
+        if (f == Feature.develop &&
+            enable &&
+            (c.localDir == null || c.localDir!.isEmpty)) {
+          continue;
+        }
+        _repoConfigs[r] = switch (f) {
+          Feature.prReview      => c.copyWith(prEnabled: enable),
+          Feature.issueTracking => c.copyWith(itEnabled: enable),
+          Feature.develop       => c.copyWith(devEnabled: enable),
+        };
+      }
+    });
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), _autoSave);
+  }
+
+  void _clearSelection() => setState(_selected.clear);
+
+  String _emptyStateText() {
+    if (_search.isNotEmpty) return 'No repos match “$_search”.';
+    return switch (_filter) {
+      'monitored' =>
+        'No repos currently monitored. Request a review on a PR and the daemon will add it here.',
+      'not_monitored' => 'No repos in the not-monitored list.',
+      _ =>
+        'No repos yet. Request a review on a PR and the daemon will add it automatically.',
+    };
   }
 
   @override
@@ -42,27 +144,13 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
     super.dispose();
   }
 
-  void _loadViewPreference() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final value = prefs.getString('repos_view_mode');
-      if (value == 'grid' && mounted) setState(() => _viewMode = _ViewMode.grid);
-    } catch (_) {}
-  }
-
-  void _setViewMode(_ViewMode mode) {
-    setState(() => _viewMode = mode);
-    SharedPreferences.getInstance().then((prefs) {
-      prefs.setString('repos_view_mode', mode.name);
-    }).catchError((_) {});
-  }
-
   void _initFrom(AppConfig config) {
     if (_initialized) return;
     _initialized = true;
     _repoConfigs = Map.from(config.repoConfigs);
   }
 
+  /// Called whenever a repo config changes — schedules an auto-save.
   void _onChange(String repo, RepoConfig rc) {
     setState(() => _repoConfigs[repo] = rc);
     _debounce?.cancel();
@@ -99,7 +187,7 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
       data: (config) {
         _initFrom(config);
 
-        // Sort: monitored first, then alphabetical
+        // Monitored first, disabled last; both groups sorted alphabetically
         final allRepos = _repoConfigs.keys.toList()
           ..sort((a, b) {
             final ma = _repoConfigs[a]!.isMonitored ? 0 : 1;
@@ -107,125 +195,95 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
             if (ma != mb) return ma.compareTo(mb);
             return a.compareTo(b);
           });
-
-        // Derive all orgs for the org filter dropdown
+        // Derive all orgs for the org filter dropdown. Only shown when more
+        // than one org has at least one repo.
         final allOrgs = _repoConfigs.keys
             .map((r) => r.contains('/') ? r.split('/').first : r)
             .toSet()
-            .toList()..sort();
+            .toList()
+          ..sort();
 
-        // Apply text search
-        var filtered = _search.isEmpty
-            ? allRepos
-            : allRepos.where((r) => r.toLowerCase().contains(_search.toLowerCase())).toList();
-
-        // Apply org filter
-        if (_orgFilter.isNotEmpty) {
-          filtered = filtered.where((r) {
+        final filtered = allRepos.where((r) {
+          if (_search.isNotEmpty &&
+              !r.toLowerCase().contains(_search.toLowerCase())) {
+            return false;
+          }
+          if (_orgFilter.isNotEmpty) {
             final org = r.contains('/') ? r.split('/').first : r;
-            return _orgFilter.contains(org);
-          }).toList();
-        }
-
-        // Apply monitored/not-monitored filter
-        if (_filterMode == _FilterMode.monitored) {
-          filtered = filtered.where((r) => _repoConfigs[r]!.isMonitored).toList();
-        } else if (_filterMode == _FilterMode.notMonitored) {
-          filtered = filtered.where((r) => !_repoConfigs[r]!.isMonitored).toList();
-        }
-
-        final monitoredCount = _repoConfigs.values.where((c) => c.isMonitored).length;
-        final notMonitoredCount = _repoConfigs.length - monitoredCount;
+            if (!_orgFilter.contains(org)) return false;
+          }
+          final c = _repoConfigs[r]!;
+          if (_filter == 'monitored' && !c.isMonitored) return false;
+          if (_filter == 'not_monitored' && c.isMonitored) return false;
+          return true;
+        }).toList();
 
         return Column(
           children: [
-            // Single-line toolbar: search + filters + view toggle + status
+            // Toolbar
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
               child: Row(
                 children: [
-                  // Compact search
-                  SizedBox(
-                    width: 160,
+                  Expanded(
                     child: TextField(
                       decoration: const InputDecoration(
-                        hintText: 'Search…',
-                        prefixIcon: Icon(Icons.search, size: 16),
+                        hintText: 'Filter repos…',
+                        prefixIcon: Icon(Icons.search, size: 18),
                         isDense: true,
                         border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(vertical: 6),
+                        contentPadding: EdgeInsets.symmetric(vertical: 8),
                       ),
-                      style: const TextStyle(fontSize: 13),
                       onChanged: (v) => setState(() => _search = v),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // Monitored filter chips
-                  _filterChip('All', _repoConfigs.length, _FilterMode.all),
-                  const SizedBox(width: 4),
-                  _filterChip('Monitored', monitoredCount, _FilterMode.monitored),
-                  const SizedBox(width: 4),
-                  _filterChip('Not mon.', notMonitoredCount, _FilterMode.notMonitored),
-                  const SizedBox(width: 8),
-                  // Org multi-select (dialog, same UX as Activity)
-                  if (allOrgs.length > 1)
-                    GestureDetector(
-                      onTap: () async {
-                        final result = await showDialog<Set<String>>(
-                          context: context,
-                          builder: (_) => _MultiSelectDialog(
-                            title: 'Filter by Org',
-                            items: allOrgs,
-                            selected: _orgFilter,
-                          ),
-                        );
-                        if (result != null) setState(() => _orgFilter = result);
-                      },
-                      child: Chip(
-                        avatar: Icon(Icons.business, size: 14,
-                            color: _orgFilter.isNotEmpty
-                                ? Theme.of(context).colorScheme.primary
-                                : Colors.grey),
-                        label: Text(
-                          _orgFilter.isNotEmpty ? 'Org (${_orgFilter.length})' : 'Org',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: _orgFilter.isNotEmpty
-                                ? Theme.of(context).colorScheme.primary
-                                : null,
-                          ),
-                        ),
-                        visualDensity: VisualDensity.compact,
-                        side: _orgFilter.isNotEmpty
-                            ? BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5))
-                            : const BorderSide(color: Colors.transparent),
-                      ),
-                    ),
-                  // Reset org filter
-                  if (_orgFilter.isNotEmpty) ...[
-                    const SizedBox(width: 4),
-                    GestureDetector(
-                      onTap: () => setState(() => _orgFilter = {}),
-                      child: const Icon(Icons.clear, size: 16, color: Colors.grey),
-                    ),
-                  ],
-                  const Spacer(),
-                  // View toggle
-                  SegmentedButton<_ViewMode>(
-                    segments: const [
-                      ButtonSegment(value: _ViewMode.list, icon: Icon(Icons.view_list, size: 16)),
-                      ButtonSegment(value: _ViewMode.grid, icon: Icon(Icons.grid_view, size: 16)),
-                    ],
-                    selected: {_viewMode},
-                    onSelectionChanged: (s) => _setViewMode(s.first),
-                    showSelectedIcon: false,
-                    style: const ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
+                  RepoFilterChips(
+                    counts: {
+                      'all': _repoConfigs.length,
+                      'monitored': _repoConfigs.values
+                          .where((c) => c.isMonitored)
+                          .length,
+                      'not_monitored': _repoConfigs.values
+                          .where((c) => !c.isMonitored)
+                          .length,
+                    },
+                    current: _filter,
+                    onChanged: (v) => setState(() => _filter = v),
                   ),
-                  const SizedBox(width: 6),
-                  // Auto-save status
+                  const SizedBox(width: 8),
+                  // Org multi-select (hidden when there's only one org).
+                  if (allOrgs.length > 1) ...[
+                    _OrgFilterChip(
+                      orgs: allOrgs,
+                      selected: _orgFilter,
+                      onChanged: (s) => setState(() => _orgFilter = s),
+                    ),
+                    if (_orgFilter.isNotEmpty) ...[
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        onTap: () => setState(() => _orgFilter = {}),
+                        child: const Icon(Icons.clear, size: 16, color: Colors.grey),
+                      ),
+                    ],
+                    const SizedBox(width: 8),
+                  ],
+                  Row(children: [
+                    _ViewToggleButton(
+                      icon: Icons.view_list,
+                      active: _viewMode == 'list',
+                      onTap: () => _setViewMode('list'),
+                      buttonKey: const Key('repos_view_toggle_list'),
+                    ),
+                    _ViewToggleButton(
+                      icon: Icons.grid_view,
+                      active: _viewMode == 'grid',
+                      onTap: () => _setViewMode('grid'),
+                      buttonKey: const Key('repos_view_toggle_grid'),
+                    ),
+                  ]),
+                  const SizedBox(width: 12),
+                  // Auto-save status indicator
                   SizedBox(
                     width: 22, height: 22,
                     child: switch (_syncStatus) {
@@ -238,164 +296,39 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
                 ],
               ),
             ),
-            // Content
+            if (_selected.isNotEmpty)
+              BulkActionsBar(
+                selectedCount: _selected.length,
+                aggregates: _aggregate(),
+                onApply: _applyBulk,
+                onClear: _clearSelection,
+              ),
+            // Repo list with section dividers
             Expanded(
               child: filtered.isEmpty
-                  ? Center(child: Text(
-                      _repoConfigs.isEmpty
-                          ? 'No repos yet — the daemon auto-discovers repos from your PRs.'
-                          : 'No repos match the current filter.',
-                      style: TextStyle(color: Colors.grey.shade500),
-                    ))
-                  : _viewMode == _ViewMode.list
-                      ? _RepoListWithSections(
+                  ? Center(child: Text(_emptyStateText()))
+                  : _viewMode == 'grid'
+                      ? _ReposGrid(
+                          repos: filtered,
+                          configs: _repoConfigs,
+                          appConfig: config,
+                          selected: _selected,
+                          onSelectionToggle: _toggleSelection,
+                          showNewFor: _shouldShowNew,
+                          onDismissNew: _dismissNew,
+                        )
+                      : _RepoListWithSections(
                           repos: filtered,
                           configs: _repoConfigs,
                           appConfig: config,
                           onChanged: _onChange,
-                        )
-                      : _RepoGrid(
-                          repos: filtered,
-                          configs: _repoConfigs,
-                          appConfig: config,
+                          selected: _selected,
+                          onSelectionToggle: _toggleSelection,
+                          showNewFor: _shouldShowNew,
+                          onDismissNew: _dismissNew,
                         ),
             ),
           ],
-        );
-      },
-    );
-  }
-
-  Widget _filterChip(String label, int count, _FilterMode mode) {
-    final active = _filterMode == mode;
-    return FilterChip(
-      label: Text('$label ($count)', style: const TextStyle(fontSize: 12)),
-      selected: active,
-      onSelected: (_) => setState(() => _filterMode = mode),
-      visualDensity: VisualDensity.compact,
-      showCheckmark: false,
-    );
-  }
-}
-
-// ── Grid view ────────────────────────────────────────────────────────────────
-
-class _RepoGrid extends StatelessWidget {
-  final List<String> repos;
-  final Map<String, RepoConfig> configs;
-  final AppConfig appConfig;
-
-  const _RepoGrid({
-    required this.repos,
-    required this.configs,
-    required this.appConfig,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final crossCount = constraints.maxWidth > 900 ? 4
-            : constraints.maxWidth > 600 ? 3
-            : 2;
-        return GridView.builder(
-          padding: const EdgeInsets.all(12),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossCount,
-            mainAxisSpacing: 8,
-            crossAxisSpacing: 8,
-            childAspectRatio: 2.0,
-          ),
-          itemCount: repos.length,
-          itemBuilder: (context, i) {
-            final repo = repos[i];
-            final config = configs[repo]!;
-            final shortName = repo.contains('/') ? repo.split('/').last : repo;
-            final org = repo.contains('/') ? repo.split('/').first : '';
-            final configuredDir = (config.localDir ?? '').isNotEmpty ? config.localDir : null;
-            final detectedDir = appConfig.localDirsDetected[repo];
-            final effectiveDir = configuredDir ?? detectedDir;
-            final hasDirMapping = effectiveDir != null && effectiveDir.isNotEmpty;
-            final isAutoDetected = configuredDir == null && detectedDir != null;
-
-            return Card(
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: () => context.push('/repos/${Uri.encodeComponent(repo)}'),
-                child: Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Row(
-                        children: [
-                          _Led(
-                            status: config.prLedStatus(appConfig.repositories.contains(repo)),
-                            tooltip: 'PR',
-                          ),
-                          const SizedBox(width: 3),
-                          _Led(
-                            status: config.itLedStatus(appConfig.issueTracking.enabled),
-                            tooltip: 'IT',
-                          ),
-                          const SizedBox(width: 3),
-                          _Led(
-                            status: config.devLedStatus(appConfig.issueTracking.enabled, hasDirMapping),
-                            tooltip: 'Dev',
-                          ),
-                          const Spacer(),
-                          Icon(Icons.chevron_right, size: 14, color: Colors.grey.shade600),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text(shortName,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: config.isMonitored ? FontWeight.w600 : FontWeight.normal,
-                            color: config.isMonitored ? null : Colors.grey,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis),
-                      if (org.isNotEmpty)
-                        Text(org,
-                            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                      const SizedBox(height: 2),
-                      Row(children: [
-                        Icon(
-                          hasDirMapping ? Icons.folder : Icons.folder_off_outlined,
-                          size: 11,
-                          color: hasDirMapping
-                              ? (isAutoDetected ? Colors.blue.shade400 : Colors.green.shade500)
-                              : Colors.grey.shade600,
-                        ),
-                        const SizedBox(width: 3),
-                        Expanded(
-                          child: Text(
-                            hasDirMapping
-                                ? (isAutoDetected
-                                    ? 'Auto: ${effectiveDir.split('/').last}'
-                                    : effectiveDir.split('/').last)
-                                : 'No local dir',
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: hasDirMapping
-                                  ? (isAutoDetected ? Colors.blue.shade400 : Colors.green.shade500)
-                                  : Colors.grey.shade600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ]),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
         );
       },
     );
@@ -409,12 +342,20 @@ class _RepoListWithSections extends ConsumerStatefulWidget {
   final Map<String, RepoConfig> configs;
   final AppConfig appConfig;
   final void Function(String repo, RepoConfig rc) onChanged;
+  final Set<String> selected;
+  final ValueChanged<String> onSelectionToggle;
+  final bool Function(String repo, RepoConfig config) showNewFor;
+  final ValueChanged<String> onDismissNew;
 
   const _RepoListWithSections({
     required this.repos,
     required this.configs,
     required this.appConfig,
     required this.onChanged,
+    required this.selected,
+    required this.onSelectionToggle,
+    required this.showNewFor,
+    required this.onDismissNew,
   });
 
   @override
@@ -423,21 +364,26 @@ class _RepoListWithSections extends ConsumerStatefulWidget {
 }
 
 class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
+  // Collapse state per "section:org" key — default expanded
   final _expanded = <String, bool>{};
 
   bool _isExpanded(String key) => _expanded[key] ?? true;
+
   void _toggle(String key) =>
       setState(() => _expanded[key] = !_isExpanded(key));
 
+  /// Groups repos by the org part ("org" in "org/repo") and sorts within each org.
   Map<String, List<String>> _groupByOrg(List<String> repos) {
     final groups = <String, List<String>>{};
     for (final r in repos) {
       final org = r.contains('/') ? r.split('/').first : r;
       groups.putIfAbsent(org, () => []).add(r);
     }
+    // Sort repos within each org alphabetically
     for (final list in groups.values) {
       list.sort();
     }
+    // Return sorted by org name
     return Map.fromEntries(
         groups.entries.toList()..sort((a, b) => a.key.compareTo(b.key)));
   }
@@ -453,20 +399,38 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
       padding: const EdgeInsets.symmetric(vertical: 4),
       children: [
         if (monitored.isNotEmpty) ...[
-          _sectionHeader(context, 'Monitored — auto-review enabled',
-              monitored.length, Colors.green.shade700),
+          _sectionHeader(
+            context,
+            'Monitored — auto-review enabled',
+            monitored.length,
+            Colors.green.shade700,
+          ),
           ..._buildOrgGroups('monitored', monitored),
         ],
-        if (disabled.isNotEmpty) ...[
-          _sectionHeader(context, 'Not monitored — PRs visible, no auto-review',
-              disabled.length, Colors.grey.shade600),
+        _sectionHeader(
+          context,
+          'Not monitored — PRs visible, no auto-review',
+          disabled.length,
+          Colors.grey.shade600,
+        ),
+        if (disabled.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: Text(
+              'No repos disabled. Toggle the switch on any repo above to stop auto-reviewing it.',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+            ),
+          )
+        else
           ..._buildOrgGroups('disabled', disabled),
-        ],
       ],
     );
   }
 
-  List<Widget> _buildOrgGroups(String section, List<String> repos) {
+  List<Widget> _buildOrgGroups(
+    String section,
+    List<String> repos,
+  ) {
     final groups = _groupByOrg(repos);
     final items = <Widget>[];
     for (final entry in groups.entries) {
@@ -478,10 +442,17 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
       items.add(_orgHeader(org, orgRepos.length, expanded, () => _toggle(key)));
       if (expanded) {
         for (final r in orgRepos) {
-          items.add(_RepoTile(
+          items.add(RepoListTile(
             repo: r,
             config: widget.configs[r]!,
             appConfig: widget.appConfig,
+            selected: widget.selected.contains(r),
+            showNew: widget.showNewFor(r, widget.configs[r]!),
+            onSelectionToggle: () => widget.onSelectionToggle(r),
+            onTap: () {
+              widget.onDismissNew(r);
+              context.push('/repos/${Uri.encodeComponent(r)}');
+            },
           ));
         }
       }
@@ -489,17 +460,21 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
     return items;
   }
 
-  Widget _sectionHeader(BuildContext ctx, String label, int count, Color color) {
+  Widget _sectionHeader(
+      BuildContext ctx, String label, int count, Color color) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
       child: Row(children: [
         Container(
-            width: 8, height: 8,
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
         const SizedBox(width: 6),
         Text(label,
             style: TextStyle(
-                fontSize: 12, color: Colors.grey.shade400, fontWeight: FontWeight.w600)),
+                fontSize: 12,
+                color: Colors.grey.shade400,
+                fontWeight: FontWeight.w600)),
         const SizedBox(width: 6),
         Text('$count',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
@@ -507,18 +482,24 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
     );
   }
 
-  Widget _orgHeader(String org, int count, bool expanded, VoidCallback onTap) {
+  Widget _orgHeader(
+      String org, int count, bool expanded, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(24, 6, 16, 2),
         child: Row(children: [
-          Icon(expanded ? Icons.expand_less : Icons.expand_more,
-              size: 16, color: Colors.grey.shade500),
+          Icon(
+            expanded ? Icons.expand_less : Icons.expand_more,
+            size: 16,
+            color: Colors.grey.shade500,
+          ),
           const SizedBox(width: 4),
           Text(org,
               style: TextStyle(
-                  fontSize: 12, color: Colors.grey.shade400, fontWeight: FontWeight.w500)),
+                  fontSize: 12,
+                  color: Colors.grey.shade400,
+                  fontWeight: FontWeight.w500)),
           const SizedBox(width: 6),
           Text('$count',
               style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
@@ -528,134 +509,201 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
   }
 }
 
-// ── LED indicator ────────────────────────────────────────────────────────────
-
-class _Led extends StatelessWidget {
-  final String status;
-  final String tooltip;
-  const _Led({required this.status, required this.tooltip});
-
+class _ViewToggleButton extends StatelessWidget {
+  final IconData icon;
+  final bool active;
+  final VoidCallback onTap;
+  final Key buttonKey;
+  const _ViewToggleButton({
+    required this.icon,
+    required this.active,
+    required this.onTap,
+    required this.buttonKey,
+  });
   @override
   Widget build(BuildContext context) {
-    final color = switch (status) {
-      'repo'   => Colors.green.shade500,
-      'global' => Colors.blue.shade500,
-      _        => Colors.red.shade800,
-    };
-    return Tooltip(
-      message: '$tooltip: ${_label()}',
+    final primary = Theme.of(context).colorScheme.primary;
+    return InkWell(
+      key: buttonKey,
+      onTap: onTap,
       child: Container(
-        width: 8, height: 8,
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        color: active ? primary.withValues(alpha:0.22) : null,
+        child: Icon(icon,
+            size: 18, color: active ? primary : Colors.grey.shade500),
       ),
     );
   }
-
-  String _label() => switch (status) {
-    'repo'   => 'active (repo)',
-    'global' => 'active (global)',
-    _        => 'inactive',
-  };
 }
 
-// ── Repo tile ─────────────────────────────────────────────────────────────
-
-class _RepoTile extends StatelessWidget {
-  final String repo;
-  final RepoConfig config;
+class _ReposGrid extends StatelessWidget {
+  final List<String> repos;
+  final Map<String, RepoConfig> configs;
   final AppConfig appConfig;
+  final Set<String> selected;
+  final ValueChanged<String> onSelectionToggle;
+  final bool Function(String repo, RepoConfig config) showNewFor;
+  final ValueChanged<String> onDismissNew;
 
-  const _RepoTile({
-    required this.repo,
-    required this.config,
+  const _ReposGrid({
+    required this.repos,
+    required this.configs,
     required this.appConfig,
+    required this.selected,
+    required this.onSelectionToggle,
+    required this.showNewFor,
+    required this.onDismissNew,
   });
 
   @override
   Widget build(BuildContext context) {
-    final configuredDir = (config.localDir ?? '').isNotEmpty ? config.localDir : null;
-    final detectedDir = appConfig.localDirsDetected[repo];
-    final effectiveDir = configuredDir ?? detectedDir;
-    final hasDirMapping = effectiveDir != null && effectiveDir.isNotEmpty;
-    final isAutoDetected = configuredDir == null && detectedDir != null;
+    final monitored = repos.where((r) => configs[r]!.isMonitored).toList();
+    final disabled = repos.where((r) => !configs[r]!.isMonitored).toList();
 
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => context.push('/repos/${Uri.encodeComponent(repo)}'),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            children: [
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _Led(
-                    status: config.prLedStatus(appConfig.repositories.contains(repo)),
-                    tooltip: 'PR Review',
-                  ),
-                  const SizedBox(height: 3),
-                  _Led(
-                    status: config.itLedStatus(appConfig.issueTracking.enabled),
-                    tooltip: 'Issue Tracking',
-                  ),
-                  const SizedBox(height: 3),
-                  _Led(
-                    status: config.devLedStatus(
-                        appConfig.issueTracking.enabled, hasDirMapping),
-                    tooltip: 'Develop',
-                  ),
-                ],
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(repo,
-                        style: TextStyle(
-                          fontWeight: config.isMonitored ? FontWeight.w600 : FontWeight.normal,
-                          color: config.isMonitored ? null : Colors.grey,
-                        )),
-                    const SizedBox(height: 2),
-                    Row(children: [
-                      Icon(
-                        hasDirMapping ? Icons.folder : Icons.folder_off_outlined,
-                        size: 13,
-                        color: hasDirMapping
-                            ? (isAutoDetected ? Colors.blue.shade400 : Colors.green.shade500)
-                            : Colors.grey.shade600,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        hasDirMapping
-                            ? (isAutoDetected
-                                ? 'Auto: ${effectiveDir.split('/').last}'
-                                : effectiveDir.split('/').last)
-                            : 'No local dir',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: hasDirMapping
-                              ? (isAutoDetected ? Colors.blue.shade400 : Colors.green.shade500)
-                              : Colors.grey.shade600,
-                        ),
-                      ),
-                    ]),
-                  ],
+    return CustomScrollView(
+      slivers: [
+        if (monitored.isNotEmpty) ...[
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+              child: Row(children: [
+                Container(
+                  width: 8, height: 8,
+                  decoration: const BoxDecoration(color: Color(0xFF3FB950), shape: BoxShape.circle),
                 ),
-              ),
-              Icon(Icons.chevron_right, size: 18, color: Colors.grey.shade600),
-            ],
+                const SizedBox(width: 6),
+                Text('MONITORED · ${monitored.length}',
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade400, fontWeight: FontWeight.w600)),
+              ]),
+            ),
           ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 200,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 1.0,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (ctx, i) {
+                  final r = monitored[i];
+                  return RepoGridTile(
+                    repo: r,
+                    config: configs[r]!,
+                    appConfig: appConfig,
+                    selected: selected.contains(r),
+                    showNew: showNewFor(r, configs[r]!),
+                    onSelectionToggle: () => onSelectionToggle(r),
+                    onTap: () {
+                      onDismissNew(r);
+                      ctx.push('/repos/${Uri.encodeComponent(r)}');
+                    },
+                  );
+                },
+                childCount: monitored.length,
+              ),
+            ),
+          ),
+        ],
+        if (disabled.isNotEmpty) ...[
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Row(children: [
+                Container(
+                  width: 8, height: 8,
+                  decoration: BoxDecoration(color: Colors.grey.shade600, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 6),
+                Text('NOT MONITORED · ${disabled.length}',
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade400, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 200,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 1.0,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (ctx, i) {
+                  final r = disabled[i];
+                  return RepoGridTile(
+                    repo: r,
+                    config: configs[r]!,
+                    appConfig: appConfig,
+                    selected: selected.contains(r),
+                    showNew: showNewFor(r, configs[r]!),
+                    onSelectionToggle: () => onSelectionToggle(r),
+                    onTap: () {
+                      onDismissNew(r);
+                      ctx.push('/repos/${Uri.encodeComponent(r)}');
+                    },
+                  );
+                },
+                childCount: disabled.length,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+
+/// Multi-select org filter chip. Opens a checkbox dialog when tapped.
+/// Matches the Activity screen's org filter UX (issue #112 / PR #133).
+class _OrgFilterChip extends StatelessWidget {
+  final List<String> orgs;
+  final Set<String> selected;
+  final ValueChanged<Set<String>> onChanged;
+
+  const _OrgFilterChip({
+    required this.orgs,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final isActive = selected.isNotEmpty;
+    return GestureDetector(
+      onTap: () async {
+        final result = await showDialog<Set<String>>(
+          context: context,
+          builder: (_) => _MultiSelectDialog(
+            title: 'Filter by Org',
+            items: orgs,
+            selected: selected,
+          ),
+        );
+        if (result != null) onChanged(result);
+      },
+      child: Chip(
+        avatar: Icon(Icons.business, size: 14, color: isActive ? primary : Colors.grey),
+        label: Text(
+          isActive ? 'Org (${selected.length})' : 'Org',
+          style: TextStyle(fontSize: 12, color: isActive ? primary : null),
         ),
+        visualDensity: VisualDensity.compact,
+        side: isActive
+            ? BorderSide(color: primary.withValues(alpha:0.5))
+            : const BorderSide(color: Colors.transparent),
       ),
     );
   }
 }
 
-// ── Multi-select dialog (same pattern as Stats filter) ───────────────────
-
+/// Simple checkbox-list dialog. Reused from #133; kept here rather than in
+/// a shared location because the only caller is the org filter above.
 class _MultiSelectDialog extends StatefulWidget {
   final String title;
   final List<String> items;
