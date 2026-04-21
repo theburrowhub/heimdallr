@@ -254,6 +254,12 @@ type AIConfig struct {
 	PRLabels    []string `toml:"pr_labels"`
 	PRAssignee  string   `toml:"pr_assignee"`
 	PRDraft     *bool    `toml:"pr_draft,omitempty"`
+
+	// GeneratePRDescription enables LLM-generated PR titles and descriptions
+	// for auto_implement PRs. When true, after the implementation commit,
+	// a second LLM call generates a rich PR description from the diff.
+	// Default: false (backwards compat).
+	GeneratePRDescription bool `toml:"generate_pr_description"`
 }
 
 type RepoAI struct {
@@ -277,6 +283,10 @@ type RepoAI struct {
 	PRAssignee  string   `toml:"pr_assignee"`         // GitHub login to assign the PR to
 	PRLabels    []string `toml:"pr_labels"`           // labels to add to the PR
 	PRDraft     *bool    `toml:"pr_draft,omitempty"`  // create as draft PR
+
+	// GeneratePRDescription overrides the global ai.generate_pr_description
+	// for this repo. nil = inherit from global.
+	GeneratePRDescription *bool `toml:"generate_pr_description,omitempty"`
 
 	// Per-repo issue tracking override. When set, non-zero fields replace
 	// the global [github.issue_tracking] values for this repo only.
@@ -466,12 +476,18 @@ func (c *Config) AIForRepo(repo string) RepoAI {
 			if r.PRDraft == nil {
 				r.PRDraft = orgDraft
 			}
+			if r.GeneratePRDescription == nil {
+				v := c.AI.GeneratePRDescription
+				r.GeneratePRDescription = &v
+			}
 			return r
 		}
 	}
+	gGenDesc := c.AI.GeneratePRDescription
 	return RepoAI{
 		Primary: c.AI.Primary, Fallback: c.AI.Fallback, ReviewMode: c.AI.ReviewMode,
 		PRReviewers: orgReviewers, PRLabels: orgLabels, PRAssignee: orgAssignee, PRDraft: orgDraft,
+		GeneratePRDescription: &gGenDesc,
 	}
 }
 
@@ -651,6 +667,11 @@ func (c *Config) applyEnvOverrides() {
 		}
 		if len(cleaned) > 0 {
 			c.GitHub.LocalDirBase = cleaned
+		}
+	}
+	if v := os.Getenv("HEIMDALLM_GENERATE_PR_DESCRIPTION"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.AI.GeneratePRDescription = b
 		}
 	}
 	c.applyIssueTrackingEnv()

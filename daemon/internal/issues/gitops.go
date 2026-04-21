@@ -55,6 +55,10 @@ type GitOps interface {
 	// the pipeline to clean up an orphaned branch when the last step
 	// (CreatePR) fails after Push succeeded.
 	DeleteRemoteBranch(ctx context.Context, dir, repo, branch, token string) error
+	// Diff returns the unified diff between `base` ref and HEAD.
+	// Used by the pipeline to capture what the agent implemented for
+	// LLM-generated PR descriptions (#158).
+	Diff(ctx context.Context, dir, base string) (string, error)
 }
 
 // GitExec is the default GitOps implementation — shells out to the `git`
@@ -171,6 +175,15 @@ func (g *GitExec) DeleteRemoteBranch(ctx context.Context, dir, repo, branch, tok
 		return fmt.Errorf("gitops: delete remote %s:%s: %w", repo, branch, err)
 	}
 	return nil
+}
+
+// Diff returns the unified diff between base and HEAD.
+func (g *GitExec) Diff(ctx context.Context, dir, base string) (string, error) {
+	out, err := captureGit(ctx, dir, nil, "diff", base+"..HEAD")
+	if err != nil {
+		return "", fmt.Errorf("gitops: diff %s..HEAD: %w", base, err)
+	}
+	return string(out), nil
 }
 
 // buildAskPassEnv writes a small helper script that echoes the token, and

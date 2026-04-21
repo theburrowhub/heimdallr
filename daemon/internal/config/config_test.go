@@ -1069,6 +1069,55 @@ func TestAIForRepo_NoOrgMatch_FallsToGlobal(t *testing.T) {
 	}
 }
 
+func TestAIForRepo_GeneratePRDescriptionInheritsGlobal(t *testing.T) {
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:               "claude",
+			GeneratePRDescription: true,
+		},
+	}
+
+	r := cfg.AIForRepo("org/repo")
+	if r.GeneratePRDescription == nil || !*r.GeneratePRDescription {
+		t.Error("GeneratePRDescription should inherit true from global")
+	}
+}
+
+func TestAIForRepo_GeneratePRDescriptionPerRepoOverride(t *testing.T) {
+	genTrue := true
+	genFalse := false
+	cfg := &Config{
+		AI: AIConfig{
+			Primary:               "claude",
+			GeneratePRDescription: true,
+			Repos: map[string]RepoAI{
+				"org/enabled":  {GeneratePRDescription: &genTrue},
+				"org/disabled": {GeneratePRDescription: &genFalse},
+			},
+		},
+	}
+
+	r1 := cfg.AIForRepo("org/enabled")
+	if r1.GeneratePRDescription == nil || !*r1.GeneratePRDescription {
+		t.Error("per-repo enabled override should be true")
+	}
+
+	r2 := cfg.AIForRepo("org/disabled")
+	if r2.GeneratePRDescription == nil || *r2.GeneratePRDescription {
+		t.Error("per-repo disabled override should be false")
+	}
+}
+
+func TestApplyEnvOverrides_GeneratePRDescription(t *testing.T) {
+	cfg := &Config{}
+	cfg.applyDefaults()
+	t.Setenv("HEIMDALLM_GENERATE_PR_DESCRIPTION", "true")
+	cfg.applyEnvOverrides()
+	if !cfg.AI.GeneratePRDescription {
+		t.Error("GeneratePRDescription should be true from env")
+	}
+}
+
 func TestApplyEnvOverrides_PRAssigneeAndDraft(t *testing.T) {
 	cfg := &Config{}
 	cfg.applyDefaults()

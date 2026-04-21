@@ -123,3 +123,34 @@ func TestBuildImplementPromptWithProfile_TemplateWinsOverInstructions(t *testing
 		t.Errorf("custom template not applied first: %q", got)
 	}
 }
+
+// ── BuildPRDescriptionPrompt ────────────────────────────────────────────────
+
+func TestBuildPRDescriptionPrompt_ContainsIssueAndDiff(t *testing.T) {
+	diff := "diff --git a/main.go b/main.go\n--- a/main.go\n+++ b/main.go\n@@ -1 +1 @@\n-old\n+new"
+	got := issues.BuildPRDescriptionPrompt(42, "Panic on startup", diff)
+
+	for _, want := range []string{
+		"Issue #42: Panic on startup",
+		"diff --git a/main.go",
+		"conventional commit style",
+		`"title"`,
+		`"body"`,
+		"JSON",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("PR description prompt missing %q", want)
+		}
+	}
+}
+
+func TestBuildPRDescriptionPrompt_TruncatesLargeDiff(t *testing.T) {
+	largeDiff := strings.Repeat("x", 40*1024)
+	got := issues.BuildPRDescriptionPrompt(1, "test", largeDiff)
+	if !strings.Contains(got, "... (diff truncated)") {
+		t.Error("large diff should be truncated")
+	}
+	if strings.Contains(got, strings.Repeat("x", 40*1024)) {
+		t.Error("full large diff should not appear in prompt")
+	}
+}

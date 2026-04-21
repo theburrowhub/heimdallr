@@ -689,10 +689,11 @@ func main() {
 			IssueInstructions:       issueInstructions,
 			ImplementPromptOverride: implPrompt,
 			ImplementInstructions:   implInstructions,
-			PRReviewers: aiCfg.PRReviewers,
-			PRAssignee:  aiCfg.PRAssignee,
-			PRLabels:    aiCfg.PRLabels,
-			PRDraft:     aiCfg.PRDraft != nil && *aiCfg.PRDraft,
+			PRReviewers:           aiCfg.PRReviewers,
+			PRAssignee:            aiCfg.PRAssignee,
+			PRLabels:              aiCfg.PRLabels,
+			PRDraft:               aiCfg.PRDraft != nil && *aiCfg.PRDraft,
+			GeneratePRDescription: aiCfg.GeneratePRDescription != nil && *aiCfg.GeneratePRDescription,
 		}
 
 		slog.Info("trigger issue review: running pipeline",
@@ -1183,6 +1184,7 @@ func (a *tier2Adapter) ProcessRepo(ctx context.Context, repo string) (int, error
 			PRAssignee:              aiCfg.PRAssignee,
 			PRLabels:                aiCfg.PRLabels,
 			PRDraft:                 aiCfg.PRDraft != nil && *aiCfg.PRDraft,
+			GeneratePRDescription:   aiCfg.GeneratePRDescription != nil && *aiCfg.GeneratePRDescription,
 		}
 	}
 

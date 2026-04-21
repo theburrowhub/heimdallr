@@ -48,6 +48,12 @@ primary = "claude"
 review_mode = "single"   # "single" or "multi"
 # execution_timeout = "20m"   # default: 5m; increase for complex auto_implement
 
+# When true, auto_implement PRs get an LLM-generated title and description
+# instead of the default template. A second (cheap) LLM call analyses the
+# implementation diff and produces a conventional-commit title, summary,
+# change list, and test plan.
+# generate_pr_description = false
+
 # Per-CLI settings (optional)
 # [ai.agents.claude]
 # model = "claude-sonnet-4-20250514"
