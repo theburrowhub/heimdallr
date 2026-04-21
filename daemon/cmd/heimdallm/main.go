@@ -858,6 +858,67 @@ type tier2Adapter struct {
 	runReview func(pr *gh.PullRequest, aiCfg config.RepoAI)
 }
 
+// discoveryStore is the subset of *store.Store that processDiscoveredRepos
+// needs. Narrowing to this interface lets the discovery path be unit-tested
+// without standing up the full adapter (which pulls in ghClient, pipelines,
+// etc.).
+type discoveryStore interface {
+	SetConfig(key, value string) (int64, error)
+	ListConfigs() (map[string]string, error)
+}
+
+// processDiscoveredRepos persists newly-discovered repos to the K/V store
+// (monitored/non-monitored lists + first-seen map) and publishes one
+// EventRepoDiscovered per added repo on the broker.
+//
+// Inputs are already-snapshot slices so the caller can drop its config mutex
+// before invoking this helper. No-op when added is empty.
+func processDiscoveredRepos(
+	added []string,
+	reposSnap []string,
+	nonMonSnap []string,
+	st discoveryStore,
+	broker *sse.Broker,
+	now time.Time,
+) {
+	if len(added) == 0 {
+		return
+	}
+	// Persist the updated monitored/non-monitored lists via the K/V store
+	// so the Flutter app's cached view survives a daemon restart.
+	reposJSON, _ := json.Marshal(reposSnap)
+	if _, err := st.SetConfig("repositories", string(reposJSON)); err != nil {
+		slog.Warn("poll: persist repositories failed", "err", err)
+	}
+	nmJSON, _ := json.Marshal(nonMonSnap)
+	if _, err := st.SetConfig("non_monitored", string(nmJSON)); err != nil {
+		slog.Warn("poll: persist non_monitored failed", "err", err)
+	}
+
+	// Update first-seen map in the same store so GET /config can expose
+	// repo_overrides[repo].first_seen_at to the UI (NEW badge).
+	rows, _ := st.ListConfigs()
+	fs, _ := config.ParseFirstSeen(rows["repo_first_seen"])
+	for _, r := range added {
+		fs.Mark(r, now)
+	}
+	if fsStr, err := fs.Marshal(); err == nil {
+		if _, err := st.SetConfig("repo_first_seen", fsStr); err != nil {
+			slog.Warn("poll: persist repo_first_seen failed", "err", err)
+		}
+	} else {
+		slog.Warn("poll: marshal repo_first_seen failed", "err", err)
+	}
+
+	for _, r := range added {
+		broker.Publish(sse.Event{
+			Type: sse.EventRepoDiscovered,
+			Data: sseData(map[string]any{"repo": r}),
+		})
+		slog.Info("poll: auto-discovered repo", "repo", r)
+	}
+}
+
 // FetchPRsToReview implements scheduler.Tier2PRFetcher.
 func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 	prs, err := a.ghClient.FetchPRsToReview()
@@ -887,42 +948,7 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 	nonMonSnap := append([]string(nil), cfg.GitHub.NonMonitored...)
 	a.cfgMu.Unlock()
 
-	if len(added) > 0 {
-		// Persist the updated monitored/non-monitored lists via the K/V store
-		// so the Flutter app's cached view survives a daemon restart.
-		reposJSON, _ := json.Marshal(reposSnap)
-		if _, err := a.store.SetConfig("repositories", string(reposJSON)); err != nil {
-			slog.Warn("poll: persist repositories failed", "err", err)
-		}
-		nmJSON, _ := json.Marshal(nonMonSnap)
-		if _, err := a.store.SetConfig("non_monitored", string(nmJSON)); err != nil {
-			slog.Warn("poll: persist non_monitored failed", "err", err)
-		}
-
-		// Update first-seen map in the same store so GET /config can expose
-		// repo_overrides[repo].first_seen_at to the UI (NEW badge).
-		rows, _ := a.store.ListConfigs()
-		fs, _ := config.ParseFirstSeen(rows["repo_first_seen"])
-		now := time.Now()
-		for _, r := range added {
-			fs.Mark(r, now)
-		}
-		if fsStr, err := fs.Marshal(); err == nil {
-			if _, err := a.store.SetConfig("repo_first_seen", fsStr); err != nil {
-				slog.Warn("poll: persist repo_first_seen failed", "err", err)
-			}
-		} else {
-			slog.Warn("poll: marshal repo_first_seen failed", "err", err)
-		}
-
-		for _, r := range added {
-			a.broker.Publish(sse.Event{
-				Type: sse.EventRepoDiscovered,
-				Data: sseData(map[string]any{"repo": r}),
-			})
-			slog.Info("poll: auto-discovered repo", "repo", r)
-		}
-	}
+	processDiscoveredRepos(added, reposSnap, nonMonSnap, a.store, a.broker, time.Now())
 
 	out := make([]scheduler.Tier2PR, 0, len(prs))
 	for _, pr := range prs {
