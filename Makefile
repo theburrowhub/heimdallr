@@ -16,7 +16,7 @@ else
   APP_BUNDLE       := $(FLUTTER_BUILD)/bundle
 endif
 
-.PHONY: build-daemon build-app test test-docker dev dev-daemon dev-stop \
+.PHONY: build-daemon build-app build-web test test-docker dev dev-daemon dev-stop \
         release-local package-macos install-service verify-linux run-linux \
         setup up up-build up-daemon up-build-daemon down logs logs-daemon \
         ps restart clean _check-docker _check-env
@@ -28,6 +28,11 @@ build-daemon:
 
 build-app:
 	cd flutter_app && flutter build $(FLUTTER_DEVICE) --release
+
+# Flutter Web bundle, consumed by docker/Dockerfile.web (served via Nginx).
+# --base-href=/ matches the Nginx server block that expects assets at the root.
+build-web:
+	cd flutter_app && flutter build web --release --base-href=/
 
 # ── Test ──────────────────────────────────────────────────────────────────────
 
