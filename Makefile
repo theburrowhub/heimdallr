@@ -556,6 +556,31 @@ install-linux: _check-linux verify-linux
 	  'StartupWMClass=com.theburrowhub.heimdallm' \
 	  'StartupNotify=true' \
 	  > "$$DESKTOP_DIR/com.theburrowhub.heimdallm.desktop"
+	@# Seed ~/.config/heimdallm/.token so the daemon can start when the app is
+	@# launched from the OS app launcher (which does not inherit $$GITHUB_TOKEN
+	@# from the user's shell). Skipped if the file already exists — respects
+	@# manual overrides. Non-fatal if no token source is available.
+	@if [ ! -s "$$HOME/.config/heimdallm/.token" ]; then \
+	  TOK="" ; SRC="" ; \
+	  if [ -n "$$GITHUB_TOKEN" ]; then \
+	    TOK="$$GITHUB_TOKEN" ; SRC='$$GITHUB_TOKEN env' ; \
+	  elif command -v gh >/dev/null 2>&1 ; then \
+	    GH_TOK=$$(gh auth token 2>/dev/null || true) ; \
+	    if [ -n "$$GH_TOK" ]; then \
+	      TOK="$$GH_TOK" ; SRC='gh auth token' ; \
+	    fi ; \
+	  fi ; \
+	  if [ -n "$$TOK" ]; then \
+	    mkdir -p "$$HOME/.config/heimdallm" && \
+	    ( umask 077 && printf '%s\n' "$$TOK" > "$$HOME/.config/heimdallm/.token" ) && \
+	    echo "    Seeded $$HOME/.config/heimdallm/.token from $$SRC" ; \
+	  else \
+	    echo "" ; \
+	    echo "⚠  No GitHub token found — first launch will fail until you provide one." ; \
+	    echo "   Set GITHUB_TOKEN in your shell, run 'gh auth login', or write" ; \
+	    echo "   the token to ~/.config/heimdallm/.token (mode 600) manually." ; \
+	  fi ; \
+	fi
 	@# Best-effort launcher cache refresh (silent no-op if tools missing).
 	@command -v update-desktop-database >/dev/null 2>&1 && \
 	  update-desktop-database "$$HOME/.local/share/applications/" 2>/dev/null || true
