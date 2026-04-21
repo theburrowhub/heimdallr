@@ -809,18 +809,22 @@ type tier2Adapter struct {
 }
 
 // FetchPRsToReview implements scheduler.Tier2PRFetcher.
+// After fetching, any repos not yet in the config are auto-discovered and
+// persisted — the daemon never silently skips unknown repos again.
 func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 	prs, err := a.ghClient.FetchPRsToReview()
 	if err != nil {
 		return nil, err
 	}
 	out := make([]scheduler.Tier2PR, 0, len(prs))
+	seenRepos := make(map[string]struct{})
 	for _, pr := range prs {
 		pr.ResolveRepo()
 		if pr.Repo == "" {
 			slog.Warn("adapter: skipping PR with empty repo", "pr_number", pr.Number)
 			continue
 		}
+		seenRepos[pr.Repo] = struct{}{}
 		out = append(out, scheduler.Tier2PR{
 			ID:        pr.ID,
 			Number:    pr.Number,
@@ -832,6 +836,42 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 			UpdatedAt: pr.UpdatedAt,
 		})
 	}
+
+	// Auto-discovery: check + append under a single lock to avoid TOCTOU.
+	var updated []string
+	var newRepos []string
+	a.cfgMu.Lock()
+	c := *a.cfg
+	known := make(map[string]struct{}, len(c.GitHub.Repositories)+len(c.GitHub.NonMonitored))
+	for _, r := range c.GitHub.Repositories {
+		known[r] = struct{}{}
+	}
+	for _, r := range c.GitHub.NonMonitored {
+		known[r] = struct{}{}
+	}
+	for repo := range seenRepos {
+		if _, ok := known[repo]; !ok {
+			newRepos = append(newRepos, repo)
+		}
+	}
+	if len(newRepos) > 0 {
+		updated = append(append([]string(nil), c.GitHub.Repositories...), newRepos...)
+		c.GitHub.Repositories = updated
+		*a.cfg = c
+	}
+	a.cfgMu.Unlock()
+
+	if len(newRepos) > 0 {
+		reposJSON, err := json.Marshal(updated)
+		if err != nil {
+			slog.Error("auto-discovery: failed to marshal repos", "err", err)
+		} else if _, err := a.store.SetConfig("repositories", string(reposJSON)); err != nil {
+			slog.Warn("auto-discovery: failed to persist repos", "err", err)
+		} else {
+			slog.Info("auto-discovery: added repos from PRs", "repos", newRepos)
+		}
+	}
+
 	return out, nil
 }
 

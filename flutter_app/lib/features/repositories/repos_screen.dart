@@ -2,8 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/models/config_model.dart';
-import '../../core/platform/platform_services_provider.dart';
 import '../../shared/widgets/toast.dart';
 import '../config/config_providers.dart';
 
@@ -15,16 +15,25 @@ class ReposScreen extends ConsumerStatefulWidget {
 }
 
 enum _SyncStatus { idle, saving, saved }
+enum _FilterMode { all, monitored, notMonitored }
+enum _ViewMode { list, grid }
 
 class _ReposScreenState extends ConsumerState<ReposScreen> {
   Map<String, RepoConfig> _repoConfigs = {};
   bool _initialized = false;
-  bool _discovering = false;
-  String? _discoverError;
   String _search = '';
+  Set<String> _orgFilter = {}; // empty = all orgs
   _SyncStatus _syncStatus = _SyncStatus.idle;
+  _FilterMode _filterMode = _FilterMode.all;
+  _ViewMode _viewMode = _ViewMode.list;
   Timer? _debounce;
   Timer? _savedResetTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadViewPreference();
+  }
 
   @override
   void dispose() {
@@ -33,38 +42,31 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
     super.dispose();
   }
 
+  void _loadViewPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final value = prefs.getString('repos_view_mode');
+      if (value == 'grid' && mounted) setState(() => _viewMode = _ViewMode.grid);
+    } catch (_) {}
+  }
+
+  void _setViewMode(_ViewMode mode) {
+    setState(() => _viewMode = mode);
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setString('repos_view_mode', mode.name);
+    }).catchError((_) {});
+  }
+
   void _initFrom(AppConfig config) {
     if (_initialized) return;
     _initialized = true;
     _repoConfigs = Map.from(config.repoConfigs);
   }
 
-  /// Called whenever a repo config changes — schedules an auto-save.
   void _onChange(String repo, RepoConfig rc) {
     setState(() => _repoConfigs[repo] = rc);
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 800), _autoSave);
-  }
-
-  Future<void> _discover() async {
-    setState(() { _discovering = true; _discoverError = null; });
-    try {
-      final token = await ref.read(platformServicesProvider).detectGitHubToken();
-      final discovered = await ref.read(platformServicesProvider).discoverReposFromPRs(token ?? '');
-      if (!mounted) return;
-      setState(() {
-        for (final repo in discovered) {
-          _repoConfigs.putIfAbsent(repo, () => const RepoConfig(prEnabled: true));
-        }
-        _discovering = false;
-        if (discovered.isEmpty) _discoverError = 'No active PRs found.';
-      });
-      _debounce?.cancel();
-      _debounce = Timer(const Duration(milliseconds: 400), _autoSave);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() { _discovering = false; _discoverError = '$e'; });
-    }
   }
 
   Future<void> _autoSave() async {
@@ -97,7 +99,7 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
       data: (config) {
         _initFrom(config);
 
-        // Monitored first, disabled last; both groups sorted alphabetically
+        // Sort: monitored first, then alphabetical
         final allRepos = _repoConfigs.keys.toList()
           ..sort((a, b) {
             final ma = _repoConfigs[a]!.isMonitored ? 0 : 1;
@@ -105,40 +107,125 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
             if (ma != mb) return ma.compareTo(mb);
             return a.compareTo(b);
           });
-        final filtered = _search.isEmpty
+
+        // Derive all orgs for the org filter dropdown
+        final allOrgs = _repoConfigs.keys
+            .map((r) => r.contains('/') ? r.split('/').first : r)
+            .toSet()
+            .toList()..sort();
+
+        // Apply text search
+        var filtered = _search.isEmpty
             ? allRepos
             : allRepos.where((r) => r.toLowerCase().contains(_search.toLowerCase())).toList();
 
+        // Apply org filter
+        if (_orgFilter.isNotEmpty) {
+          filtered = filtered.where((r) {
+            final org = r.contains('/') ? r.split('/').first : r;
+            return _orgFilter.contains(org);
+          }).toList();
+        }
+
+        // Apply monitored/not-monitored filter
+        if (_filterMode == _FilterMode.monitored) {
+          filtered = filtered.where((r) => _repoConfigs[r]!.isMonitored).toList();
+        } else if (_filterMode == _FilterMode.notMonitored) {
+          filtered = filtered.where((r) => !_repoConfigs[r]!.isMonitored).toList();
+        }
+
+        final monitoredCount = _repoConfigs.values.where((c) => c.isMonitored).length;
+        final notMonitoredCount = _repoConfigs.length - monitoredCount;
+
         return Column(
           children: [
-            // Toolbar
+            // Single-line toolbar: search + filters + view toggle + status
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
               child: Row(
                 children: [
-                  Expanded(
+                  // Compact search
+                  SizedBox(
+                    width: 160,
                     child: TextField(
                       decoration: const InputDecoration(
-                        hintText: 'Filter repos…',
-                        prefixIcon: Icon(Icons.search, size: 18),
+                        hintText: 'Search…',
+                        prefixIcon: Icon(Icons.search, size: 16),
                         isDense: true,
                         border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(vertical: 8),
+                        contentPadding: EdgeInsets.symmetric(vertical: 6),
                       ),
+                      style: const TextStyle(fontSize: 13),
                       onChanged: (v) => setState(() => _search = v),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  FilledButton.tonalIcon(
-                    icon: _discovering
-                        ? const SizedBox(width: 14, height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.sync, size: 16),
-                    label: const Text('Discover'),
-                    onPressed: _discovering ? null : _discover,
+                  // Monitored filter chips
+                  _filterChip('All', _repoConfigs.length, _FilterMode.all),
+                  const SizedBox(width: 4),
+                  _filterChip('Monitored', monitoredCount, _FilterMode.monitored),
+                  const SizedBox(width: 4),
+                  _filterChip('Not mon.', notMonitoredCount, _FilterMode.notMonitored),
+                  const SizedBox(width: 8),
+                  // Org multi-select (dialog, same UX as Activity)
+                  if (allOrgs.length > 1)
+                    GestureDetector(
+                      onTap: () async {
+                        final result = await showDialog<Set<String>>(
+                          context: context,
+                          builder: (_) => _MultiSelectDialog(
+                            title: 'Filter by Org',
+                            items: allOrgs,
+                            selected: _orgFilter,
+                          ),
+                        );
+                        if (result != null) setState(() => _orgFilter = result);
+                      },
+                      child: Chip(
+                        avatar: Icon(Icons.business, size: 14,
+                            color: _orgFilter.isNotEmpty
+                                ? Theme.of(context).colorScheme.primary
+                                : Colors.grey),
+                        label: Text(
+                          _orgFilter.isNotEmpty ? 'Org (${_orgFilter.length})' : 'Org',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _orgFilter.isNotEmpty
+                                ? Theme.of(context).colorScheme.primary
+                                : null,
+                          ),
+                        ),
+                        visualDensity: VisualDensity.compact,
+                        side: _orgFilter.isNotEmpty
+                            ? BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5))
+                            : const BorderSide(color: Colors.transparent),
+                      ),
+                    ),
+                  // Reset org filter
+                  if (_orgFilter.isNotEmpty) ...[
+                    const SizedBox(width: 4),
+                    GestureDetector(
+                      onTap: () => setState(() => _orgFilter = {}),
+                      child: const Icon(Icons.clear, size: 16, color: Colors.grey),
+                    ),
+                  ],
+                  const Spacer(),
+                  // View toggle
+                  SegmentedButton<_ViewMode>(
+                    segments: const [
+                      ButtonSegment(value: _ViewMode.list, icon: Icon(Icons.view_list, size: 16)),
+                      ButtonSegment(value: _ViewMode.grid, icon: Icon(Icons.grid_view, size: 16)),
+                    ],
+                    selected: {_viewMode},
+                    onSelectionChanged: (s) => _setViewMode(s.first),
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                   ),
-                  const SizedBox(width: 12),
-                  // Auto-save status indicator
+                  const SizedBox(width: 6),
+                  // Auto-save status
                   SizedBox(
                     width: 22, height: 22,
                     child: switch (_syncStatus) {
@@ -151,23 +238,164 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
                 ],
               ),
             ),
-            if (_discoverError != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                child: Text(_discoverError!, style: const TextStyle(color: Colors.orange)),
-              ),
-            // Repo list with section dividers
+            // Content
             Expanded(
               child: filtered.isEmpty
-                  ? const Center(child: Text('No repos yet. Tap Discover.'))
-                  : _RepoListWithSections(
-                      repos: filtered,
-                      configs: _repoConfigs,
-                      appConfig: config,
-                      onChanged: _onChange,
-                    ),
+                  ? Center(child: Text(
+                      _repoConfigs.isEmpty
+                          ? 'No repos yet — the daemon auto-discovers repos from your PRs.'
+                          : 'No repos match the current filter.',
+                      style: TextStyle(color: Colors.grey.shade500),
+                    ))
+                  : _viewMode == _ViewMode.list
+                      ? _RepoListWithSections(
+                          repos: filtered,
+                          configs: _repoConfigs,
+                          appConfig: config,
+                          onChanged: _onChange,
+                        )
+                      : _RepoGrid(
+                          repos: filtered,
+                          configs: _repoConfigs,
+                          appConfig: config,
+                        ),
             ),
           ],
+        );
+      },
+    );
+  }
+
+  Widget _filterChip(String label, int count, _FilterMode mode) {
+    final active = _filterMode == mode;
+    return FilterChip(
+      label: Text('$label ($count)', style: const TextStyle(fontSize: 12)),
+      selected: active,
+      onSelected: (_) => setState(() => _filterMode = mode),
+      visualDensity: VisualDensity.compact,
+      showCheckmark: false,
+    );
+  }
+}
+
+// ── Grid view ────────────────────────────────────────────────────────────────
+
+class _RepoGrid extends StatelessWidget {
+  final List<String> repos;
+  final Map<String, RepoConfig> configs;
+  final AppConfig appConfig;
+
+  const _RepoGrid({
+    required this.repos,
+    required this.configs,
+    required this.appConfig,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final crossCount = constraints.maxWidth > 900 ? 4
+            : constraints.maxWidth > 600 ? 3
+            : 2;
+        return GridView.builder(
+          padding: const EdgeInsets.all(12),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossCount,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+            childAspectRatio: 2.0,
+          ),
+          itemCount: repos.length,
+          itemBuilder: (context, i) {
+            final repo = repos[i];
+            final config = configs[repo]!;
+            final shortName = repo.contains('/') ? repo.split('/').last : repo;
+            final org = repo.contains('/') ? repo.split('/').first : '';
+            final configuredDir = (config.localDir ?? '').isNotEmpty ? config.localDir : null;
+            final detectedDir = appConfig.localDirsDetected[repo];
+            final effectiveDir = configuredDir ?? detectedDir;
+            final hasDirMapping = effectiveDir != null && effectiveDir.isNotEmpty;
+            final isAutoDetected = configuredDir == null && detectedDir != null;
+
+            return Card(
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => context.push('/repos/${Uri.encodeComponent(repo)}'),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Row(
+                        children: [
+                          _Led(
+                            status: config.prLedStatus(appConfig.repositories.contains(repo)),
+                            tooltip: 'PR',
+                          ),
+                          const SizedBox(width: 3),
+                          _Led(
+                            status: config.itLedStatus(appConfig.issueTracking.enabled),
+                            tooltip: 'IT',
+                          ),
+                          const SizedBox(width: 3),
+                          _Led(
+                            status: config.devLedStatus(appConfig.issueTracking.enabled, hasDirMapping),
+                            tooltip: 'Dev',
+                          ),
+                          const Spacer(),
+                          Icon(Icons.chevron_right, size: 14, color: Colors.grey.shade600),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(shortName,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: config.isMonitored ? FontWeight.w600 : FontWeight.normal,
+                            color: config.isMonitored ? null : Colors.grey,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                      if (org.isNotEmpty)
+                        Text(org,
+                            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 2),
+                      Row(children: [
+                        Icon(
+                          hasDirMapping ? Icons.folder : Icons.folder_off_outlined,
+                          size: 11,
+                          color: hasDirMapping
+                              ? (isAutoDetected ? Colors.blue.shade400 : Colors.green.shade500)
+                              : Colors.grey.shade600,
+                        ),
+                        const SizedBox(width: 3),
+                        Expanded(
+                          child: Text(
+                            hasDirMapping
+                                ? (isAutoDetected
+                                    ? 'Auto: ${effectiveDir.split('/').last}'
+                                    : effectiveDir.split('/').last)
+                                : 'No local dir',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: hasDirMapping
+                                  ? (isAutoDetected ? Colors.blue.shade400 : Colors.green.shade500)
+                                  : Colors.grey.shade600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ]),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -195,26 +423,21 @@ class _RepoListWithSections extends ConsumerStatefulWidget {
 }
 
 class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
-  // Collapse state per "section:org" key — default expanded
   final _expanded = <String, bool>{};
 
   bool _isExpanded(String key) => _expanded[key] ?? true;
-
   void _toggle(String key) =>
       setState(() => _expanded[key] = !_isExpanded(key));
 
-  /// Groups repos by the org part ("org" in "org/repo") and sorts within each org.
   Map<String, List<String>> _groupByOrg(List<String> repos) {
     final groups = <String, List<String>>{};
     for (final r in repos) {
       final org = r.contains('/') ? r.split('/').first : r;
       groups.putIfAbsent(org, () => []).add(r);
     }
-    // Sort repos within each org alphabetically
     for (final list in groups.values) {
       list.sort();
     }
-    // Return sorted by org name
     return Map.fromEntries(
         groups.entries.toList()..sort((a, b) => a.key.compareTo(b.key)));
   }
@@ -230,38 +453,20 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
       padding: const EdgeInsets.symmetric(vertical: 4),
       children: [
         if (monitored.isNotEmpty) ...[
-          _sectionHeader(
-            context,
-            'Monitored — auto-review enabled',
-            monitored.length,
-            Colors.green.shade700,
-          ),
+          _sectionHeader(context, 'Monitored — auto-review enabled',
+              monitored.length, Colors.green.shade700),
           ..._buildOrgGroups('monitored', monitored),
         ],
-        _sectionHeader(
-          context,
-          'Not monitored — PRs visible, no auto-review',
-          disabled.length,
-          Colors.grey.shade600,
-        ),
-        if (disabled.isEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: Text(
-              'No repos disabled. Toggle the switch on any repo above to stop auto-reviewing it.',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-            ),
-          )
-        else
+        if (disabled.isNotEmpty) ...[
+          _sectionHeader(context, 'Not monitored — PRs visible, no auto-review',
+              disabled.length, Colors.grey.shade600),
           ..._buildOrgGroups('disabled', disabled),
+        ],
       ],
     );
   }
 
-  List<Widget> _buildOrgGroups(
-    String section,
-    List<String> repos,
-  ) {
+  List<Widget> _buildOrgGroups(String section, List<String> repos) {
     final groups = _groupByOrg(repos);
     final items = <Widget>[];
     for (final entry in groups.entries) {
@@ -284,21 +489,17 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
     return items;
   }
 
-  Widget _sectionHeader(
-      BuildContext ctx, String label, int count, Color color) {
+  Widget _sectionHeader(BuildContext ctx, String label, int count, Color color) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
       child: Row(children: [
         Container(
-            width: 8,
-            height: 8,
+            width: 8, height: 8,
             decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
         const SizedBox(width: 6),
         Text(label,
             style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade400,
-                fontWeight: FontWeight.w600)),
+                fontSize: 12, color: Colors.grey.shade400, fontWeight: FontWeight.w600)),
         const SizedBox(width: 6),
         Text('$count',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
@@ -306,24 +507,18 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
     );
   }
 
-  Widget _orgHeader(
-      String org, int count, bool expanded, VoidCallback onTap) {
+  Widget _orgHeader(String org, int count, bool expanded, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(24, 6, 16, 2),
         child: Row(children: [
-          Icon(
-            expanded ? Icons.expand_less : Icons.expand_more,
-            size: 16,
-            color: Colors.grey.shade500,
-          ),
+          Icon(expanded ? Icons.expand_less : Icons.expand_more,
+              size: 16, color: Colors.grey.shade500),
           const SizedBox(width: 4),
           Text(org,
               style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey.shade400,
-                  fontWeight: FontWeight.w500)),
+                  fontSize: 12, color: Colors.grey.shade400, fontWeight: FontWeight.w500)),
           const SizedBox(width: 6),
           Text('$count',
               style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
@@ -336,7 +531,7 @@ class _RepoListWithSectionsState extends ConsumerState<_RepoListWithSections> {
 // ── LED indicator ────────────────────────────────────────────────────────────
 
 class _Led extends StatelessWidget {
-  final String status; // 'off', 'global', 'repo'
+  final String status;
   final String tooltip;
   const _Led({required this.status, required this.tooltip});
 
@@ -381,12 +576,7 @@ class _RepoTile extends StatelessWidget {
     final configuredDir = (config.localDir ?? '').isNotEmpty ? config.localDir : null;
     final detectedDir = appConfig.localDirsDetected[repo];
     final effectiveDir = configuredDir ?? detectedDir;
-    // Full-repo analysis is available as long as *either* the user
-    // configured a path *or* the daemon detected one under /repos.
     final hasDirMapping = effectiveDir != null && effectiveDir.isNotEmpty;
-    // Distinguish configured vs auto-detected in the label/colour so the
-    // operator can tell at a glance whether they set it themselves or the
-    // bind-mount convention kicked in.
     final isAutoDetected = configuredDir == null && detectedDir != null;
 
     return Card(
@@ -434,9 +624,7 @@ class _RepoTile extends StatelessWidget {
                         hasDirMapping ? Icons.folder : Icons.folder_off_outlined,
                         size: 13,
                         color: hasDirMapping
-                            ? (isAutoDetected
-                                ? Colors.blue.shade400
-                                : Colors.green.shade500)
+                            ? (isAutoDetected ? Colors.blue.shade400 : Colors.green.shade500)
                             : Colors.grey.shade600,
                       ),
                       const SizedBox(width: 4),
@@ -449,9 +637,7 @@ class _RepoTile extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 11,
                           color: hasDirMapping
-                              ? (isAutoDetected
-                                  ? Colors.blue.shade400
-                                  : Colors.green.shade500)
+                              ? (isAutoDetected ? Colors.blue.shade400 : Colors.green.shade500)
                               : Colors.grey.shade600,
                         ),
                       ),
@@ -464,6 +650,75 @@ class _RepoTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ── Multi-select dialog (same pattern as Stats filter) ───────────────────
+
+class _MultiSelectDialog extends StatefulWidget {
+  final String title;
+  final List<String> items;
+  final Set<String> selected;
+
+  const _MultiSelectDialog({
+    required this.title,
+    required this.items,
+    required this.selected,
+  });
+
+  @override
+  State<_MultiSelectDialog> createState() => _MultiSelectDialogState();
+}
+
+class _MultiSelectDialogState extends State<_MultiSelectDialog> {
+  late Set<String> _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = Set<String>.from(widget.selected);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title, style: const TextStyle(fontSize: 16)),
+      contentPadding: const EdgeInsets.only(top: 12),
+      content: SizedBox(
+        width: 300,
+        child: ListView.builder(
+          shrinkWrap: true,
+          itemCount: widget.items.length,
+          itemBuilder: (_, i) {
+            final item = widget.items[i];
+            return CheckboxListTile(
+              dense: true,
+              title: Text(item, style: const TextStyle(fontSize: 13)),
+              value: _selected.contains(item),
+              onChanged: (val) {
+                setState(() {
+                  if (val == true) {
+                    _selected.add(item);
+                  } else {
+                    _selected.remove(item);
+                  }
+                });
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, null),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _selected),
+          child: const Text('Apply'),
+        ),
+      ],
     );
   }
 }
