@@ -515,15 +515,14 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
           }),
         ),
         const SizedBox(height: 10),
-        TextFormField(
-          initialValue: _globalPRAssignee,
-          decoration: const InputDecoration(
-            labelText: 'PR Assignee',
-            helperText: 'GitHub username to assign PRs to',
-            border: OutlineInputBorder(),
-            isDense: true,
-          ),
-          onChanged: (v) => setState(() => _globalPRAssignee = v.trim()),
+        AutocompleteChipField(
+          label: 'PR Assignee',
+          helper: 'GitHub username to assign PRs to',
+          selectedValues: _globalPRAssignee.isEmpty ? [] : [_globalPRAssignee],
+          availableOptions: const [],
+          onChanged: (v) => setState(() {
+            _globalPRAssignee = (v != null && v.isNotEmpty) ? v.first : '';
+          }),
         ),
         const SizedBox(height: 10),
         AutocompleteChipField(
