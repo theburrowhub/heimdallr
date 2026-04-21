@@ -20,14 +20,17 @@ ActivityEntry _mk(int n, DateTime ts, {ActivityAction a = ActivityAction.review}
     );
 
 ProviderScope _scope({required AsyncValue<ActivityPage> value}) {
+  Future<ActivityPage> resolve() async {
+    if (value is AsyncError) {
+      throw (value as AsyncError).error;
+    }
+    return (value.valueOrNull)!;
+  }
+
   return ProviderScope(
     overrides: [
-      activityEntriesProvider.overrideWith((ref) async {
-        if (value is AsyncError) {
-          throw (value as AsyncError).error;
-        }
-        return (value.valueOrNull)!;
-      }),
+      activityEntriesProvider.overrideWith((ref) => resolve()),
+      activityOptionsProvider.overrideWith((ref) => resolve()),
     ],
     child: const MaterialApp(home: Scaffold(body: ActivityScreen())),
   );

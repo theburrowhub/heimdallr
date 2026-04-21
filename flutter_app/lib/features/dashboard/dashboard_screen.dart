@@ -42,6 +42,7 @@ class DashboardScreen extends ConsumerWidget {
                 ref.invalidate(issuesProvider);
                 ref.invalidate(statsProvider);
                 ref.invalidate(activityEntriesProvider);
+                ref.invalidate(activityOptionsProvider);
               },
             ),
           ],

@@ -18,10 +18,13 @@ class ActivityScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final q = ref.watch(activityQueryProvider);
     final async = ref.watch(activityEntriesProvider);
+    final optionsAsync = ref.watch(activityOptionsProvider);
 
-    final orgs = async.valueOrNull?.entries.map((e) => e.org).toSet().toList()
+    final orgs = optionsAsync.valueOrNull?.entries
+            .map((e) => e.org).toSet().toList()
         ?? const <String>[];
-    final repos = async.valueOrNull?.entries.map((e) => e.repo).toSet().toList()
+    final repos = optionsAsync.valueOrNull?.entries
+            .map((e) => e.repo).toSet().toList()
         ?? const <String>[];
 
     return Column(
@@ -127,7 +130,7 @@ class _Timeline extends StatelessWidget {
       items.add(Container(
         width: double.infinity,
         padding: const EdgeInsets.all(12),
-        color: Theme.of(context).colorScheme.surfaceVariant,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
         child: Text(
           'Showing ${page.entries.length} most recent entries. Narrow filters to see more.',
         ),

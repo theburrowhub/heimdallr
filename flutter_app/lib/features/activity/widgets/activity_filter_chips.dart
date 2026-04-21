@@ -19,7 +19,6 @@ class ActivityFilterChips extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final q = ref.watch(activityQueryProvider);
-    final n = ref.read(activityQueryProvider.notifier);
     final anyActive = q.orgs.isNotEmpty || q.repos.isNotEmpty || q.actions.isNotEmpty;
 
     return Wrap(
@@ -30,25 +29,34 @@ class ActivityFilterChips extends ConsumerWidget {
         _chip(context,
             label: 'Organization',
             count: q.orgs.length,
-            onTap: () => _pickStrings(context,
-                options: availableOrgs,
-                selected: q.orgs,
-                toggle: n.toggleOrg)),
+            onTap: () => _pickStrings(
+                  context,
+                  options: availableOrgs,
+                  select: (q) => q.orgs,
+                  toggle: (v) =>
+                      ref.read(activityQueryProvider.notifier).toggleOrg(v),
+                )),
         _chip(context,
             label: 'Repository',
             count: q.repos.length,
-            onTap: () => _pickStrings(context,
-                options: availableRepos,
-                selected: q.repos,
-                toggle: n.toggleRepo)),
+            onTap: () => _pickStrings(
+                  context,
+                  options: availableRepos,
+                  select: (q) => q.repos,
+                  toggle: (v) =>
+                      ref.read(activityQueryProvider.notifier).toggleRepo(v),
+                )),
         _chip(context,
             label: 'Action',
             count: q.actions.length,
-            onTap: () => _pickActions(context,
-                selected: q.actions, toggle: n.toggleAction)),
+            onTap: () => _pickActions(
+                  context,
+                  toggle: (a) =>
+                      ref.read(activityQueryProvider.notifier).toggleAction(a),
+                )),
         if (anyActive)
           TextButton(
-            onPressed: n.clearFilters,
+            onPressed: ref.read(activityQueryProvider.notifier).clearFilters,
             child: const Text('Clear filters'),
           ),
       ],
@@ -63,32 +71,35 @@ class ActivityFilterChips extends ConsumerWidget {
     );
   }
 
-  Future<void> _pickStrings(BuildContext context,
-      {required List<String> options,
-      required Set<String> selected,
-      required void Function(String) toggle}) async {
+  Future<void> _pickStrings(
+    BuildContext context, {
+    required List<String> options,
+    required Set<String> Function(ActivityQuery q) select,
+    required void Function(String) toggle,
+  }) async {
     await showModalBottomSheet<void>(
       context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setState) => ListView(
-          children: options
-              .map((o) => CheckboxListTile(
-                    value: selected.contains(o),
-                    title: Text(o),
-                    onChanged: (_) {
-                      toggle(o);
-                      setState(() {});
-                    },
-                  ))
-              .toList(),
-        ),
+      builder: (_) => Consumer(
+        builder: (ctx, ref, _) {
+          final selected = select(ref.watch(activityQueryProvider));
+          return ListView(
+            children: options
+                .map((o) => CheckboxListTile(
+                      value: selected.contains(o),
+                      title: Text(o),
+                      onChanged: (_) => toggle(o),
+                    ))
+                .toList(),
+          );
+        },
       ),
     );
   }
 
-  Future<void> _pickActions(BuildContext context,
-      {required Set<ActivityAction> selected,
-      required void Function(ActivityAction) toggle}) async {
+  Future<void> _pickActions(
+    BuildContext context, {
+    required void Function(ActivityAction) toggle,
+  }) async {
     const options = [
       ActivityAction.review,
       ActivityAction.triage,
@@ -98,19 +109,19 @@ class ActivityFilterChips extends ConsumerWidget {
     ];
     await showModalBottomSheet<void>(
       context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setState) => ListView(
-          children: options
-              .map((a) => CheckboxListTile(
-                    value: selected.contains(a),
-                    title: Text(a.name),
-                    onChanged: (_) {
-                      toggle(a);
-                      setState(() {});
-                    },
-                  ))
-              .toList(),
-        ),
+      builder: (_) => Consumer(
+        builder: (ctx, ref, _) {
+          final selected = ref.watch(activityQueryProvider).actions;
+          return ListView(
+            children: options
+                .map((a) => CheckboxListTile(
+                      value: selected.contains(a),
+                      title: Text(a.name),
+                      onChanged: (_) => toggle(a),
+                    ))
+                .toList(),
+          );
+        },
       ),
     );
   }

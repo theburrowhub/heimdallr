@@ -14,49 +14,33 @@ class ActivityQueryNotifier extends StateNotifier<ActivityQuery> {
   }
 
   void setDate(DateTime day) {
-    state = ActivityQuery(
+    state = state.copyWith(
       date: DateTime(day.year, day.month, day.day),
-      orgs: state.orgs,
-      repos: state.repos,
-      actions: state.actions,
-      limit: state.limit,
+      from: null,
+      to: null,
     );
   }
 
   void setRange(DateTime from, DateTime to) {
-    state = ActivityQuery(
+    state = state.copyWith(
+      date: null,
       from: DateTime(from.year, from.month, from.day),
-      to:   DateTime(to.year, to.month, to.day),
-      orgs: state.orgs,
-      repos: state.repos,
-      actions: state.actions,
-      limit: state.limit,
+      to:   DateTime(to.year,   to.month,   to.day),
     );
   }
 
-  void toggleOrg(String org)    => _replace(orgs:    _toggled(state.orgs,    org));
-  void toggleRepo(String repo)  => _replace(repos:   _toggled(state.repos,   repo));
+  void toggleOrg(String org) =>
+      state = state.copyWith(orgs: _toggled(state.orgs, org));
+  void toggleRepo(String repo) =>
+      state = state.copyWith(repos: _toggled(state.repos, repo));
   void toggleAction(ActivityAction a) =>
-      _replace(actions: _toggled(state.actions, a));
+      state = state.copyWith(actions: _toggled(state.actions, a));
 
-  void clearFilters() =>
-      _replace(orgs: const {}, repos: const {}, actions: const {});
-
-  void _replace({
-    Set<String>? orgs,
-    Set<String>? repos,
-    Set<ActivityAction>? actions,
-  }) {
-    state = ActivityQuery(
-      date:    state.date,
-      from:    state.from,
-      to:      state.to,
-      orgs:    orgs    ?? state.orgs,
-      repos:   repos   ?? state.repos,
-      actions: actions ?? state.actions,
-      limit:   state.limit,
-    );
-  }
+  void clearFilters() => state = state.copyWith(
+        orgs: const {},
+        repos: const {},
+        actions: const {},
+      );
 
   static Set<T> _toggled<T>(Set<T> set, T v) {
     final next = Set<T>.from(set);
@@ -77,4 +61,19 @@ final activityEntriesProvider = FutureProvider<ActivityPage>((ref) async {
   final q = ref.watch(activityQueryProvider);
   final api = ref.watch(apiClientProvider);
   return api.fetchActivity(q);
+});
+
+/// Source for filter chip option lists (orgs/repos). Uses the same date
+/// window as the main query but drops org/repo/action filters — so the
+/// option lists show the full universe for the window instead of shrinking
+/// to the already-filtered slice.
+final activityOptionsProvider = FutureProvider<ActivityPage>((ref) async {
+  final date  = ref.watch(activityQueryProvider.select((q) => q.date));
+  final from  = ref.watch(activityQueryProvider.select((q) => q.from));
+  final to    = ref.watch(activityQueryProvider.select((q) => q.to));
+  final limit = ref.watch(activityQueryProvider.select((q) => q.limit));
+  final api = ref.watch(apiClientProvider);
+  return api.fetchActivity(
+    ActivityQuery(date: date, from: from, to: to, limit: limit),
+  );
 });

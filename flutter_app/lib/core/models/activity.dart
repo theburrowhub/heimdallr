@@ -2,22 +2,10 @@
 /// safety fallback so the UI never crashes on a forward-compat value.
 enum ActivityAction { review, triage, implement, promote, error, unknown }
 
-ActivityAction _parseAction(String s) {
-  switch (s) {
-    case 'review':
-      return ActivityAction.review;
-    case 'triage':
-      return ActivityAction.triage;
-    case 'implement':
-      return ActivityAction.implement;
-    case 'promote':
-      return ActivityAction.promote;
-    case 'error':
-      return ActivityAction.error;
-    default:
-      return ActivityAction.unknown;
-  }
-}
+final Map<String, ActivityAction> _actionByName = ActivityAction.values.asNameMap();
+
+ActivityAction _parseAction(String s) =>
+    _actionByName[s] ?? ActivityAction.unknown;
 
 class ActivityEntry {
   final int id;
@@ -60,6 +48,8 @@ class ActivityEntry {
   }
 }
 
+const Object _unset = Object();
+
 /// Query used by the providers and API layer. All fields optional.
 class ActivityQuery {
   final DateTime? date;
@@ -79,6 +69,29 @@ class ActivityQuery {
     this.actions = const {},
     this.limit = 500,
   });
+
+  /// Returns a copy with the given fields overridden. `date`, `from`, `to`
+  /// use a sentinel to distinguish "not passed" (keep current) from
+  /// "explicit null" (clear).
+  ActivityQuery copyWith({
+    Object? date = _unset,
+    Object? from = _unset,
+    Object? to = _unset,
+    Set<String>? orgs,
+    Set<String>? repos,
+    Set<ActivityAction>? actions,
+    int? limit,
+  }) {
+    return ActivityQuery(
+      date:    identical(date, _unset) ? this.date : date as DateTime?,
+      from:    identical(from, _unset) ? this.from : from as DateTime?,
+      to:      identical(to,   _unset) ? this.to   : to   as DateTime?,
+      orgs:    orgs    ?? this.orgs,
+      repos:   repos   ?? this.repos,
+      actions: actions ?? this.actions,
+      limit:   limit   ?? this.limit,
+    );
+  }
 
   Map<String, List<String>> toQueryParameters() {
     String ymd(DateTime d) =>
