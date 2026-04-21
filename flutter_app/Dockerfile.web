@@ -26,7 +26,13 @@ FROM nginx:1.27-alpine
 RUN apk add --no-cache gettext
 
 COPY --from=build /src/build/web /usr/share/nginx/html
-COPY nginx.conf.template /etc/nginx/templates/heimdallm.conf.template
+# NOTE: template lives OUTSIDE /etc/nginx/templates/ on purpose. The stock
+# nginx:alpine entrypoint auto-renders every *.template under that path
+# with an unrestricted envsubst invocation that (a) runs after our script
+# in a fresh shell where our exports no longer exist and (b) would write
+# a second server{} block into conf.d/. Keeping the template at a custom
+# path makes our entrypoint the single renderer.
+COPY nginx.conf.template /etc/nginx/heimdallm.conf.template
 COPY docker-entrypoint.d/10-heimdallm-token.sh /docker-entrypoint.d/10-heimdallm-token.sh
 
 # The default conf.d entry shipped with the image would listen on 80 and

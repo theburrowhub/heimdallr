@@ -25,7 +25,7 @@ fi
 
 export API_TOKEN DAEMON_URL
 envsubst '${API_TOKEN} ${DAEMON_URL}' \
-  < /etc/nginx/templates/heimdallm.conf.template \
+  < /etc/nginx/heimdallm.conf.template \
   > /etc/nginx/conf.d/default.conf
 
 if [ -n "$API_TOKEN" ]; then
