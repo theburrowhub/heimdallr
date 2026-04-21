@@ -17,9 +17,12 @@ services:
   web:
     container_name: heimdallm-web-test
     restart: "no"
-    # Unset HEIMDALLM_API_TOKEN so the entrypoint reads the token the
-    # daemon just wrote into the shared test volume instead of whatever
-    # stale value the operator has in docker/.env from a prior run.
+    # Set HEIMDALLM_API_TOKEN to empty (the entrypoint's `[ -n "$VAR" ]`
+    # check treats empty and unset the same, falling through to the file
+    # at /data/api_token). This overrides whatever stale value the
+    # operator might have in docker/.env from a prior run, so the web
+    # container always uses the token the test-mode daemon just wrote
+    # into the shared volume.
     environment:
       - HEIMDALLM_API_TOKEN=
     volumes:

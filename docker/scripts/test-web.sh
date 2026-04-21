@@ -49,7 +49,10 @@ curl -sf "$BASE/" -o "$INDEX_HTML"
 grep -q "Heimdallm" "$INDEX_HTML" || fail "/ did not return Heimdallm shell"
 
 log "2/6 GET /main.dart.js"
-curl -sfI "$BASE/main.dart.js" | grep -qi 'content-type: .*javascript' \
+# Use a GET + header-dump instead of curl -I (HEAD). Some Nginx configs
+# don't serve identical Content-Type for HEAD vs GET; GET avoids the
+# false negative and also verifies the bundle actually delivers content.
+curl -sf "$BASE/main.dart.js" -D - -o /dev/null | grep -qi 'content-type: .*javascript' \
   || fail "main.dart.js not served with javascript content-type"
 
 log "3/6 GET /healthz"
