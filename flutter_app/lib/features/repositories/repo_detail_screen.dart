@@ -12,6 +12,8 @@ import '../../shared/widgets/toast.dart';
 import '../agents/agents_screen.dart' show agentsProvider;
 import '../config/config_providers.dart';
 import '../dashboard/dashboard_providers.dart';
+import 'widgets/feature_palette.dart';
+import 'widgets/feature_switch.dart';
 
 class RepoDetailScreen extends ConsumerStatefulWidget {
   final String repoName;
@@ -95,17 +97,28 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
 
   // ── Section card ─────────────────────────────────────────────────────────────
 
-  Widget _sectionCard(String title, List<Widget> children) {
+  Widget _sectionCard(String title, List<Widget> children, {Color? accent}) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: accent != null
+            ? BorderSide(color: accent, width: 2)
+            : BorderSide.none,
+      ),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title,
-                style: const TextStyle(
-                    fontWeight: FontWeight.w600, fontSize: 15)),
+            Text(
+              title,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
+                color: accent,
+              ),
+            ),
             const SizedBox(height: 12),
             ...children,
           ],
@@ -163,15 +176,18 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
 
                 // ── Section 2: PR Review ───────────────────────────────
                 _sectionCard('PR Review', [
-                  SwitchListTile(
-                    title: const Text('Auto-review PRs',
-                        style: TextStyle(fontSize: 13)),
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    value: _config.prEnabled ?? false,
-                    onChanged: (v) =>
-                        _update(_config.copyWith(prEnabled: v)),
-                  ),
+                  Row(children: [
+                    const Expanded(
+                      child: Text('Auto-review PRs',
+                          style: TextStyle(fontSize: 13)),
+                    ),
+                    FeatureSwitch(
+                      feature: Feature.prReview,
+                      value: _config.prEnabled ?? false,
+                      onChanged: (v) =>
+                          _update(_config.copyWith(prEnabled: v)),
+                    ),
+                  ]),
                   const SizedBox(height: 6),
                   OverrideDropdown(
                     label: 'Primary',
@@ -210,19 +226,22 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     onChanged: (v) =>
                         _update(_config.copyWith(promptId: v)),
                   ),
-                ]),
+                ], accent: FeaturePalette.prReview),
 
                 // ── Section 3: Issue Tracking ──────────────────────────
                 _sectionCard('Issue Tracking', [
-                  SwitchListTile(
-                    title: const Text('Triage issues',
-                        style: TextStyle(fontSize: 13)),
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    value: _config.itEnabled ?? false,
-                    onChanged: (v) =>
-                        _update(_config.copyWith(itEnabled: v)),
-                  ),
+                  Row(children: [
+                    const Expanded(
+                      child: Text('Triage issues',
+                          style: TextStyle(fontSize: 13)),
+                    ),
+                    FeatureSwitch(
+                      feature: Feature.issueTracking,
+                      value: _config.itEnabled ?? false,
+                      onChanged: (v) =>
+                          _update(_config.copyWith(itEnabled: v)),
+                    ),
+                  ]),
                   const SizedBox(height: 6),
                   AutocompleteChipField(
                     label: 'Review-only labels',
@@ -294,19 +313,22 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     onChanged: (v) =>
                         _update(_config.copyWith(issuePromptId: v)),
                   ),
-                ]),
+                ], accent: FeaturePalette.issueTracking),
 
                 // ── Section 4: Develop ─────────────────────────────────
                 _sectionCard('Develop', [
-                  SwitchListTile(
-                    title: const Text('Auto-implement issues',
-                        style: TextStyle(fontSize: 13)),
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    value: _config.devEnabled ?? false,
-                    onChanged: (v) =>
-                        _update(_config.copyWith(devEnabled: v)),
-                  ),
+                  Row(children: [
+                    const Expanded(
+                      child: Text('Auto-implement issues',
+                          style: TextStyle(fontSize: 13)),
+                    ),
+                    FeatureSwitch(
+                      feature: Feature.develop,
+                      value: _config.devEnabled ?? false,
+                      onChanged: (v) =>
+                          _update(_config.copyWith(devEnabled: v)),
+                    ),
+                  ]),
                   const SizedBox(height: 6),
                   AutocompleteChipField(
                     label: 'Develop labels',
@@ -367,7 +389,7 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
                     onChanged: (v) =>
                         _update(_config.copyWith(developPromptId: v)),
                   ),
-                ]),
+                ], accent: FeaturePalette.develop),
               ],
             ),
           );
