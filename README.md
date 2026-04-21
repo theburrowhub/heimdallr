@@ -473,6 +473,12 @@ heimdallm/
 
 ---
 
+## Configuration
+
+See the [Configuration Guide](docs/configuration-guide.md) for full reference of all settings, environment variables, and deployment options.
+
+---
+
 ## Releasing
 
 ```bash
