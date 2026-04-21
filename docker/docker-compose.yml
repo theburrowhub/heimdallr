@@ -113,11 +113,19 @@ services:
     environment:
       # Upstream daemon URL inside the compose network. Host + port line
       # up with the heimdallm service above.
+      #
+      # Migration note (v0.4 → Flutter Web): the env var was renamed
+      # from HEIMDALLM_API_URL (SvelteKit) to DAEMON_URL (Nginx entrypoint).
+      # If you had HEIMDALLM_API_URL in docker/.env or your shell, move it
+      # under this key. Default is fine for the standard compose network.
       - DAEMON_URL=http://heimdallm:${HEIMDALLM_PORT:-7842}
-      # Optional: skip the token file by setting HEIMDALLM_API_TOKEN.
-      # Left empty in the common case — the entrypoint reads
-      # /data/api_token from the shared volume below.
-      - HEIMDALLM_API_TOKEN=${HEIMDALLM_API_TOKEN:-}
+      # HEIMDALLM_API_TOKEN is intentionally NOT passed through from
+      # .env here. The entrypoint reads /data/api_token from the shared
+      # volume, which is always the live daemon token. A stale value in
+      # docker/.env (left from an older `make setup`) would otherwise
+      # shadow the volume token and every /api/* call would 401.
+      # To override the token for testing, set it with `docker compose
+      # -e HEIMDALLM_API_TOKEN=... up web`.
     volumes:
       # Read-only mount so Nginx can load /data/api_token but cannot
       # mutate the daemon's SQLite DB or config.
@@ -135,7 +143,7 @@ services:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
       interval: 5s
       timeout: 3s
-      start_period: 3s
+      start_period: 10s
       retries: 6
 
 volumes:
