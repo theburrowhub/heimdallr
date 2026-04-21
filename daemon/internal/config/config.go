@@ -255,6 +255,13 @@ type AIConfig struct {
 	PRAssignee  string   `toml:"pr_assignee"`
 	PRDraft     *bool    `toml:"pr_draft,omitempty"`
 
+	// IssuePrompt is the global default agent profile ID for issue triage.
+	// Per-repo overrides in [ai.repos.<name>] take precedence.
+	IssuePrompt string `toml:"issue_prompt"`
+	// ImplementPrompt is the global default agent profile ID for auto-implement.
+	// Per-repo overrides in [ai.repos.<name>] take precedence.
+	ImplementPrompt string `toml:"implement_prompt"`
+
 	// GeneratePRDescription enables LLM-generated PR titles and descriptions
 	// for auto_implement PRs. When true, after the implementation commit,
 	// a second LLM call generates a rich PR description from the diff.

@@ -235,6 +235,12 @@ class FirstRunSetup {
       buf.writeln('fallback = "${_tomlEscapeString(config.aiFallback)}"');
     }
     buf.writeln('review_mode = "${_tomlEscapeString(config.reviewMode)}"');
+    if (config.globalIssuePrompt.isNotEmpty) {
+      buf.writeln('issue_prompt = "${_tomlEscapeString(config.globalIssuePrompt)}"');
+    }
+    if (config.globalImplementPrompt.isNotEmpty) {
+      buf.writeln('implement_prompt = "${_tomlEscapeString(config.globalImplementPrompt)}"');
+    }
     buf.writeln();
 
     // Global PR metadata defaults

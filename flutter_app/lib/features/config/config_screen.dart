@@ -5,6 +5,7 @@ import '../../core/models/config_model.dart';
 import '../../core/platform/platform_services_provider.dart';
 import '../../shared/widgets/autocomplete_chip_field.dart';
 import '../../shared/widgets/toast.dart';
+import '../agents/agents_screen.dart' show agentsProvider;
 import '../dashboard/dashboard_providers.dart';
 import 'config_providers.dart';
 
@@ -25,6 +26,8 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
   String _pollInterval = '5m';
   int _retentionDays = 90;
   IssueTrackingConfig _issueTracking = const IssueTrackingConfig();
+  String? _issuePromptId;
+  String? _developPromptId;
 
   // All known repos. Key = "org/repo", Value = per-repo settings.
   Map<String, RepoConfig> _repoConfigs = {};
@@ -73,6 +76,8 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     _retentionDays = config.retentionDays;
     _repoConfigs = Map.from(config.repoConfigs);
     _issueTracking = config.issueTracking;
+    _issuePromptId = config.globalIssuePrompt.isEmpty ? null : config.globalIssuePrompt;
+    _developPromptId = config.globalImplementPrompt.isEmpty ? null : config.globalImplementPrompt;
   }
 
   /// Auto-discovers repos from the user's PRs. Runs silently on init.
@@ -451,6 +456,13 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
             _issueTracking = _issueTracking.copyWith(assignees: v ?? []);
           }),
         ),
+        const SizedBox(height: 10),
+        _agentDropdown(
+          label: 'Issue Prompt',
+          helper: 'Agent profile for issue triage',
+          value: _issuePromptId,
+          onChanged: (v) => setState(() => _issuePromptId = v),
+        ),
       ],
     ]);
   }
@@ -544,8 +556,47 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
           value: _globalPRDraft,
           onChanged: (v) => setState(() => _globalPRDraft = v),
         ),
+        const SizedBox(height: 10),
+        _agentDropdown(
+          label: 'Develop Prompt',
+          helper: 'Agent profile for auto-implementation',
+          value: _developPromptId,
+          onChanged: (v) => setState(() => _developPromptId = v),
+        ),
       ],
     ]);
+  }
+
+  Widget _agentDropdown({
+    required String label,
+    required String helper,
+    required String? value,
+    required ValueChanged<String?> onChanged,
+  }) {
+    final agents = ref.watch(agentsProvider).valueOrNull ?? [];
+    final options = agents.map((a) => a.id).toList();
+    final effective = (value != null && options.contains(value)) ? value : null;
+    return DropdownButtonFormField<String?>(
+      key: ValueKey('$label-$effective'),
+      initialValue: effective,
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: helper,
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: [
+        const DropdownMenuItem<String?>(
+          value: null,
+          child: Text('default', style: TextStyle(fontSize: 12)),
+        ),
+        ...options.map((id) => DropdownMenuItem<String?>(
+              value: id,
+              child: Text(id, style: const TextStyle(fontSize: 12)),
+            )),
+      ],
+      onChanged: onChanged,
+    );
   }
 
   Widget _settingsCard(String title, List<Widget> children) {
@@ -644,6 +695,8 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
     globalPRLabels: _globalPRLabels,
     globalPRAssignee: _globalPRAssignee,
     globalPRDraft: _globalPRDraft,
+    globalIssuePrompt: _issuePromptId ?? '',
+    globalImplementPrompt: _developPromptId ?? '',
     // aiPrimary, aiFallback, reviewMode, agentConfigs managed in Agents tab
   );
 

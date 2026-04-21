@@ -341,6 +341,8 @@ class AppConfig {
   final List<String> globalPRLabels;
   final String globalPRAssignee;
   final bool globalPRDraft;
+  final String globalIssuePrompt;
+  final String globalImplementPrompt;
   /// Host paths the daemon scans (in order) when a repo has no explicit
   /// `local_dir` set — first match at `{base}/{short-repo-name}` wins.
   final List<String> localDirBase;
@@ -367,6 +369,8 @@ class AppConfig {
     this.globalPRLabels = const [],
     this.globalPRAssignee = '',
     this.globalPRDraft = false,
+    this.globalIssuePrompt = '',
+    this.globalImplementPrompt = '',
     this.localDirBase = const [],
     this.localDirsDetected = const {},
   });
@@ -393,6 +397,8 @@ class AppConfig {
     List<String>? globalPRLabels,
     String? globalPRAssignee,
     bool? globalPRDraft,
+    String? globalIssuePrompt,
+    String? globalImplementPrompt,
     List<String>? localDirBase,
     Map<String, String>? localDirsDetected,
   }) {
@@ -408,10 +414,12 @@ class AppConfig {
       issueTracking:     issueTracking     ?? this.issueTracking,
       globalPRReviewers: globalPRReviewers ?? this.globalPRReviewers,
       globalPRLabels:    globalPRLabels    ?? this.globalPRLabels,
-      globalPRAssignee:  globalPRAssignee  ?? this.globalPRAssignee,
-      globalPRDraft:     globalPRDraft     ?? this.globalPRDraft,
-      localDirBase:      localDirBase      ?? this.localDirBase,
-      localDirsDetected: localDirsDetected ?? this.localDirsDetected,
+      globalPRAssignee:       globalPRAssignee       ?? this.globalPRAssignee,
+      globalPRDraft:          globalPRDraft          ?? this.globalPRDraft,
+      globalIssuePrompt:     globalIssuePrompt     ?? this.globalIssuePrompt,
+      globalImplementPrompt: globalImplementPrompt ?? this.globalImplementPrompt,
+      localDirBase:           localDirBase           ?? this.localDirBase,
+      localDirsDetected:     localDirsDetected     ?? this.localDirsDetected,
     );
   }
 
@@ -515,9 +523,11 @@ class AppConfig {
       issueTracking:     issueTracking,
       globalPRReviewers: _parseStringList((json['pr_metadata'] as Map<String, dynamic>?)?['reviewers']),
       globalPRLabels:    _parseStringList((json['pr_metadata'] as Map<String, dynamic>?)?['labels']),
-      globalPRAssignee:  (json['pr_metadata'] as Map<String, dynamic>?)?['pr_assignee'] as String? ?? '',
-      globalPRDraft:     (json['pr_metadata'] as Map<String, dynamic>?)?['pr_draft'] as bool? ?? false,
-      localDirBase:      _parseStringList(json['local_dir_base']),
+      globalPRAssignee:       (json['pr_metadata'] as Map<String, dynamic>?)?['pr_assignee'] as String? ?? '',
+      globalPRDraft:          (json['pr_metadata'] as Map<String, dynamic>?)?['pr_draft'] as bool? ?? false,
+      globalIssuePrompt:     (json['issue_prompt'] as String?) ?? '',
+      globalImplementPrompt: (json['implement_prompt'] as String?) ?? '',
+      localDirBase:           _parseStringList(json['local_dir_base']),
       localDirsDetected: localDirsDetected,
     );
   }

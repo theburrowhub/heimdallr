@@ -461,6 +461,8 @@ func main() {
 			"local_dirs_detected":         localDirsDetected,
 			"activity_log_enabled":        ptrBoolOrTrue(c.ActivityLog.Enabled),
 			"activity_log_retention_days": ptrIntOr(c.ActivityLog.RetentionDays, 90),
+			"issue_prompt":               c.AI.IssuePrompt,
+			"implement_prompt":           c.AI.ImplementPrompt,
 		}
 		reviewers, labels, assignee, draft := c.ResolvedPRMetadata()
 		pm := map[string]any{}
