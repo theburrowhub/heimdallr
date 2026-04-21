@@ -399,6 +399,18 @@ func main() {
 				"no_session_persistence":   ac.NoSessionPersistence,
 			}
 		}
+		// Expose first-seen timestamps so the Flutter app can show NEW badges
+		// on auto-discovered repos. Read-only; populated by the poll cycle.
+		rows, _ := s.ListConfigs()
+		fsMap, _ := config.ParseFirstSeen(rows["repo_first_seen"])
+		for repo, ts := range fsMap {
+			ro := repoOverrides[repo]
+			if ro == nil {
+				ro = map[string]any{}
+			}
+			ro["first_seen_at"] = ts.Unix()
+			repoOverrides[repo] = ro
+		}
 		return map[string]any{
 			"server_port":                 c.Server.Port,
 			"poll_interval":               c.GitHub.PollInterval,
@@ -790,6 +802,46 @@ func parseWatchInterval(s string) time.Duration {
 	return d
 }
 
+// upsertDiscoveredRepos adds PRs' repos to the monitored (or non-monitored)
+// list when they're new. Returns the list of repos that were added.
+// Never removes; mutually-exclusive with NonMonitored when adding.
+//
+// The Flutter UI maps prEnabled via list membership: prEnabled=true ⇔
+// Repositories, prEnabled=false ⇔ NonMonitored, neither ⇔ undiscovered.
+// AutoEnablePRForDiscovery() controls which list a new repo lands in.
+//
+// Caller is responsible for persisting the updated Config and recording
+// first-seen timestamps. This helper is pure state mutation so it's easy
+// to test in isolation.
+func upsertDiscoveredRepos(c *config.Config, prs []*gh.PullRequest) []string {
+	known := make(map[string]struct{})
+	for _, r := range c.GitHub.Repositories {
+		known[r] = struct{}{}
+	}
+	for _, r := range c.GitHub.NonMonitored {
+		known[r] = struct{}{}
+	}
+
+	enable := c.GitHub.AutoEnablePRForDiscovery()
+	added := []string{}
+	for _, pr := range prs {
+		if pr.Repo == "" {
+			continue
+		}
+		if _, alreadyKnown := known[pr.Repo]; alreadyKnown {
+			continue
+		}
+		if enable {
+			c.GitHub.Repositories = append(c.GitHub.Repositories, pr.Repo)
+		} else {
+			c.GitHub.NonMonitored = append(c.GitHub.NonMonitored, pr.Repo)
+		}
+		known[pr.Repo] = struct{}{}
+		added = append(added, pr.Repo)
+	}
+	return added
+}
+
 // ── tier2Adapter bridges main.go's concrete types to Pipeline interfaces ──
 
 type tier2Adapter struct {
@@ -812,9 +864,65 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]scheduler.Tier2PR, 0, len(prs))
+	// Resolve repo on every PR before the upsert step — upsertDiscoveredRepos
+	// reads pr.Repo and skips empty ones, so we must populate the field first.
 	for _, pr := range prs {
 		pr.ResolveRepo()
+	}
+
+	// Auto-discover repos we've never seen before. A PR whose repo is not in
+	// Repositories or NonMonitored gets appended to one of those lists based
+	// on AutoEnablePRForDiscovery(). This is how the Flutter UI learns about
+	// review-requested repos the operator never explicitly configured.
+	//
+	// Snapshot the updated slices under the same mutex that guards the
+	// mutation so a concurrent reload-swap cannot race with the Marshal below.
+	a.cfgMu.Lock()
+	c := *a.cfg
+	added := upsertDiscoveredRepos(c, prs)
+	reposSnap := append([]string(nil), c.GitHub.Repositories...)
+	nonMonSnap := append([]string(nil), c.GitHub.NonMonitored...)
+	a.cfgMu.Unlock()
+
+	if len(added) > 0 {
+		// Persist the updated monitored/non-monitored lists via the K/V store
+		// so the Flutter app's cached view survives a daemon restart.
+		reposJSON, _ := json.Marshal(reposSnap)
+		if _, err := a.store.SetConfig("repositories", string(reposJSON)); err != nil {
+			slog.Warn("poll: persist repositories failed", "err", err)
+		}
+		nmJSON, _ := json.Marshal(nonMonSnap)
+		if _, err := a.store.SetConfig("non_monitored", string(nmJSON)); err != nil {
+			slog.Warn("poll: persist non_monitored failed", "err", err)
+		}
+
+		// Update first-seen map in the same store so GET /config can expose
+		// repo_overrides[repo].first_seen_at to the UI (NEW badge).
+		rows, _ := a.store.ListConfigs()
+		fs, _ := config.ParseFirstSeen(rows["repo_first_seen"])
+		now := time.Now()
+		for _, r := range added {
+			fs.Mark(r, now)
+		}
+		if fsStr, err := fs.Marshal(); err == nil {
+			if _, err := a.store.SetConfig("repo_first_seen", fsStr); err != nil {
+				slog.Warn("poll: persist repo_first_seen failed", "err", err)
+			}
+		} else {
+			slog.Warn("poll: marshal repo_first_seen failed", "err", err)
+		}
+
+		for _, r := range added {
+			a.broker.Publish(sse.Event{
+				Type: sse.EventRepoDiscovered,
+				Data: sseData(map[string]any{"repo": r}),
+			})
+			slog.Info("poll: auto-discovered repo", "repo", r)
+		}
+	}
+
+	out := make([]scheduler.Tier2PR, 0, len(prs))
+	for _, pr := range prs {
 		if pr.Repo == "" {
 			slog.Warn("adapter: skipping PR with empty repo", "pr_number", pr.Number)
 			continue
