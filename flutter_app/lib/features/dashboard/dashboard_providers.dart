@@ -12,7 +12,9 @@ final apiClientProvider = Provider<ApiClient>((ref) {
   return ApiClient(platform: ref.watch(platformServicesProvider));
 });
 
-final sseClientProvider = Provider<SseClient>((ref) => SseClient());
+final sseClientProvider = Provider<SseClient>((ref) {
+  return SseClient(platform: ref.watch(platformServicesProvider));
+});
 
 final sseStreamProvider = StreamProvider<SseEvent>((ref) {
   final client = ref.watch(sseClientProvider);

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:http/http.dart' as http;
+import '../platform/platform_services.dart';
 
 class SseEvent {
   final String type;
@@ -10,14 +10,18 @@ class SseEvent {
 }
 
 class SseClient {
-  final int port;
   final String path;
   final http.Client _httpClient;
+  final PlatformServices _platform;
   StreamController<SseEvent>? _controller;
   StreamSubscription<String>? _subscription;
 
-  SseClient({this.port = 7842, this.path = '/events', http.Client? httpClient})
-      : _httpClient = httpClient ?? http.Client();
+  SseClient({
+    required PlatformServices platform,
+    this.path = '/events',
+    http.Client? httpClient,
+  })  : _platform = platform,
+        _httpClient = httpClient ?? http.Client();
 
   /// Parses SSE wire format into events. Static for testability.
   static List<SseEvent> parseEvents(String raw) {
@@ -52,24 +56,15 @@ class SseClient {
 
   static const _maxBufferSize = 1024 * 1024; // 1 MB
 
-  Future<String?> _loadToken() async {
-    try {
-      final home = Platform.environment['HOME'] ?? '';
-      final file = File('$home/.local/share/heimdallm/api_token');
-      if (await file.exists()) return (await file.readAsString()).trim();
-    } catch (_) {}
-    return null;
-  }
-
   void _startListening() async {
     try {
       final request = http.Request(
         'GET',
-        Uri.parse('http://127.0.0.1:$port$path'),
+        Uri.parse('${_platform.apiBaseUrl}$path'),
       );
       request.headers['Accept'] = 'text/event-stream';
       request.headers['Cache-Control'] = 'no-cache';
-      final token = await _loadToken();
+      final token = await _platform.loadApiToken();
       if (token != null && token.isNotEmpty) {
         request.headers['X-Heimdallm-Token'] = token;
       }
