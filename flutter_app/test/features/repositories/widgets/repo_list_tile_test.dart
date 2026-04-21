@@ -8,17 +8,17 @@ Widget _host(Widget child) =>
     MaterialApp(home: Scaffold(body: child));
 
 void main() {
-  final appConfig = AppConfig(
+  const appConfig = AppConfig(
     serverPort: 1,
     pollInterval: '60s',
     retentionDays: 30,
     aiPrimary: 'claude',
     aiFallback: '',
     reviewMode: 'single',
-    repoConfigs: const {
+    repoConfigs: {
       'theburrowhub/heimdallm': RepoConfig(prEnabled: true),
     },
-    issueTracking: const IssueTrackingConfig(),
+    issueTracking: IssueTrackingConfig(),
   );
 
   testWidgets('shows 3 LEDs with correct states', (tester) async {

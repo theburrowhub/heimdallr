@@ -27,8 +27,8 @@ class BulkActionsBar extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
-        color: primary.withOpacity(0.10),
-        border: Border.all(color: primary.withOpacity(0.35)),
+        color: primary.withValues(alpha:0.10),
+        border: Border.all(color: primary.withValues(alpha:0.35)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -37,7 +37,7 @@ class BulkActionsBar extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
               decoration: BoxDecoration(
-                color: primary.withOpacity(0.32),
+                color: primary.withValues(alpha:0.32),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
@@ -96,11 +96,11 @@ class _MixedTag extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
       decoration: BoxDecoration(
-        color: FeaturePalette.mixed.withOpacity(0.12),
-        border: Border.all(color: FeaturePalette.mixed.withOpacity(0.28)),
+        color: FeaturePalette.mixed.withValues(alpha:0.12),
+        border: Border.all(color: FeaturePalette.mixed.withValues(alpha:0.28)),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Text(
+      child: const Text(
         'MIXED',
         style: TextStyle(
           color: FeaturePalette.mixed,

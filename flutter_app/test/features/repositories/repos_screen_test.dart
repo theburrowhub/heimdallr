@@ -72,7 +72,7 @@ void main() {
 
   testWidgets('selecting Monitored hides non-monitored repos',
       (tester) async {
-    final cfg = const AppConfig(
+    const cfg = AppConfig(
       serverPort: 1, pollInterval: '60s', retentionDays: 30,
       aiPrimary: 'claude', aiFallback: '', reviewMode: 'single',
       repoConfigs: {

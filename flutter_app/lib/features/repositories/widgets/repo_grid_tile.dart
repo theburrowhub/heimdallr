@@ -38,9 +38,9 @@ class RepoGridTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
         decoration: BoxDecoration(
-          color: selected ? primary.withOpacity(0.12) : const Color(0xFF22262E),
+          color: selected ? primary.withValues(alpha:0.12) : const Color(0xFF22262E),
           border: Border.all(
-            color: selected ? primary.withOpacity(0.55) : const Color(0xFF2E333B),
+            color: selected ? primary.withValues(alpha:0.55) : const Color(0xFF2E333B),
           ),
           borderRadius: BorderRadius.circular(10),
         ),
@@ -179,7 +179,7 @@ class _NewBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
       decoration: BoxDecoration(
-        color: primary.withOpacity(0.22),
+        color: primary.withValues(alpha:0.22),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(

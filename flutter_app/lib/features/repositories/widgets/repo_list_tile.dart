@@ -30,14 +30,14 @@ class RepoListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final hasDir = config.localDir != null && config.localDir!.isNotEmpty;
     final theme = Theme.of(context);
-    final selectedBg = theme.colorScheme.primary.withOpacity(0.12);
+    final selectedBg = theme.colorScheme.primary.withValues(alpha:0.12);
 
     return Card(
       color: selected ? selectedBg : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
         side: selected
-            ? BorderSide(color: theme.colorScheme.primary.withOpacity(0.55))
+            ? BorderSide(color: theme.colorScheme.primary.withValues(alpha:0.55))
             : BorderSide.none,
       ),
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
@@ -193,7 +193,7 @@ class _NewBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
       decoration: BoxDecoration(
-        color: primary.withOpacity(0.22),
+        color: primary.withValues(alpha:0.22),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(

@@ -8,7 +8,7 @@ Widget _host(Widget child) =>
     MaterialApp(home: Scaffold(body: SizedBox(width: 200, height: 180, child: child)));
 
 void main() {
-  final appConfig = const AppConfig(
+  const appConfig = AppConfig(
     serverPort: 1, pollInterval: '60s', retentionDays: 30,
     aiPrimary: 'claude', aiFallback: '', reviewMode: 'single',
     repoConfigs: {

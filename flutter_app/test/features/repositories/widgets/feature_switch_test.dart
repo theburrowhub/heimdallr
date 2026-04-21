@@ -16,7 +16,7 @@ void main() {
     )));
     final sw = tester.widget<Switch>(find.byType(Switch));
     expect(sw.value, isTrue);
-    expect(sw.activeColor, FeaturePalette.prReview);
+    expect(sw.activeThumbColor, FeaturePalette.prReview);
   });
 
   testWidgets('value=false: renders Switch off', (tester) async {

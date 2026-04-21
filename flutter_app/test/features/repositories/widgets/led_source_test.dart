@@ -4,7 +4,7 @@ import 'package:heimdallm/features/repositories/widgets/feature_palette.dart';
 import 'package:heimdallm/features/repositories/widgets/led_source.dart';
 
 void main() {
-  final appConfig = const AppConfig(
+  const appConfig = AppConfig(
     serverPort: 1, pollInterval: '60s', retentionDays: 30,
     aiPrimary: 'claude', aiFallback: '', reviewMode: 'single',
     repoConfigs: {'a/b': RepoConfig(prEnabled: true)},

@@ -35,7 +35,7 @@ class RepoFilterChips extends StatelessWidget {
               onTap: () => onChanged(e.key),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                color: current == e.key ? primary.withOpacity(0.22) : null,
+                color: current == e.key ? primary.withValues(alpha:0.22) : null,
                 child: Row(children: [
                   Text(
                     e.value,
@@ -49,8 +49,8 @@ class RepoFilterChips extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                     decoration: BoxDecoration(
                       color: current == e.key
-                          ? primary.withOpacity(0.32)
-                          : Colors.white.withOpacity(0.06),
+                          ? primary.withValues(alpha:0.32)
+                          : Colors.white.withValues(alpha:0.06),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(

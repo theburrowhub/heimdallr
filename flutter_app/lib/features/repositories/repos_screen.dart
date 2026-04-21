@@ -205,7 +205,9 @@ class _ReposScreenState extends ConsumerState<ReposScreen> {
 
         final filtered = allRepos.where((r) {
           if (_search.isNotEmpty &&
-              !r.toLowerCase().contains(_search.toLowerCase())) return false;
+              !r.toLowerCase().contains(_search.toLowerCase())) {
+            return false;
+          }
           if (_orgFilter.isNotEmpty) {
             final org = r.contains('/') ? r.split('/').first : r;
             if (!_orgFilter.contains(org)) return false;
@@ -526,7 +528,7 @@ class _ViewToggleButton extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        color: active ? primary.withOpacity(0.22) : null,
+        color: active ? primary.withValues(alpha:0.22) : null,
         child: Icon(icon,
             size: 18, color: active ? primary : Colors.grey.shade500),
       ),
@@ -693,7 +695,7 @@ class _OrgFilterChip extends StatelessWidget {
         ),
         visualDensity: VisualDensity.compact,
         side: isActive
-            ? BorderSide(color: primary.withOpacity(0.5))
+            ? BorderSide(color: primary.withValues(alpha:0.5))
             : const BorderSide(color: Colors.transparent),
       ),
     );
