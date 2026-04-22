@@ -20,6 +20,9 @@ const (
 	// EventRepoDiscovered fires when the poll cycle sees a PR whose repo
 	// is not yet in monitored or non-monitored. Payload: {"repo": "org/name"}.
 	EventRepoDiscovered = "repo_discovered"
+
+	EventPRStateChanged    = "pr_state_changed"
+	EventIssueStateChanged = "issue_state_changed"
 )
 
 // maxSubscribers limits the number of concurrent SSE connections to prevent

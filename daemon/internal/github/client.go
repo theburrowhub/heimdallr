@@ -398,6 +398,32 @@ func (c *Client) GetPRHeadSHA(repo string, number int) (string, error) {
 	return pr.Head.SHA, nil
 }
 
+// GetPRState returns the effective state of a PR: "open" or "closed".
+// Uses the Pulls API to detect merged PRs (merged_at != null → "closed").
+func (c *Client) GetPRState(repo string, number int) (string, error) {
+	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
+	resp, err := c.do("GET", path, "application/vnd.github+json")
+	if err != nil {
+		return "", fmt.Errorf("github: get PR state %s#%d: %w", repo, number, err)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github: get PR state %s#%d: status %d", repo, number, resp.StatusCode)
+	}
+	var pr struct {
+		State    string  `json:"state"`
+		MergedAt *string `json:"merged_at"`
+	}
+	if err := json.Unmarshal(body, &pr); err != nil {
+		return "", fmt.Errorf("github: decode PR state %s#%d: %w", repo, number, err)
+	}
+	if pr.MergedAt != nil {
+		return "closed", nil
+	}
+	return pr.State, nil
+}
+
 // FetchDiff returns the unified diff for a PR.
 func (c *Client) FetchDiff(repo string, number int) (string, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
