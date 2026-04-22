@@ -23,15 +23,16 @@ const maxCommentsBytes = 8 * 1024
 
 // PromptContext is the data the triage template substitutes into the prompt.
 type PromptContext struct {
-	Repo        string
-	Number      int
-	Title       string
-	Author      string
-	Labels      []string
-	Assignees   []string
-	Body        string
-	Comments    []github.Comment
-	HasLocalDir bool // when true, the LLM can read the repo for deeper context
+	Repo          string
+	Number        int
+	Title         string
+	Author        string
+	Labels        []string
+	Assignees     []string
+	Body          string
+	Comments      []github.Comment
+	HasLocalDir   bool   // when true, the LLM can read the repo for deeper context
+	TriageContext string // structured re-triage context; empty on first triage
 }
 
 // BuildPromptWithProfile formats the LLM prompt for a review_only triage run,
@@ -77,6 +78,8 @@ func applyPlaceholders(tmpl string, ctx PromptContext) string {
 		body = body[:maxBodyBytes] + "\n... (truncated)"
 	}
 
+	hasTriageCtx := strings.Contains(tmpl, "{triage_context}")
+
 	r := strings.NewReplacer(
 		"{repo}", ctx.Repo,
 		"{number}", fmt.Sprintf("%d", ctx.Number),
@@ -86,8 +89,19 @@ func applyPlaceholders(tmpl string, ctx PromptContext) string {
 		"{body}", body,
 		"{comments}", comments,
 		"{assignees}", assignees,
+		"{triage_context}", ctx.TriageContext,
 	)
 	result := r.Replace(tmpl)
+
+	// Collapse triple+ newlines caused by an empty placeholder.
+	for strings.Contains(result, "\n\n\n") {
+		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
+	}
+
+	// Prepend triage context if template had no {triage_context} placeholder.
+	if !hasTriageCtx && ctx.TriageContext != "" {
+		result = ctx.TriageContext + "\n" + result
+	}
 
 	// Warn about unreplaced placeholders — helps debug typos in custom templates.
 	if idx := strings.Index(result, "{"); idx != -1 {
@@ -130,6 +144,11 @@ func buildDefaultPrompt(ctx PromptContext, customInstructions string) string {
 
 	if comments := formatComments(ctx.Comments); comments != "" {
 		sb.WriteString(comments)
+		sb.WriteString("\n")
+	}
+
+	if ctx.TriageContext != "" {
+		sb.WriteString(ctx.TriageContext)
 		sb.WriteString("\n")
 	}
 
@@ -216,6 +235,11 @@ func buildDefaultImplementPrompt(ctx PromptContext, customInstructions string) s
 
 	if comments := formatComments(ctx.Comments); comments != "" {
 		sb.WriteString(comments)
+		sb.WriteString("\n")
+	}
+
+	if ctx.TriageContext != "" {
+		sb.WriteString(ctx.TriageContext)
 		sb.WriteString("\n")
 	}
 
