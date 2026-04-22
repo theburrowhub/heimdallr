@@ -71,7 +71,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
+            ${{ github.event_name != 'workflow_dispatch' && 'type=raw,value=latest' || '' }}
             type=semver,pattern={{version}},value=${{ env.TAG }}
             type=semver,pattern={{major}}.{{minor}},value=${{ env.TAG }}
             type=semver,pattern={{major}},value=${{ env.TAG }}
@@ -529,9 +529,9 @@ jobs:
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: release --clean
+          args: release --clean ${{ github.event_name == 'workflow_dispatch' && '--skip=homebrew' || '' }}
           workdir: cli
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
