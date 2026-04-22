@@ -46,7 +46,7 @@ func TestResolveImplementPrompt_RepoOverrideWins(t *testing.T) {
 	seedAgent(t, s, store.Agent{
 		ID:                    "default-agent",
 		Name:                  "default",
-		IsDefault:             true,
+		IsDefaultDev:          true,
 		ImplementInstructions: "default instructions",
 	})
 
@@ -69,7 +69,7 @@ func TestResolveImplementPrompt_AgentFallbackWhenNoRepoMatch(t *testing.T) {
 	seedAgent(t, s, store.Agent{
 		ID:                    "default-agent",
 		Name:                  "default",
-		IsDefault:             true,
+		IsDefaultDev:          true,
 		ImplementInstructions: "default instructions",
 	})
 
@@ -88,7 +88,7 @@ func TestResolveImplementPrompt_DefaultFallbackWhenAgentMissing(t *testing.T) {
 	seedAgent(t, s, store.Agent{
 		ID:                    "default-agent",
 		Name:                  "default",
-		IsDefault:             true,
+		IsDefaultDev:          true,
 		ImplementPrompt:       "DEFAULT TEMPLATE",
 	})
 

@@ -257,3 +257,99 @@ func TestStore_AgentImplementFieldsRoundTrip(t *testing.T) {
 		t.Errorf("ImplementInstructions = %q, want %q", got[0].ImplementInstructions, in.ImplementInstructions)
 	}
 }
+
+// Activating an agent for one category MUST NOT touch the active flags of
+// the other two — this is the whole point of splitting the single is_default
+// into three per-category flags.
+func TestStore_UpsertAgent_ActivationIsPerCategory(t *testing.T) {
+	s := newTestStore(t)
+
+	// Seed a PR-review-active agent and an issue-triage-active agent.
+	if err := s.UpsertAgent(&store.Agent{ID: "a", Name: "A", IsDefaultPR: true}); err != nil {
+		t.Fatalf("upsert a: %v", err)
+	}
+	if err := s.UpsertAgent(&store.Agent{ID: "b", Name: "B", IsDefaultIssue: true}); err != nil {
+		t.Fatalf("upsert b: %v", err)
+	}
+
+	// Activate a new dev-only agent. Neither A (PR) nor B (issue) should flip.
+	if err := s.UpsertAgent(&store.Agent{ID: "c", Name: "C", IsDefaultDev: true}); err != nil {
+		t.Fatalf("upsert c: %v", err)
+	}
+
+	byID := map[string]*store.Agent{}
+	agents, err := s.ListAgents()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, a := range agents {
+		byID[a.ID] = a
+	}
+	if !byID["a"].IsDefaultPR || byID["a"].IsDefaultIssue || byID["a"].IsDefaultDev {
+		t.Errorf("agent a: got (pr=%v issue=%v dev=%v), want (true false false)",
+			byID["a"].IsDefaultPR, byID["a"].IsDefaultIssue, byID["a"].IsDefaultDev)
+	}
+	if byID["b"].IsDefaultPR || !byID["b"].IsDefaultIssue || byID["b"].IsDefaultDev {
+		t.Errorf("agent b: got (pr=%v issue=%v dev=%v), want (false true false)",
+			byID["b"].IsDefaultPR, byID["b"].IsDefaultIssue, byID["b"].IsDefaultDev)
+	}
+	if byID["c"].IsDefaultPR || byID["c"].IsDefaultIssue || !byID["c"].IsDefaultDev {
+		t.Errorf("agent c: got (pr=%v issue=%v dev=%v), want (false false true)",
+			byID["c"].IsDefaultPR, byID["c"].IsDefaultIssue, byID["c"].IsDefaultDev)
+	}
+}
+
+// Activating a second agent for the SAME category must demote the first.
+func TestStore_UpsertAgent_ActivationReplacesWithinCategory(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertAgent(&store.Agent{ID: "old", Name: "old", IsDefaultPR: true}); err != nil {
+		t.Fatalf("upsert old: %v", err)
+	}
+	if err := s.UpsertAgent(&store.Agent{ID: "new", Name: "new", IsDefaultPR: true}); err != nil {
+		t.Fatalf("upsert new: %v", err)
+	}
+
+	agents, err := s.ListAgents()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	active := 0
+	for _, a := range agents {
+		if a.IsDefaultPR {
+			active++
+			if a.ID != "new" {
+				t.Errorf("expected `new` to be active, got %q", a.ID)
+			}
+		}
+	}
+	if active != 1 {
+		t.Errorf("want exactly 1 IsDefaultPR agent, got %d", active)
+	}
+}
+
+// DefaultAgentFor returns the agent active for the requested category and
+// ignores agents active in a different category.
+func TestStore_DefaultAgentFor_ReturnsPerCategoryAgent(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.UpsertAgent(&store.Agent{ID: "pr-only", Name: "pr", IsDefaultPR: true}); err != nil {
+		t.Fatalf("upsert pr-only: %v", err)
+	}
+	if err := s.UpsertAgent(&store.Agent{ID: "issue-only", Name: "issue", IsDefaultIssue: true}); err != nil {
+		t.Fatalf("upsert issue-only: %v", err)
+	}
+
+	got, err := s.DefaultAgentFor(store.AgentCategoryPR)
+	if err != nil || got == nil || got.ID != "pr-only" {
+		t.Errorf("DefaultAgentFor(pr) = %+v, err=%v; want pr-only", got, err)
+	}
+	got, err = s.DefaultAgentFor(store.AgentCategoryIssue)
+	if err != nil || got == nil || got.ID != "issue-only" {
+		t.Errorf("DefaultAgentFor(issue) = %+v, err=%v; want issue-only", got, err)
+	}
+	// No agent is dev-default — should return an error (ErrNoRows), not one
+	// of the other two.
+	if got, err := s.DefaultAgentFor(store.AgentCategoryDev); err == nil {
+		t.Errorf("DefaultAgentFor(dev) = %+v, want error for no-match", got)
+	}
+}

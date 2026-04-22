@@ -98,10 +98,11 @@ func (p *Pipeline) applyPrompt(repoPromptID, agentPromptID string, tmpl *string,
 			}
 		}
 	}
-	// 3. Global default
+	// 3. Global default for the PR-review category (the three categories
+	// now have independent active flags, see store.AgentCategory).
 	if a == nil {
 		for _, ag := range agents {
-			if ag.IsDefault {
+			if ag.IsDefaultPR {
 				a = ag
 				break
 			}

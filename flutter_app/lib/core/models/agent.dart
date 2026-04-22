@@ -1,3 +1,8 @@
+/// Which of the three pipelines a prompt is active for. Matches the Go
+/// daemon's `store.AgentCategory` — the string values are the JSON the
+/// HTTP API speaks, so no per-layer translation is needed.
+enum PromptCategory { prReview, issueTriage, development }
+
 class ReviewPrompt {
   final String id;
   final String name;
@@ -5,7 +10,13 @@ class ReviewPrompt {
   final String instructions; // plain-text focus instructions (simple mode)
   final String prompt;       // full template with {placeholders} (advanced mode, overrides instructions)
   final String cliFlags;     // extra CLI flags (e.g. --model claude-opus-4-6)
-  final bool isDefault;
+  // Per-category active flags. The daemon's three pipelines each pick
+  // whichever agent has its flag set, so one agent can drive all three
+  // pipelines or only a subset — and the three tabs in the UI activate
+  // them independently.
+  final bool isDefaultPr;
+  final bool isDefaultIssue;
+  final bool isDefaultDev;
   // Issue triage prompts
   final String issuePrompt;
   final String issueInstructions;
@@ -20,16 +31,32 @@ class ReviewPrompt {
     this.instructions = '',
     this.prompt = '',
     this.cliFlags = '',
-    this.isDefault = false,
+    this.isDefaultPr = false,
+    this.isDefaultIssue = false,
+    this.isDefaultDev = false,
     this.issuePrompt = '',
     this.issueInstructions = '',
     this.implementPrompt = '',
     this.implementInstructions = '',
   });
 
+  /// True when the prompt is active for any category — used for UX choices
+  /// like "does this agent have an ACTIVE badge somewhere?" without the
+  /// caller having to know which specific category.
+  bool get isAnyDefault => isDefaultPr || isDefaultIssue || isDefaultDev;
+
+  bool isDefaultFor(PromptCategory c) {
+    switch (c) {
+      case PromptCategory.prReview: return isDefaultPr;
+      case PromptCategory.issueTriage: return isDefaultIssue;
+      case PromptCategory.development: return isDefaultDev;
+    }
+  }
+
   ReviewPrompt copyWith({
     String? id, String? name, String? focus, String? instructions,
-    String? prompt, String? cliFlags, bool? isDefault,
+    String? prompt, String? cliFlags,
+    bool? isDefaultPr, bool? isDefaultIssue, bool? isDefaultDev,
     String? issuePrompt, String? issueInstructions,
     String? implementPrompt, String? implementInstructions,
   }) => ReviewPrompt(
@@ -39,12 +66,26 @@ class ReviewPrompt {
     instructions: instructions ?? this.instructions,
     prompt: prompt ?? this.prompt,
     cliFlags: cliFlags ?? this.cliFlags,
-    isDefault: isDefault ?? this.isDefault,
+    isDefaultPr: isDefaultPr ?? this.isDefaultPr,
+    isDefaultIssue: isDefaultIssue ?? this.isDefaultIssue,
+    isDefaultDev: isDefaultDev ?? this.isDefaultDev,
     issuePrompt: issuePrompt ?? this.issuePrompt,
     issueInstructions: issueInstructions ?? this.issueInstructions,
     implementPrompt: implementPrompt ?? this.implementPrompt,
     implementInstructions: implementInstructions ?? this.implementInstructions,
   );
+
+  /// Returns a copy with the active flag flipped for the given category
+  /// (and the other two preserved). Used by the Activate action on tiles
+  /// and preset cards — writing one category no longer clobbers the
+  /// other two.
+  ReviewPrompt withActive(PromptCategory c, bool active) {
+    switch (c) {
+      case PromptCategory.prReview: return copyWith(isDefaultPr: active);
+      case PromptCategory.issueTriage: return copyWith(isDefaultIssue: active);
+      case PromptCategory.development: return copyWith(isDefaultDev: active);
+    }
+  }
 
   factory ReviewPrompt.fromJson(Map<String, dynamic> json) => ReviewPrompt(
     id: json['id'] as String,
@@ -53,7 +94,20 @@ class ReviewPrompt {
     instructions: (json['instructions'] as String?) ?? '',
     prompt: (json['prompt'] as String?) ?? '',
     cliFlags: (json['cli_flags'] as String?) ?? '',
-    isDefault: (json['is_default'] as bool?) ?? false,
+    // Accept both the new per-category keys and the legacy `is_default`
+    // flag. When only the legacy key is present (e.g. first load after
+    // upgrade, before any save has happened), seed all three — preserves
+    // the "one agent drove all three pipelines" behaviour the user had
+    // pre-migration.
+    isDefaultPr: _parseBool(json['is_default_pr']) ??
+        _parseBool(json['is_default']) ??
+        false,
+    isDefaultIssue: _parseBool(json['is_default_issue']) ??
+        _parseBool(json['is_default']) ??
+        false,
+    isDefaultDev: _parseBool(json['is_default_dev']) ??
+        _parseBool(json['is_default']) ??
+        false,
     issuePrompt: (json['issue_prompt'] as String?) ?? '',
     issueInstructions: (json['issue_instructions'] as String?) ?? '',
     implementPrompt: (json['implement_prompt'] as String?) ?? '',
@@ -68,7 +122,9 @@ class ReviewPrompt {
     'instructions': instructions,
     'prompt': prompt,
     'cli_flags': cliFlags,
-    'is_default': isDefault,
+    'is_default_pr': isDefaultPr,
+    'is_default_issue': isDefaultIssue,
+    'is_default_dev': isDefaultDev,
     'issue_prompt': issuePrompt,
     'issue_instructions': issueInstructions,
     'implement_prompt': implementPrompt,
@@ -284,3 +340,13 @@ class PresetDef {
 
 // Backwards compat alias
 typedef Agent = ReviewPrompt;
+
+bool? _parseBool(dynamic v) {
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  if (v is String) {
+    if (v == 'true' || v == '1') return true;
+    if (v == 'false' || v == '0' || v.isEmpty) return false;
+  }
+  return null;
+}
