@@ -1318,13 +1318,48 @@ func (a *tier2Adapter) PRAlreadyReviewed(githubID int64, updatedAt time.Time) bo
 
 // CheckItem implements scheduler.Tier3ItemChecker.
 func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem) (bool, error) {
-	// Use the GitHub Issues API — works for both issues and PRs.
+	if item.Type == "pr" {
+		// Single API call: /pulls/{n} gives state + merged_at + updated_at.
+		prState, updatedAt, err := a.ghClient.GetPRStateAndUpdatedAt(item.Repo, item.Number)
+		if err != nil {
+			return false, err
+		}
+		if prState != "open" {
+			// Only publish SSE on the first detection — check stored state first.
+			existing, _ := a.store.GetPRByGithubID(item.GithubID)
+			wasOpen := existing != nil && existing.State == "open"
+			a.store.UpdatePRStateByGithubID(item.GithubID, "closed")
+			if wasOpen {
+				a.broker.Publish(sse.Event{
+					Type: sse.EventPRStateChanged,
+					Data: fmt.Sprintf(`{"pr_id":%d,"state":"closed"}`, item.GithubID),
+				})
+				slog.Info("tier3: PR closed/merged", "repo", item.Repo, "number", item.Number)
+			}
+			return false, nil // closed — don't trigger HandleChange
+		}
+		return updatedAt.After(item.LastSeen), nil
+	}
+
+	// Issues: GetIssue returns state + updated_at in one call.
 	issue, err := a.ghClient.GetIssue(item.Repo, item.Number)
 	if err != nil {
 		return false, err
 	}
-	changed := issue.UpdatedAt.After(item.LastSeen)
-	return changed, nil
+	if issue.State != "open" {
+		existing, _ := a.store.GetIssueByGithubID(item.GithubID)
+		wasOpen := existing != nil && existing.State == "open"
+		a.store.UpdateIssueStateByGithubID(item.GithubID, "closed")
+		if wasOpen {
+			a.broker.Publish(sse.Event{
+				Type: sse.EventIssueStateChanged,
+				Data: fmt.Sprintf(`{"issue_id":%d,"state":"closed"}`, item.GithubID),
+			})
+			slog.Info("tier3: issue closed", "repo", item.Repo, "number", item.Number)
+		}
+		return false, nil // closed — don't trigger HandleChange
+	}
+	return issue.UpdatedAt.After(item.LastSeen), nil
 }
 
 // HandleChange implements scheduler.Tier3ItemChecker.

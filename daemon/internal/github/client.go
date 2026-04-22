@@ -398,6 +398,35 @@ func (c *Client) GetPRHeadSHA(repo string, number int) (string, error) {
 	return pr.Head.SHA, nil
 }
 
+// GetPRStateAndUpdatedAt returns the effective state ("open" or "closed") and
+// the updated_at timestamp of a PR. Uses the Pulls API to detect merged PRs
+// (merged_at != null → "closed"). Combines state + freshness in one API call
+// so callers don't need a separate GetIssue call for PRs.
+func (c *Client) GetPRStateAndUpdatedAt(repo string, number int) (state string, updatedAt time.Time, err error) {
+	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
+	resp, err := c.do("GET", path, "application/vnd.github+json")
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("github: get PR %s#%d: %w", repo, number, err)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", time.Time{}, fmt.Errorf("github: get PR %s#%d: status %d", repo, number, resp.StatusCode)
+	}
+	var pr struct {
+		State     string    `json:"state"`
+		MergedAt  *string   `json:"merged_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+	if err := json.Unmarshal(body, &pr); err != nil {
+		return "", time.Time{}, fmt.Errorf("github: decode PR %s#%d: %w", repo, number, err)
+	}
+	if pr.MergedAt != nil {
+		return "closed", pr.UpdatedAt, nil
+	}
+	return pr.State, pr.UpdatedAt, nil
+}
+
 // FetchDiff returns the unified diff for a PR.
 func (c *Client) FetchDiff(repo string, number int) (string, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)

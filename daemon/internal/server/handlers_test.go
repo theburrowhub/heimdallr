@@ -1302,3 +1302,123 @@ func TestHandleDeleteRepoField_Idempotent(t *testing.T) {
 		t.Fatalf("expected 200 (idempotent), got %d (body: %s)", w.Code, w.Body.String())
 	}
 }
+
+func TestHandleListPRs_StateFilter(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	broker := sse.NewBroker()
+	broker.Start()
+	t.Cleanup(broker.Stop)
+	srv := server.New(s, broker, nil, "test-token")
+
+	now := time.Now()
+	s.UpsertPR(&store.PR{GithubID: 10, Repo: "org/r", Number: 10, Title: "open pr", Author: "a", URL: "u", State: "open", UpdatedAt: now, FetchedAt: now})
+	s.UpsertPR(&store.PR{GithubID: 11, Repo: "org/r", Number: 11, Title: "closed pr", Author: "a", URL: "u", State: "closed", UpdatedAt: now, FetchedAt: now})
+
+	doReq := func(path string) []map[string]any {
+		t.Helper()
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("X-Heimdallm-Token", "test-token")
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s: status %d, body: %s", path, w.Code, w.Body.String())
+		}
+		var prs []map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&prs); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return prs
+	}
+
+	// No filter → both PRs returned
+	if got := doReq("/prs"); len(got) != 2 {
+		t.Errorf("GET /prs: expected 2, got %d", len(got))
+	}
+
+	// state=open → only the open PR
+	if got := doReq("/prs?state=open"); len(got) != 1 {
+		t.Errorf("GET /prs?state=open: expected 1, got %d", len(got))
+	} else if got[0]["state"] != "open" {
+		t.Errorf("GET /prs?state=open: got state %v", got[0]["state"])
+	}
+
+	// state=closed → only the closed PR
+	if got := doReq("/prs?state=closed"); len(got) != 1 {
+		t.Errorf("GET /prs?state=closed: expected 1, got %d", len(got))
+	} else if got[0]["state"] != "closed" {
+		t.Errorf("GET /prs?state=closed: got state %v", got[0]["state"])
+	}
+
+	// state=open,closed → both PRs
+	if got := doReq("/prs?state=open,closed"); len(got) != 2 {
+		t.Errorf("GET /prs?state=open,closed: expected 2, got %d", len(got))
+	}
+}
+
+func TestHandleListIssues_StateFilter(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	broker := sse.NewBroker()
+	broker.Start()
+	t.Cleanup(broker.Stop)
+	srv := server.New(s, broker, nil, "test-token")
+
+	now := time.Now()
+	s.UpsertIssue(&store.Issue{
+		GithubID: 20, Repo: "org/r", Number: 20, Title: "open issue",
+		Body: "b", Author: "a", Assignees: `[]`, Labels: `[]`,
+		State: "open", CreatedAt: now, FetchedAt: now,
+	})
+	s.UpsertIssue(&store.Issue{
+		GithubID: 21, Repo: "org/r", Number: 21, Title: "closed issue",
+		Body: "b", Author: "a", Assignees: `[]`, Labels: `[]`,
+		State: "closed", CreatedAt: now, FetchedAt: now,
+	})
+
+	doReq := func(path string) []map[string]any {
+		t.Helper()
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("X-Heimdallm-Token", "test-token")
+		w := httptest.NewRecorder()
+		srv.Router().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s: status %d, body: %s", path, w.Code, w.Body.String())
+		}
+		var issues []map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&issues); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return issues
+	}
+
+	// No filter → both issues returned
+	if got := doReq("/issues"); len(got) != 2 {
+		t.Errorf("GET /issues: expected 2, got %d", len(got))
+	}
+
+	// state=open → only the open issue
+	if got := doReq("/issues?state=open"); len(got) != 1 {
+		t.Errorf("GET /issues?state=open: expected 1, got %d", len(got))
+	} else if got[0]["state"] != "open" {
+		t.Errorf("GET /issues?state=open: got state %v", got[0]["state"])
+	}
+
+	// state=closed → only the closed issue
+	if got := doReq("/issues?state=closed"); len(got) != 1 {
+		t.Errorf("GET /issues?state=closed: expected 1, got %d", len(got))
+	} else if got[0]["state"] != "closed" {
+		t.Errorf("GET /issues?state=closed: got state %v", got[0]["state"])
+	}
+
+	// state=open,closed → both issues
+	if got := doReq("/issues?state=open,closed"); len(got) != 2 {
+		t.Errorf("GET /issues?state=open,closed: expected 2, got %d", len(got))
+	}
+}
