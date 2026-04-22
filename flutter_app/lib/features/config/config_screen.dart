@@ -119,7 +119,20 @@ class _ConfigScreenState extends ConsumerState<ConfigScreen> {
       ),
       body: configAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (_, __) => _buildForm(context, const AppConfig(), daemonRunning),
+        error: (e, __) => Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Could not load config: $e',
+                  style: TextStyle(color: Colors.red.shade400, fontSize: 13)),
+              const SizedBox(height: 12),
+              ElevatedButton(
+                onPressed: () => ref.invalidate(configNotifierProvider),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
         data: (config) {
           _initFromConfig(config);
           return _buildForm(context, config, daemonRunning);
