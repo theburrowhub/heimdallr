@@ -75,6 +75,12 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
           _typeChip('it', 'IT', Colors.orange, filters),
           _typeChip('dev', 'DEV', Colors.green, filters),
 
+          const SizedBox(width: 8),
+          // ── State chips ─────────────────────────────────────────────
+          _stateChip('Open', 'open', Colors.green),
+          const SizedBox(width: 4),
+          _stateChip('Closed', 'closed', Colors.grey),
+
           // ── Org multi-select ────────────────────────────────────────
           if (_allOrgs.isNotEmpty)
             _multiSelectPopup(
@@ -156,6 +162,31 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
                 side: BorderSide(color: Colors.red.shade400.withValues(alpha: 0.4)),
               ),
             ),
+
+          // ── View toggle ─────────────────────────────────────────────
+          const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.view_list, size: 18),
+            color: filters.viewMode == 'list'
+                ? Theme.of(context).colorScheme.primary
+                : Colors.grey,
+            visualDensity: VisualDensity.compact,
+            tooltip: 'List view',
+            onPressed: () => ref
+                .read(activityFiltersProvider.notifier)
+                .update(filters.copyWith(viewMode: 'list')),
+          ),
+          IconButton(
+            icon: const Icon(Icons.grid_view, size: 18),
+            color: filters.viewMode == 'grid'
+                ? Theme.of(context).colorScheme.primary
+                : Colors.grey,
+            visualDensity: VisualDensity.compact,
+            tooltip: 'Grid view',
+            onPressed: () => ref
+                .read(activityFiltersProvider.notifier)
+                .update(filters.copyWith(viewMode: 'grid')),
+          ),
         ],
       ),
     );
@@ -214,6 +245,28 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
         selected ? types.remove(type) : types.add(type);
         ref.read(activityFiltersProvider.notifier).update(
             filters.copyWith(types: types));
+      },
+    );
+  }
+
+  // ── State chip ──────────────────────────────────────────────────────────────
+
+  Widget _stateChip(String label, String value, Color color) {
+    final filters = ref.watch(activityFiltersProvider);
+    final selected = filters.states.contains(value);
+    return FilterChip(
+      label: Text(label,
+          style: TextStyle(fontSize: 11, color: selected ? Colors.white : null)),
+      selected: selected,
+      selectedColor: color,
+      checkmarkColor: Colors.white,
+      visualDensity: VisualDensity.compact,
+      onSelected: (v) {
+        final current = Set<String>.from(filters.states);
+        v ? current.add(value) : current.remove(value);
+        ref.read(activityFiltersProvider.notifier).update(
+              filters.copyWith(states: current),
+            );
       },
     );
   }
