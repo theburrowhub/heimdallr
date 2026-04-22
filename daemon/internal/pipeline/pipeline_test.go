@@ -416,3 +416,46 @@ func TestPipeline_Run_GateSkipsReview(t *testing.T) {
 		t.Errorf("expected nil review on gate skip, got %+v", rev)
 	}
 }
+
+// TestPipeline_Run_Tier3PathSkipsOnSameHeadSHA simulates the Tier 3 re-entry:
+// after Tier 2 reviewed commit X, Tier 3 calls pipeline.Run again on the same
+// PR at the same SHA (because GitHub's updated_at bumped for an unrelated
+// reason — merge metadata, a comment, etc.). The HEAD-SHA guard must kick in
+// and short-circuit the CLI/publish steps.
+func TestPipeline_Run_Tier3PathSkipsOnSameHeadSHA(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	exec := &fakeExecCounter{}
+	gh := &fakeGHCounter{diff: "+line"}
+	p := pipeline.New(s, gh, exec, &fakeNotify{})
+
+	prT2 := &github.PullRequest{
+		ID: 900, Number: 900, Title: "t", Repo: "org/repo",
+		User: github.User{Login: "alice"}, State: "open",
+		UpdatedAt: time.Now(), HTMLURL: "https://github.com/org/repo/pull/900",
+		Head: github.Branch{SHA: "sha-one"},
+	}
+	if _, err := p.Run(prT2, pipeline.RunOptions{Primary: "claude"}); err != nil {
+		t.Fatalf("tier2 run: %v", err)
+	}
+	if exec.calls != 1 {
+		t.Fatalf("expected first run to invoke CLI, got calls=%d", exec.calls)
+	}
+
+	// Tier 3 re-entry: same PR, same SHA, bumped updated_at.
+	prT3 := *prT2
+	prT3.UpdatedAt = prT2.UpdatedAt.Add(2 * time.Minute)
+	if _, err := p.Run(&prT3, pipeline.RunOptions{Primary: "claude"}); err != nil {
+		t.Fatalf("tier3 run: %v", err)
+	}
+	if exec.calls != 1 {
+		t.Errorf("Tier 3 re-run invoked CLI on same SHA: calls=%d", exec.calls)
+	}
+	if gh.submits != 1 {
+		t.Errorf("Tier 3 re-run submitted review on same SHA: submits=%d", gh.submits)
+	}
+}
