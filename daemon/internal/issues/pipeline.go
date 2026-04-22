@@ -171,13 +171,19 @@ type Pipeline struct {
 	git      GitOps
 	broker   Publisher
 	notify   Notifier
+	botLogin string
 }
+
+// SetBotLogin sets the GitHub login of the bot account. Used to filter
+// the bot's own comments from the "new discussion" section in re-triages.
+func (p *Pipeline) SetBotLogin(login string) { p.botLogin = login }
 
 // issueStore is the subset of *store.Store the pipeline needs. Kept narrow
 // so tests can substitute a fake without bringing in SQLite.
 type issueStore interface {
 	UpsertIssue(i *store.Issue) (int64, error)
 	InsertIssueReview(r *store.IssueReview) (int64, error)
+	LatestIssueReview(issueID int64) (*store.IssueReview, error)
 	UpsertPR(pr *store.PR) (int64, error)
 }
 
@@ -282,20 +288,36 @@ func (p *Pipeline) runReviewOnly(ctx context.Context, issue *github.Issue, issue
 		comments = nil
 	}
 
+	// Build re-triage context if a previous review exists for this issue.
+	var triageCtx string
+	prevReview, _ := p.store.LatestIssueReview(issueID)
+	if prevReview != nil {
+		triageCtx = buildTriageContext(
+			prevReview.Triage,
+			prevReview.Suggestions,
+			prevReview.Summary,
+			extractSeverity(prevReview.Triage),
+			prevReview.CreatedAt,
+			comments,
+			p.botLogin,
+		)
+	}
+
 	// Build prompt + run the CLI. HasLocalDir mirrors workDir above so the
 	// LLM hears the same story as the mode-selection logic.
 	// Agent profile customization: IssuePromptOverride replaces the entire
 	// template; IssueInstructions injects into the default template.
 	promptCtx := PromptContext{
-		Repo:        issue.Repo,
-		Number:      issue.Number,
-		Title:       issue.Title,
-		Author:      issue.User.Login,
-		Labels:      issue.LabelNames(),
-		Assignees:   issue.AssigneeLogins(),
-		Body:        issue.Body,
-		Comments:    comments,
-		HasLocalDir: workDir != "",
+		Repo:          issue.Repo,
+		Number:        issue.Number,
+		Title:         issue.Title,
+		Author:        issue.User.Login,
+		Labels:        issue.LabelNames(),
+		Assignees:     issue.AssigneeLogins(),
+		Body:          issue.Body,
+		Comments:      comments,
+		HasLocalDir:   workDir != "",
+		TriageContext: triageCtx,
 	}
 	prompt := BuildPromptWithProfile(promptCtx, opts.IssuePromptOverride, opts.IssueInstructions)
 
@@ -418,6 +440,21 @@ func (p *Pipeline) runAutoImplement(ctx context.Context, issue *github.Issue, is
 		return nil, fmt.Errorf("issues pipeline: detect CLI: %w", err)
 	}
 
+	// Build re-triage context if a previous review exists for this issue.
+	var triageCtx string
+	prevReview, _ := p.store.LatestIssueReview(issueID)
+	if prevReview != nil {
+		triageCtx = buildTriageContext(
+			prevReview.Triage,
+			prevReview.Suggestions,
+			prevReview.Summary,
+			extractSeverity(prevReview.Triage),
+			prevReview.CreatedAt,
+			comments,
+			p.botLogin,
+		)
+	}
+
 	// Agent profile customization: ImplementPromptOverride replaces the entire
 	// template; ImplementInstructions injects into the default template.
 	prompt := BuildImplementPromptWithProfile(
@@ -426,6 +463,7 @@ func (p *Pipeline) runAutoImplement(ctx context.Context, issue *github.Issue, is
 			Title: issue.Title, Author: issue.User.Login,
 			Labels: issue.LabelNames(), Assignees: issue.AssigneeLogins(),
 			Body: issue.Body, Comments: comments, HasLocalDir: true,
+			TriageContext: triageCtx,
 		},
 		opts.ImplementPromptOverride,
 		opts.ImplementInstructions,
@@ -703,6 +741,19 @@ func applyPRMetadata(gh PRMetadataApplier, repo string, prNumber int, opts RunOp
 				"repo", repo, "pr", prNumber, "err", err)
 		}
 	}
+}
+
+// extractSeverity pulls the severity string from a triage JSON blob.
+// Returns empty string on any failure so callers can fall back gracefully.
+func extractSeverity(triageJSON string) string {
+	if triageJSON == "" || triageJSON == "{}" {
+		return ""
+	}
+	var t Triage
+	if err := json.Unmarshal([]byte(triageJSON), &t); err != nil {
+		return ""
+	}
+	return t.Severity
 }
 
 func issueToStore(i *github.Issue) (*store.Issue, error) {

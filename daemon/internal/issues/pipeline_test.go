@@ -30,6 +30,9 @@ type fakeStore struct {
 	upsertErr    error
 	insertErr    error
 	upsertPRErr  error
+
+	latestReview    *store.IssueReview
+	latestReviewErr error
 }
 
 func (f *fakeStore) UpsertIssue(i *store.Issue) (int64, error) {
@@ -52,6 +55,13 @@ func (f *fakeStore) InsertIssueReview(r *store.IssueReview) (int64, error) {
 	copy.ID = f.nextReviewID
 	f.reviews = append(f.reviews, &copy)
 	return f.nextReviewID, nil
+}
+
+func (f *fakeStore) LatestIssueReview(issueID int64) (*store.IssueReview, error) {
+	if f.latestReviewErr != nil {
+		return nil, f.latestReviewErr
+	}
+	return f.latestReview, nil
 }
 
 func (f *fakeStore) UpsertPR(pr *store.PR) (int64, error) {
@@ -369,6 +379,87 @@ func TestPipeline_RunHappyPath(t *testing.T) {
 
 	if len(notify.calls) != 2 {
 		t.Errorf("expected 2 notifications (start + complete), got %d", len(notify.calls))
+	}
+}
+
+// ── re-triage context ───────────────────────────────────────────────────────
+
+func TestPipeline_ReTriageInjectsContext(t *testing.T) {
+	prevTriageAt := time.Now().Add(-2 * time.Hour)
+	s := &fakeStore{
+		latestReview: &store.IssueReview{
+			ID:          1,
+			IssueID:     1,
+			Summary:     "User cannot log in after upgrade.",
+			Triage:      `{"severity":"high","category":"bug","suggested_assignee":"alice"}`,
+			Suggestions: `["reproduce locally","check auth migration"]`,
+			ActionTaken: "review_only",
+			CreatedAt:   prevTriageAt,
+		},
+	}
+	gh := &fakeGH{
+		commentsByKey: map[string][]github.Comment{
+			"org/repo#7": {
+				{Author: "heimdallm[bot]", Body: "Previous triage comment", CreatedAt: prevTriageAt.Add(1 * time.Second)},
+				{Author: "reporter", Body: "Actually we want to support subdirectories", CreatedAt: prevTriageAt.Add(1 * time.Hour)},
+			},
+		},
+	}
+	exec := &fakeExec{detectCLI: "claude", rawOutput: []byte(validResult)}
+	p := issues.New(s, gh, exec, nil, &fakeBroker{}, nil)
+	p.SetBotLogin("heimdallm[bot]")
+
+	_, err := p.Run(context.Background(), newIssue(config.IssueModeReviewOnly), issues.RunOptions{Primary: "claude"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if !strings.Contains(exec.lastPrompt, "RE-TRIAGE") {
+		t.Error("prompt should contain RE-TRIAGE instruction")
+	}
+	if !strings.Contains(exec.lastPrompt, "Category: bug") {
+		t.Error("prompt should contain previous triage category")
+	}
+	if !strings.Contains(exec.lastPrompt, "reproduce locally") {
+		t.Error("prompt should contain previous suggestion")
+	}
+	if !strings.Contains(exec.lastPrompt, "support subdirectories") {
+		t.Error("prompt should contain new discussion from author")
+	}
+	if strings.Contains(exec.lastPrompt, "Previous triage comment") {
+		t.Error("bot's own comment should be filtered from new discussion")
+	}
+}
+
+func TestPipeline_FirstTriageHasNoReTriageContext(t *testing.T) {
+	s := &fakeStore{} // latestReview is nil → first triage
+	gh := &fakeGH{}
+	exec := &fakeExec{detectCLI: "claude", rawOutput: []byte(validResult)}
+	p := issues.New(s, gh, exec, nil, &fakeBroker{}, nil)
+
+	_, err := p.Run(context.Background(), newIssue(config.IssueModeReviewOnly), issues.RunOptions{Primary: "claude"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if strings.Contains(exec.lastPrompt, "RE-TRIAGE") {
+		t.Error("first triage should NOT contain RE-TRIAGE instruction")
+	}
+}
+
+func TestPipeline_ReTriageLatestReviewErrorIsNonFatal(t *testing.T) {
+	s := &fakeStore{
+		latestReviewErr: errors.New("database locked"),
+	}
+	gh := &fakeGH{}
+	exec := &fakeExec{detectCLI: "claude", rawOutput: []byte(validResult)}
+	p := issues.New(s, gh, exec, nil, &fakeBroker{}, nil)
+
+	_, err := p.Run(context.Background(), newIssue(config.IssueModeReviewOnly), issues.RunOptions{Primary: "claude"})
+	if err != nil {
+		t.Fatalf("LatestIssueReview error should not abort the pipeline: %v", err)
+	}
+	if strings.Contains(exec.lastPrompt, "RE-TRIAGE") {
+		t.Error("should not inject re-triage context when query failed")
 	}
 }
 

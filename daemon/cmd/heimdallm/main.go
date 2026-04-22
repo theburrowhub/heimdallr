@@ -163,19 +163,20 @@ func main() {
 
 	p := pipeline.New(s, ghClient, exec, &notifyWithSSE{notifier: notifier})
 
-	// Resolve bot login for re-review context filtering.
-	if login, err := ghClient.AuthenticatedUser(); err == nil {
-		p.SetBotLogin(login)
-		slog.Info("bot login resolved", "login", login)
-	} else {
-		slog.Warn("could not resolve bot login for re-review context", "err", err)
-	}
-
 	// GitExec drives the auto_implement flow (#27): branch, commit, push, PR.
 	// Wired unconditionally — the pipeline guards against running git ops on
 	// an issue that is classified as review_only, so this dep is harmless
 	// when auto_implement is not in use.
 	issuePipe := issuepipeline.New(s, ghClient, exec, issuepipeline.NewGitExec(), broker, &notifyWithSSE{notifier: notifier})
+
+	// Resolve bot login for re-review / re-triage context filtering.
+	if login, err := ghClient.AuthenticatedUser(); err == nil {
+		p.SetBotLogin(login)
+		issuePipe.SetBotLogin(login)
+		slog.Info("bot login resolved", "login", login)
+	} else {
+		slog.Warn("could not resolve bot login for re-review context", "err", err)
+	}
 	issueFetcher := issuepipeline.NewFetcher(ghClient, s, issuePipe)
 	srv := server.New(s, broker, p, apiToken)
 	srv.SetConfigPath(cfgPath)
