@@ -1318,43 +1318,39 @@ func (a *tier2Adapter) PRAlreadyReviewed(githubID int64, updatedAt time.Time) bo
 
 // CheckItem implements scheduler.Tier3ItemChecker.
 func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem) (bool, error) {
-	// Use the GitHub Issues API — works for both issues and PRs.
-	issue, err := a.ghClient.GetIssue(item.Repo, item.Number)
-	if err != nil {
-		return false, err
-	}
-
-	// State reconciliation: detect open → closed transitions.
-	// Store updates are idempotent; SSE publishes fire-and-forget.
-	// Closed items remain in the watch queue and are eventually evicted by
-	// the backoff/EvictStale mechanism — no interface changes required.
 	if item.Type == "pr" {
-		prState, err := a.ghClient.GetPRState(item.Repo, item.Number)
+		// Single API call: /pulls/{n} gives state + merged_at + updated_at.
+		prState, updatedAt, err := a.ghClient.GetPRStateAndUpdatedAt(item.Repo, item.Number)
 		if err != nil {
-			slog.Warn("tier3: could not fetch PR state", "repo", item.Repo, "number", item.Number, "err", err)
-		} else if prState != "open" {
-			if err := a.store.UpdatePRStateByGithubID(item.GithubID, "closed"); err != nil {
-				slog.Warn("tier3: update PR state failed", "err", err)
-			}
+			return false, err
+		}
+		if prState != "open" {
+			a.store.UpdatePRStateByGithubID(item.GithubID, "closed")
 			a.broker.Publish(sse.Event{
 				Type: sse.EventPRStateChanged,
 				Data: fmt.Sprintf(`{"pr_id":%d,"state":"closed"}`, item.GithubID),
 			})
 			slog.Info("tier3: PR closed/merged", "repo", item.Repo, "number", item.Number)
+			return false, nil // closed — don't trigger HandleChange
 		}
-	} else if issue.State != "open" {
-		if err := a.store.UpdateIssueStateByGithubID(item.GithubID, "closed"); err != nil {
-			slog.Warn("tier3: update issue state failed", "err", err)
-		}
+		return updatedAt.After(item.LastSeen), nil
+	}
+
+	// Issues: GetIssue returns state + updated_at in one call.
+	issue, err := a.ghClient.GetIssue(item.Repo, item.Number)
+	if err != nil {
+		return false, err
+	}
+	if issue.State != "open" {
+		a.store.UpdateIssueStateByGithubID(item.GithubID, "closed")
 		a.broker.Publish(sse.Event{
 			Type: sse.EventIssueStateChanged,
 			Data: fmt.Sprintf(`{"issue_id":%d,"state":"closed"}`, item.GithubID),
 		})
 		slog.Info("tier3: issue closed", "repo", item.Repo, "number", item.Number)
+		return false, nil // closed — don't trigger HandleChange
 	}
-
-	changed := issue.UpdatedAt.After(item.LastSeen)
-	return changed, nil
+	return issue.UpdatedAt.After(item.LastSeen), nil
 }
 
 // HandleChange implements scheduler.Tier3ItemChecker.
