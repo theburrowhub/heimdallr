@@ -52,7 +52,7 @@ func sanitizeTitle(s string) string {
 // IssueCommenter posts a comment on an issue. Same method GitHub exposes for
 // PR comments — both routes share `/repos/{owner}/{repo}/issues/{n}/comments`.
 type IssueCommenter interface {
-	PostComment(repo string, number int, body string) error
+	PostComment(repo string, number int, body string) (time.Time, error)
 }
 
 // IssueCommentFetcher fetches the existing discussion for an issue so the
@@ -319,7 +319,7 @@ func (p *Pipeline) runReviewOnly(ctx context.Context, issue *github.Issue, issue
 	// the review is still persisted locally with a zero pr_created so
 	// operators can re-drive it manually without losing the LLM output.
 	body := BuildMarkdownComment(result)
-	postErr := p.gh.PostComment(issue.Repo, issue.Number, body)
+	commentedAt, postErr := p.gh.PostComment(issue.Repo, issue.Number, body)
 	if postErr != nil {
 		slog.Warn("issues pipeline: PostComment failed, review will be stored locally only",
 			"repo", issue.Repo, "number", issue.Number, "err", postErr)
@@ -341,6 +341,7 @@ func (p *Pipeline) runReviewOnly(ctx context.Context, issue *github.Issue, issue
 		Suggestions: string(suggestionsJSON),
 		ActionTaken: string(config.IssueModeReviewOnly),
 		CreatedAt:   time.Now().UTC(),
+		CommentedAt: commentedAt,
 	}
 	revID, err := p.store.InsertIssueReview(rev)
 	if err != nil {
@@ -516,9 +517,10 @@ func (p *Pipeline) runAutoImplement(ctx context.Context, issue *github.Issue, is
 	// on failure — the PR is already public and the review row carries the
 	// number, so a missed comment does not lose information.
 	linkBackBody := fmt.Sprintf("Implementation PR: #%d", prNumber)
-	if err := p.gh.PostComment(issue.Repo, issue.Number, linkBackBody); err != nil {
+	commentedAt, linkErr := p.gh.PostComment(issue.Repo, issue.Number, linkBackBody)
+	if linkErr != nil {
 		slog.Warn("issues pipeline: link-back comment failed",
-			"repo", issue.Repo, "number", issue.Number, "err", err)
+			"repo", issue.Repo, "number", issue.Number, "err", linkErr)
 	}
 
 	rev := &store.IssueReview{
@@ -530,6 +532,7 @@ func (p *Pipeline) runAutoImplement(ctx context.Context, issue *github.Issue, is
 		ActionTaken: string(config.IssueModeDevelop),
 		PRCreated:   prNumber,
 		CreatedAt:   time.Now().UTC(),
+		CommentedAt: commentedAt,
 	}
 	revID, err := p.store.InsertIssueReview(rev)
 	if err != nil {
@@ -563,7 +566,7 @@ func (p *Pipeline) autoImplementNoChangesFallback(issue *github.Issue, issueID i
 			"---\n*auto_implement → review_only fallback · Heimdallm*",
 		issue.Number,
 	)
-	postErr := p.gh.PostComment(issue.Repo, issue.Number, body)
+	commentedAt, postErr := p.gh.PostComment(issue.Repo, issue.Number, body)
 	if postErr != nil {
 		slog.Warn("issues pipeline: auto_implement fallback PostComment failed",
 			"repo", issue.Repo, "number", issue.Number, "err", postErr)
@@ -580,6 +583,7 @@ func (p *Pipeline) autoImplementNoChangesFallback(issue *github.Issue, issueID i
 		// develop-without-local_dir fallback.
 		ActionTaken: string(config.IssueModeReviewOnly),
 		CreatedAt:   time.Now().UTC(),
+		CommentedAt: commentedAt,
 	}
 	revID, err := p.store.InsertIssueReview(rev)
 	if err != nil {
