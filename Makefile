@@ -334,9 +334,9 @@ _post-up-hints:
 	   echo "ℹ  Full-repo analysis is OFF (agent only sees the PR diff)."; \
 	   echo "   To enable, add to $(DOCKER_ENV):"; \
 	   echo "       HEIMDALLM_LOCAL_DIR_BASE=/absolute/path/to/your/projects"; \
-	   echo "   Then \`make down && make up\`. In the UI use /repos/<name> as Local Directory."; \
+	   echo "   Then \`make down && make up\`. In the UI use /home/heimdallm/repos/<name> as Local Directory."; \
 	 else \
-	   echo "✓  Full-repo analysis enabled: $${HEIMDALLM_LOCAL_DIR_BASE} → /repos (read-only)"; \
+	   echo "✓  Full-repo analysis enabled: $${HEIMDALLM_LOCAL_DIR_BASE} → /home/heimdallm/repos (read-only)"; \
 	 fi
 	@echo ""
 	@set -a; . $(DOCKER_ENV); set +a; \

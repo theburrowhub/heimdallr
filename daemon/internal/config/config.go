@@ -76,7 +76,7 @@ type GitHubConfig struct {
 
 	// LocalDirBase is a list of base directories for auto-resolving local_dir
 	// per repo. ResolveLocalDir checks each path in order, looking for
-	// {base}/{repo-name}, before falling back to /repos/{repo-name}.
+	// {base}/{repo-name}, before falling back to /home/heimdallm/repos/{repo-name}.
 	// This supports multiple workspace groups (e.g. ai-platform in one dir,
 	// another team's repos in another). Put more specific paths first.
 	LocalDirBase []string `toml:"local_dir_base"`
@@ -330,18 +330,21 @@ type ActivityLogConfig struct {
 
 // DefaultReposMountPath is the conventional location inside the daemon's
 // container where an operator's repos root is bind-mounted (e.g. via
-// HEIMDALLM_LOCAL_DIR_BASE=/Users/you/projects → /repos). Exposed as a
+// HEIMDALLM_LOCAL_DIR_BASE=/Users/you/projects → /home/heimdallm/repos).
+// The path MUST live under /home/heimdallm (or /tmp) because the
+// executor's ValidateWorkDir rejects any workdir outside the daemon
+// user's home — shipping the mount at /repos at the filesystem root
+// was a latent bug (silently rejected at review time). Exposed as a
 // package variable so tests can redirect auto-detection at a temp dir
-// without also having to mock the filesystem. On desktop installs it
-// is still "/repos" but nothing is mounted there, so detection simply
-// returns false for every repo and we fall through to the configured
-// value (or empty string).
-var DefaultReposMountPath = "/repos"
+// without also having to mock the filesystem. On desktop installs
+// nothing is mounted at this path, so detection simply returns false
+// for every repo and we fall through to the configured value (or empty).
+var DefaultReposMountPath = "/home/heimdallm/repos"
 
 // ShortRepoName returns the sub-repo name of an "org/repo" string, or
 // the input unchanged when there is no slash. Used by auto-detection
 // to map a monitored repo like "freepik-company/ai-api-specs" to the
-// conventional mount sub-dir "/repos/ai-api-specs".
+// conventional mount sub-dir "/home/heimdallm/repos/ai-api-specs".
 func ShortRepoName(repo string) string {
 	if i := strings.LastIndex(repo, "/"); i >= 0 {
 		return repo[i+1:]
@@ -383,7 +386,7 @@ func ResolveLocalDir(configured, repo string, localDirBases []string) string {
 			return candidate
 		}
 	}
-	// 2. Fallback to default mount path (/repos/{short-name})
+	// 2. Fallback to default mount path (/home/heimdallm/repos/{short-name})
 	if DefaultReposMountPath != "" {
 		candidate := filepath.Join(DefaultReposMountPath, short)
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {

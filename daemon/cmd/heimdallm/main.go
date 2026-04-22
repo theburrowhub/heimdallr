@@ -386,7 +386,7 @@ func main() {
 		// only when config.ResolveLocalDir() finds a matching directory under
 		// DefaultReposMountPath — i.e. the operator's bind-mount is in effect
 		// and the repo has been cloned there. The UI uses this to display
-		// "Auto-detected: /repos/<name>" next to repos where the user has
+		// "Auto-detected: /home/heimdallm/repos/<name>" next to repos where the user has
 		// not set `local_dir` manually but a review would still get
 		// full-repo context.
 		localDirsDetected := make(map[string]string)
@@ -565,7 +565,7 @@ func main() {
 		aiCfg := cfg.AIForRepo(pr.Repo)
 		localDirBase := cfg.GitHub.LocalDirBase
 		cfgMu.Unlock()
-		// /repos/<short-name> fallback when local_dir is unset (stat-based,
+		// /home/heimdallm/repos/<short-name> fallback when local_dir is unset (stat-based,
 		// keep outside the mutex).
 		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, pr.Repo, localDirBase)
 
@@ -636,7 +636,7 @@ func main() {
 		localDirBase := cfg.GitHub.LocalDirBase
 		globalTimeout := cfg.AI.ExecutionTimeout
 		cfgMu.Unlock()
-		// /repos/<short-name> fallback when local_dir is unset (stat-based,
+		// /home/heimdallm/repos/<short-name> fallback when local_dir is unset (stat-based,
 		// keep outside the mutex).
 		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, iss.Repo, localDirBase)
 
@@ -1076,7 +1076,7 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 	aiCfg := c.AIForRepo(pr.Repo)
 	localDirBase := c.GitHub.LocalDirBase
 	a.cfgMu.Unlock()
-	// /repos/<short-name> fallback when local_dir is unset (stat-based,
+	// /home/heimdallm/repos/<short-name> fallback when local_dir is unset (stat-based,
 	// keep outside the mutex). Lets HEIMDALLM_LOCAL_DIR_BASE give every
 	// monitored repo full-repo context without a per-repo override.
 	aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, pr.Repo, localDirBase)
@@ -1145,7 +1145,7 @@ func (a *tier2Adapter) ProcessRepo(ctx context.Context, repo string) (int, error
 		localDirBase := c.GitHub.LocalDirBase
 		globalTimeout := c.AI.ExecutionTimeout
 		a.cfgMu.Unlock()
-		// /repos/<short-name> fallback when local_dir is unset (stat-based,
+		// /home/heimdallm/repos/<short-name> fallback when local_dir is unset (stat-based,
 		// keep outside the mutex).
 		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, issue.Repo, localDirBase)
 
