@@ -8,6 +8,7 @@ const (
 	EventReviewStarted   = "review_started"
 	EventReviewCompleted = "review_completed"
 	EventReviewError     = "review_error"
+	EventReviewSkipped   = "review_skipped"
 
 	// Issue tracking pipeline (#26 onward).
 	EventIssueDetected        = "issue_detected"
