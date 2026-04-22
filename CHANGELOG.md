@@ -2,6 +2,13 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.4.18](https://github.com/theburrowhub/heimdallm/compare/v0.4.17...v0.4.18) (2026-04-22)
+
+
+### Features
+
+* implement [#192](https://github.com/theburrowhub/heimdallm/issues/192) — fix(cli): dashboard tabs need scrolling + config tab breaks on small terminals ([e558048](https://github.com/theburrowhub/heimdallm/commit/e558048ebc73dab2e75fea9d299c77c2edfe7cd6))
+
 ## [0.4.17](https://github.com/theburrowhub/heimdallm/compare/v0.4.16...v0.4.17) (2026-04-22)
 
 
