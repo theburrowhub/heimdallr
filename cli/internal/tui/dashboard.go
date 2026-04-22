@@ -166,7 +166,7 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			d.err = nil
 			d.connected = true
 			d.prs = msg.prs
-			d.issues = msg.issues
+			d.issues = filterReviewedIssues(msg.issues)
 			d.config = msg.config
 			d.stats = msg.stats
 			if msg.activity != nil {
@@ -565,6 +565,16 @@ func extractSeverity(triage json.RawMessage) string {
 		return fmt.Sprintf("%v", sev)
 	}
 	return "---"
+}
+
+func filterReviewedIssues(issues []api.Issue) []api.Issue {
+	var out []api.Issue
+	for _, iss := range issues {
+		if iss.LatestReview != nil {
+			out = append(out, iss)
+		}
+	}
+	return out
 }
 
 // truncateRunes returns s truncated to at most maxLen runes, appending an
