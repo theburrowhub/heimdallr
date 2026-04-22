@@ -138,7 +138,7 @@ func sseToLogLine(evt api.SSEEvent) logLine {
 		line.Badge = "EVENT"
 		line.Action = strings.ToUpper(evt.Type)
 		line.Status = logNeutral
-		line.Target = formatSSEData(evt.Data)
+		_, line.Target = formatSSEData(evt.Data)
 		return line
 	}
 
