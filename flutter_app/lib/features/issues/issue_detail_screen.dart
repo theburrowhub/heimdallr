@@ -70,6 +70,19 @@ class _IssueDetailScreenState extends ConsumerState<IssueDetailScreen> {
     }
   }
 
+  Future<void> _promote() async {
+    _startReviewing();
+    final api = ref.read(apiClientProvider);
+    try {
+      await api.promoteIssue(widget.issueId);
+      ref.invalidate(issueDetailProvider(widget.issueId));
+      if (mounted) showToast(context, 'Promoted to auto-implement');
+    } catch (e) {
+      _stopReviewing();
+      if (mounted) showToast(context, 'Error: $e', isError: true);
+    }
+  }
+
   Future<void> _trigger() async {
     _startReviewing();
     final api = ref.read(apiClientProvider);
@@ -145,6 +158,18 @@ class _IssueDetailScreenState extends ConsumerState<IssueDetailScreen> {
               label: Text(hasReviews ? 'Re-review' : 'Review'),
               onPressed: _trigger,
             ),
+            if (hasReviews && reviews.last.actionTaken == 'review_only') ...[
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.rocket_launch, size: 16),
+                label: const Text('Promote to Dev'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.secondary,
+                  foregroundColor: Theme.of(context).colorScheme.onSecondary,
+                ),
+                onPressed: _promote,
+              ),
+            ],
             const SizedBox(width: 8),
             OutlinedButton.icon(
               icon: const Icon(Icons.visibility_off_outlined, size: 16),
