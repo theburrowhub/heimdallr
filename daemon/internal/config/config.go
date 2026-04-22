@@ -86,6 +86,10 @@ type GitHubConfig struct {
 	// lives in downstream issues (#25 onward); this struct is the
 	// configuration surface only.
 	IssueTracking IssueTrackingConfig `toml:"issue_tracking"`
+
+	// ReviewGuards configures the caller-side skip rules applied before a PR
+	// enters the review pipeline (skip drafts, skip self-authored PRs).
+	ReviewGuards ReviewGuardsConfig `toml:"review_guards"`
 }
 
 // IssueMode is the processing mode assigned to an issue after label
@@ -168,6 +172,23 @@ type IssueTrackingConfig struct {
 	// DefaultAction is applied when an issue carries no label from any of
 	// the three lists above. Must be "ignore" or "review_only".
 	DefaultAction string `toml:"default_action" json:"default_action"`
+}
+
+// ReviewGuardsConfig configures the caller-side skip rules applied before a PR
+// enters the review pipeline. Pointer-to-bool lets "unset" apply the default;
+// explicit false disables a guard.
+type ReviewGuardsConfig struct {
+	SkipDrafts     *bool `toml:"skip_drafts"`
+	SkipSelfAuthor *bool `toml:"skip_self_author"`
+}
+
+// ResolvedReviewGuards is the ready-to-use form of ReviewGuardsConfig after
+// defaults have been applied. Callers (e.g. the poller) convert this to
+// pipeline.GateConfig to keep config free of the pipeline import cycle.
+type ResolvedReviewGuards struct {
+	SkipDrafts     bool
+	SkipSelfAuthor bool
+	BotLogin       string
 }
 
 // ResolvePromoteToLabel returns the label that should replace the blocked
@@ -939,6 +960,27 @@ func LoadOrCreate(path string) (*Config, error) {
 	return cfg, nil
 }
 
+
+// ReviewGuards resolves configured guard toggles against their defaults and
+// returns a ResolvedReviewGuards ready for use by the poller. Both booleans
+// default to true when not explicitly configured.
+//
+// Callers convert the result to pipeline.GateConfig to avoid an import cycle
+// (pipeline transitively imports config via the github package).
+func (c *Config) ReviewGuards(botLogin string) ResolvedReviewGuards {
+	g := ResolvedReviewGuards{
+		SkipDrafts:     true,
+		SkipSelfAuthor: true,
+		BotLogin:       botLogin,
+	}
+	if v := c.GitHub.ReviewGuards.SkipDrafts; v != nil {
+		g.SkipDrafts = *v
+	}
+	if v := c.GitHub.ReviewGuards.SkipSelfAuthor; v != nil {
+		g.SkipSelfAuthor = *v
+	}
+	return g
+}
 
 // DefaultPath returns ~/.config/heimdallm/config.toml
 func DefaultPath() string {

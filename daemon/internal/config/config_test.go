@@ -1925,3 +1925,36 @@ func TestAutoEnablePRForDiscovery_Explicit(t *testing.T) {
 		t.Fatal("explicit false should return false")
 	}
 }
+
+func TestReviewGuards_Defaults(t *testing.T) {
+	c := &Config{} // zero config — all pointers nil
+	g := c.ReviewGuards("heimdallm-bot")
+	if !g.SkipDrafts {
+		t.Errorf("SkipDrafts default = false, want true")
+	}
+	if !g.SkipSelfAuthor {
+		t.Errorf("SkipSelfAuthor default = false, want true")
+	}
+	if g.BotLogin != "heimdallm-bot" {
+		t.Errorf("BotLogin = %q, want heimdallm-bot", g.BotLogin)
+	}
+}
+
+func TestReviewGuards_ExplicitFalse(t *testing.T) {
+	f := false
+	c := &Config{
+		GitHub: GitHubConfig{
+			ReviewGuards: ReviewGuardsConfig{
+				SkipDrafts:     &f,
+				SkipSelfAuthor: &f,
+			},
+		},
+	}
+	g := c.ReviewGuards("bot")
+	if g.SkipDrafts {
+		t.Errorf("SkipDrafts: explicit false not honoured")
+	}
+	if g.SkipSelfAuthor {
+		t.Errorf("SkipSelfAuthor: explicit false not honoured")
+	}
+}
