@@ -124,6 +124,61 @@ func TestBuildImplementPromptWithProfile_TemplateWinsOverInstructions(t *testing
 	}
 }
 
+// ── ReviewContext injection ─────────────────────────────────────────────────
+
+func TestBuildPrompt_ReviewContextInjected(t *testing.T) {
+	ctx := baseCtx()
+	ctx.ReviewContext = "IMPORTANT: This is a RE-TRIAGE.\n## Your previous triage (severity: high)\n"
+	got := issues.BuildPrompt(ctx)
+
+	if !strings.Contains(got, "RE-TRIAGE") {
+		t.Error("ReviewContext not injected into default triage prompt")
+	}
+	// ReviewContext must appear before the JSON schema instruction.
+	ctxIdx := strings.Index(got, "RE-TRIAGE")
+	schemaIdx := strings.Index(got, "Return a single JSON object")
+	if ctxIdx > schemaIdx {
+		t.Errorf("ReviewContext (idx=%d) should appear before JSON schema (idx=%d)", ctxIdx, schemaIdx)
+	}
+}
+
+func TestBuildImplementPrompt_ReviewContextInjected(t *testing.T) {
+	ctx := baseCtx()
+	ctx.ReviewContext = "IMPORTANT: This is a RE-TRIAGE.\n## Previous triage context\n"
+	got := issues.BuildImplementPrompt(ctx)
+
+	if !strings.Contains(got, "RE-TRIAGE") {
+		t.Error("ReviewContext not injected into default implement prompt")
+	}
+	// ReviewContext must appear before the implementation instructions.
+	ctxIdx := strings.Index(got, "RE-TRIAGE")
+	implIdx := strings.Index(got, "Implement what the issue asks for")
+	if ctxIdx > implIdx {
+		t.Errorf("ReviewContext (idx=%d) should appear before implementation instructions (idx=%d)", ctxIdx, implIdx)
+	}
+}
+
+func TestBuildPromptWithProfile_CustomTemplateReviewContext(t *testing.T) {
+	ctx := baseCtx()
+	ctx.ReviewContext = "RE-TRIAGE CONTEXT BLOCK"
+	tmpl := "Triage {number} in {repo}. Context: {review_context}"
+	got := issues.BuildPromptWithProfile(ctx, tmpl, "")
+
+	if !strings.Contains(got, "RE-TRIAGE CONTEXT BLOCK") {
+		t.Error("{review_context} placeholder not substituted in custom template")
+	}
+}
+
+func TestBuildPrompt_EmptyReviewContextOmitted(t *testing.T) {
+	ctx := baseCtx()
+	ctx.ReviewContext = ""
+	got := issues.BuildPrompt(ctx)
+
+	if strings.Contains(got, "RE-TRIAGE") {
+		t.Error("empty ReviewContext should not add any re-triage text to prompt")
+	}
+}
+
 // ── BuildPRDescriptionPrompt ────────────────────────────────────────────────
 
 func TestBuildPRDescriptionPrompt_ContainsIssueAndDiff(t *testing.T) {

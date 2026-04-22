@@ -7,7 +7,9 @@ package issues
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -171,13 +173,19 @@ type Pipeline struct {
 	git      GitOps
 	broker   Publisher
 	notify   Notifier
+	botLogin string
 }
+
+// SetBotLogin sets the GitHub login of the bot account. Used to filter
+// the bot's own comments from re-triage discussion context.
+func (p *Pipeline) SetBotLogin(login string) { p.botLogin = login }
 
 // issueStore is the subset of *store.Store the pipeline needs. Kept narrow
 // so tests can substitute a fake without bringing in SQLite.
 type issueStore interface {
 	UpsertIssue(i *store.Issue) (int64, error)
 	InsertIssueReview(r *store.IssueReview) (int64, error)
+	LatestIssueReview(issueID int64) (*store.IssueReview, error)
 	UpsertPR(pr *store.PR) (int64, error)
 }
 
@@ -282,20 +290,38 @@ func (p *Pipeline) runReviewOnly(ctx context.Context, issue *github.Issue, issue
 		comments = nil
 	}
 
+	// Build re-triage context if a previous review exists for this issue.
+	var reviewCtx string
+	prevReview, prevErr := p.store.LatestIssueReview(issueID)
+	if prevErr != nil && !errors.Is(prevErr, sql.ErrNoRows) {
+		slog.Warn("issues pipeline: failed to fetch previous review, proceeding without re-triage context", "err", prevErr)
+	}
+	if prevReview != nil {
+		reviewCtx = buildIssueTriageContext(
+			prevReview.Triage,
+			prevReview.Suggestions,
+			prevReview.Summary,
+			prevReview.CreatedAt,
+			comments,
+			p.botLogin,
+		)
+	}
+
 	// Build prompt + run the CLI. HasLocalDir mirrors workDir above so the
 	// LLM hears the same story as the mode-selection logic.
 	// Agent profile customization: IssuePromptOverride replaces the entire
 	// template; IssueInstructions injects into the default template.
 	promptCtx := PromptContext{
-		Repo:        issue.Repo,
-		Number:      issue.Number,
-		Title:       issue.Title,
-		Author:      issue.User.Login,
-		Labels:      issue.LabelNames(),
-		Assignees:   issue.AssigneeLogins(),
-		Body:        issue.Body,
-		Comments:    comments,
-		HasLocalDir: workDir != "",
+		Repo:          issue.Repo,
+		Number:        issue.Number,
+		Title:         issue.Title,
+		Author:        issue.User.Login,
+		Labels:        issue.LabelNames(),
+		Assignees:     issue.AssigneeLogins(),
+		Body:          issue.Body,
+		Comments:      comments,
+		HasLocalDir:   workDir != "",
+		ReviewContext: reviewCtx,
 	}
 	prompt := BuildPromptWithProfile(promptCtx, opts.IssuePromptOverride, opts.IssueInstructions)
 
@@ -412,6 +438,23 @@ func (p *Pipeline) runAutoImplement(ctx context.Context, issue *github.Issue, is
 		comments = nil
 	}
 
+	// Build re-triage context for auto_implement (same as review_only).
+	var reviewCtx string
+	prevReview, prevErr := p.store.LatestIssueReview(issueID)
+	if prevErr != nil && !errors.Is(prevErr, sql.ErrNoRows) {
+		slog.Warn("issues pipeline: failed to fetch previous review, proceeding without re-triage context", "err", prevErr)
+	}
+	if prevReview != nil {
+		reviewCtx = buildIssueTriageContext(
+			prevReview.Triage,
+			prevReview.Suggestions,
+			prevReview.Summary,
+			prevReview.CreatedAt,
+			comments,
+			p.botLogin,
+		)
+	}
+
 	cli, err := p.executor.Detect(opts.Primary, opts.Fallback)
 	if err != nil {
 		p.publishError(issueID, issue, fmt.Errorf("detect CLI: %w", err))
@@ -426,6 +469,7 @@ func (p *Pipeline) runAutoImplement(ctx context.Context, issue *github.Issue, is
 			Title: issue.Title, Author: issue.User.Login,
 			Labels: issue.LabelNames(), Assignees: issue.AssigneeLogins(),
 			Body: issue.Body, Comments: comments, HasLocalDir: true,
+			ReviewContext: reviewCtx,
 		},
 		opts.ImplementPromptOverride,
 		opts.ImplementInstructions,

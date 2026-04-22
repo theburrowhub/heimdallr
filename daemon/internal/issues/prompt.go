@@ -23,15 +23,16 @@ const maxCommentsBytes = 8 * 1024
 
 // PromptContext is the data the triage template substitutes into the prompt.
 type PromptContext struct {
-	Repo        string
-	Number      int
-	Title       string
-	Author      string
-	Labels      []string
-	Assignees   []string
-	Body        string
-	Comments    []github.Comment
-	HasLocalDir bool // when true, the LLM can read the repo for deeper context
+	Repo          string
+	Number        int
+	Title         string
+	Author        string
+	Labels        []string
+	Assignees     []string
+	Body          string
+	Comments      []github.Comment
+	HasLocalDir   bool   // when true, the LLM can read the repo for deeper context
+	ReviewContext string // structured re-triage context; empty on first triage
 }
 
 // BuildPromptWithProfile formats the LLM prompt for a review_only triage run,
@@ -86,6 +87,7 @@ func applyPlaceholders(tmpl string, ctx PromptContext) string {
 		"{body}", body,
 		"{comments}", comments,
 		"{assignees}", assignees,
+		"{review_context}", ctx.ReviewContext,
 	)
 	result := r.Replace(tmpl)
 
@@ -130,6 +132,11 @@ func buildDefaultPrompt(ctx PromptContext, customInstructions string) string {
 
 	if comments := formatComments(ctx.Comments); comments != "" {
 		sb.WriteString(comments)
+		sb.WriteString("\n")
+	}
+
+	if ctx.ReviewContext != "" {
+		sb.WriteString(ctx.ReviewContext)
 		sb.WriteString("\n")
 	}
 
@@ -216,6 +223,11 @@ func buildDefaultImplementPrompt(ctx PromptContext, customInstructions string) s
 
 	if comments := formatComments(ctx.Comments); comments != "" {
 		sb.WriteString(comments)
+		sb.WriteString("\n")
+	}
+
+	if ctx.ReviewContext != "" {
+		sb.WriteString(ctx.ReviewContext)
 		sb.WriteString("\n")
 	}
 

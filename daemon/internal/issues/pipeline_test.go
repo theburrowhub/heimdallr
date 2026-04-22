@@ -2,6 +2,7 @@ package issues_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,10 @@ type fakeStore struct {
 	upsertErr    error
 	insertErr    error
 	upsertPRErr  error
+
+	// latestReview is returned by LatestIssueReview when non-nil.
+	latestReview    *store.IssueReview
+	latestReviewErr error
 }
 
 func (f *fakeStore) UpsertIssue(i *store.Issue) (int64, error) {
@@ -52,6 +57,16 @@ func (f *fakeStore) InsertIssueReview(r *store.IssueReview) (int64, error) {
 	copy.ID = f.nextReviewID
 	f.reviews = append(f.reviews, &copy)
 	return f.nextReviewID, nil
+}
+
+func (f *fakeStore) LatestIssueReview(issueID int64) (*store.IssueReview, error) {
+	if f.latestReviewErr != nil {
+		return nil, f.latestReviewErr
+	}
+	if f.latestReview != nil {
+		return f.latestReview, nil
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (f *fakeStore) UpsertPR(pr *store.PR) (int64, error) {
@@ -369,6 +384,69 @@ func TestPipeline_RunHappyPath(t *testing.T) {
 
 	if len(notify.calls) != 2 {
 		t.Errorf("expected 2 notifications (start + complete), got %d", len(notify.calls))
+	}
+}
+
+// ── re-triage context ───────────────────────────────────────────────────────
+
+func TestPipeline_ReTriageInjectsContext(t *testing.T) {
+	prevReview := &store.IssueReview{
+		ID:          1,
+		IssueID:     1,
+		Summary:     "Login fails after upgrade.",
+		Triage:      `{"severity":"high","category":"bug","suggested_assignee":"alice"}`,
+		Suggestions: `["reproduce locally","check auth migration"]`,
+		ActionTaken: "review_only",
+		CreatedAt:   time.Now().Add(-1 * time.Hour),
+	}
+	s := &fakeStore{latestReview: prevReview}
+	gh := &fakeGH{
+		commentsByKey: map[string][]github.Comment{
+			"org/repo#7": {
+				{Author: "reporter", Body: "New info: only affects Safari", CreatedAt: time.Now()},
+			},
+		},
+	}
+	exec := &fakeExec{detectCLI: "claude", rawOutput: []byte(validResult)}
+	p := issues.New(s, gh, exec, nil, &fakeBroker{}, nil)
+	p.SetBotLogin("heimdallm-bot")
+
+	issue := newIssue(config.IssueModeReviewOnly)
+	_, err := p.Run(context.Background(), issue, issues.RunOptions{Primary: "claude"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// The prompt sent to the executor must contain re-triage context.
+	prompt := exec.lastPrompt
+	if !strings.Contains(prompt, "RE-TRIAGE") {
+		t.Error("prompt missing RE-TRIAGE instruction")
+	}
+	if !strings.Contains(prompt, "severity: high") {
+		t.Error("prompt missing previous severity")
+	}
+	if !strings.Contains(prompt, "reproduce locally") {
+		t.Error("prompt missing previous suggestions")
+	}
+	if !strings.Contains(prompt, "only affects Safari") {
+		t.Error("prompt missing new discussion from comments")
+	}
+}
+
+func TestPipeline_FirstTriageNoReTriageContext(t *testing.T) {
+	s := &fakeStore{} // no latestReview → sql.ErrNoRows
+	gh := &fakeGH{}
+	exec := &fakeExec{detectCLI: "claude", rawOutput: []byte(validResult)}
+	p := issues.New(s, gh, exec, nil, &fakeBroker{}, nil)
+
+	issue := newIssue(config.IssueModeReviewOnly)
+	_, err := p.Run(context.Background(), issue, issues.RunOptions{Primary: "claude"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if strings.Contains(exec.lastPrompt, "RE-TRIAGE") {
+		t.Error("first triage should not contain RE-TRIAGE context")
 	}
 }
 

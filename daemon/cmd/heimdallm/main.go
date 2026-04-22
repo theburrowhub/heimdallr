@@ -163,8 +163,10 @@ func main() {
 
 	p := pipeline.New(s, ghClient, exec, &notifyWithSSE{notifier: notifier})
 
-	// Resolve bot login for re-review context filtering.
+	// Resolve bot login for re-review and re-triage context filtering.
+	var resolvedBotLogin string
 	if login, err := ghClient.AuthenticatedUser(); err == nil {
+		resolvedBotLogin = login
 		p.SetBotLogin(login)
 		slog.Info("bot login resolved", "login", login)
 	} else {
@@ -176,6 +178,9 @@ func main() {
 	// an issue that is classified as review_only, so this dep is harmless
 	// when auto_implement is not in use.
 	issuePipe := issuepipeline.New(s, ghClient, exec, issuepipeline.NewGitExec(), broker, &notifyWithSSE{notifier: notifier})
+	if resolvedBotLogin != "" {
+		issuePipe.SetBotLogin(resolvedBotLogin)
+	}
 	issueFetcher := issuepipeline.NewFetcher(ghClient, s, issuePipe)
 	srv := server.New(s, broker, p, apiToken)
 	srv.SetConfigPath(cfgPath)
