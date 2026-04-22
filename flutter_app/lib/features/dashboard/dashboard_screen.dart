@@ -366,7 +366,7 @@ class _PRTileState extends ConsumerState<_PRTile> {
     } catch (e) {
       ref
           .read(reviewingPRsProvider.notifier)
-          .update((s) => {...s}..remove(_reviewKey));
+          .update((s) => Map.of(s)..remove(_reviewKey));
       if (mounted) showToast(context, 'Error: $e', isError: true);
     }
   }

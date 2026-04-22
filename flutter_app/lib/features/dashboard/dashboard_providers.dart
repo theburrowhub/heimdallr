@@ -79,7 +79,7 @@ void _handleSseEvent(Ref ref, SseEvent event) {
         if (key != null) {
           ref
               .read(reviewingPRsProvider.notifier)
-              .update((s) => {...s}..remove(key));
+              .update((s) => Map.of(s)..remove(key));
         }
         final severity = data['severity'] as String? ?? '';
         sendPRNotification(
@@ -95,7 +95,7 @@ void _handleSseEvent(Ref ref, SseEvent event) {
         if (key != null) {
           ref
               .read(reviewingPRsProvider.notifier)
-              .update((s) => {...s}..remove(key));
+              .update((s) => Map.of(s)..remove(key));
         } else if (prId != null) {
           // Look up by store ID from cached PR list
           final prs = ref.read(prsProvider).valueOrNull ?? [];
@@ -104,7 +104,7 @@ void _handleSseEvent(Ref ref, SseEvent event) {
             final k = '${pr.repo}:${pr.number}';
             ref
                 .read(reviewingPRsProvider.notifier)
-                .update((s) => {...s}..remove(k));
+                .update((s) => Map.of(s)..remove(k));
           }
         }
 
@@ -162,6 +162,10 @@ final prsProvider = FutureProvider<List<PR>>((ref) async {
 });
 
 int _baselineReviewId(Ref ref, {required String repo, required int prNumber}) {
+  // Falls back to 0 when the PR list hasn't loaded yet (e.g. SSE event
+  // arrives before the initial /prs fetch). 0 is the same baseline used
+  // for a first-review: as soon as the PR list populates with a non-zero
+  // latestReview.id, reconciliation will clear the stale entry.
   final prs = ref.read(prsProvider).valueOrNull ?? const <PR>[];
   final pr = prs
       .where((p) => p.repo == repo && p.number == prNumber)
@@ -171,15 +175,25 @@ int _baselineReviewId(Ref ref, {required String repo, required int prNumber}) {
 
 /// Drops entries from `reviewingPRsProvider` whose PR's current
 /// `latestReview.id` no longer matches the baseline captured at review
-/// start. Runs after every PR list refresh as a recovery path for missed
+/// start. Scheduled as a separate microtask so we don't mutate provider
+/// state during `prsProvider`'s build (Riverpod anti-pattern). Runs
+/// after every PR list refresh as a recovery path for missed
 /// `review_completed` / `review_error` SSE events.
 void _reconcileReviewingPRs(Ref ref, List<PR> prs) {
-  final current = ref.read(reviewingPRsProvider);
-  if (current.isEmpty) return;
-  final next = reconcileReviewing(current, prs);
-  if (next.length != current.length) {
-    ref.read(reviewingPRsProvider.notifier).state = next;
-  }
+  Future(() {
+    try {
+      final current = ref.read(reviewingPRsProvider);
+      if (current.isEmpty) return;
+      final next = reconcileReviewing(current, prs);
+      if (next.length != current.length) {
+        ref.read(reviewingPRsProvider.notifier).state = next;
+      }
+    } catch (_) {
+      // ref may be disposed if the provider was rebuilt between scheduling
+      // and execution — dropping the reconcile is safe, the next refresh
+      // will try again.
+    }
+  });
 }
 
 /// Pure helper: given the current reviewing map and the latest PR list,
