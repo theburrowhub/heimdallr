@@ -525,8 +525,9 @@ class _RepoDetailScreenState extends ConsumerState<RepoDetailScreen> {
 class _LocalDirField extends StatefulWidget {
   final String value;
   final ValueChanged<String> onChanged;
-  /// Non-null when the daemon detected a `/repos/<name>` path for this repo
-  /// (HEIMDALLM_REPOS_DIR is mounted and the repo is visible there). Shown
+  /// Non-null when the daemon detected a `/home/heimdallm/repos/<name>` path
+  /// for this repo (HEIMDALLM_LOCAL_DIR_BASE is mounted and the repo is
+  /// visible there). Shown
   /// as the field's placeholder + a small hint below the row so the operator
   /// knows the fallback will kick in if they leave the field empty.
   final String? detectedDir;
@@ -594,8 +595,9 @@ class _LocalDirFieldState extends State<_LocalDirField> {
           ),
       // Browse button is desktop-only — browsers can't expose native
       // filesystem paths to the daemon. On web the operator types a
-      // path that exists inside the daemon container (e.g. /repos/foo
-      // if they've bind-mounted host:/repos into the compose service).
+      // path that exists inside the daemon container (e.g.
+      // /home/heimdallm/repos/foo if they've bind-mounted their host
+      // repos root via HEIMDALLM_LOCAL_DIR_BASE).
       if (!kIsWeb) ...[
         const SizedBox(width: 8),
         OutlinedButton.icon(
@@ -612,7 +614,7 @@ class _LocalDirFieldState extends State<_LocalDirField> {
         Tooltip(
           message: 'The daemon runs in a container, so paths here refer to '
               'directories inside that container — typically a bind-mount '
-              'like /repos/<name>. Enter the path manually.',
+              'like /home/heimdallm/repos/<name>. Enter the path manually.',
           child: Icon(Icons.info_outline,
               size: 16, color: Colors.grey.shade500),
         ),

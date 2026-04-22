@@ -178,20 +178,27 @@ After `make up` completes, the target prints a summary of which AI credentials w
 
 By default the AI agent reviews a PR using only the diff it gets from the GitHub API. That's enough for most reviews. If you want the agent to explore the surrounding code (grep sibling files, read the call graph, check imports, etc.), you need to give it a directory on the daemon's side to `cd` into.
 
-On Docker the daemon is containerised, so "a directory on the daemon's side" means a path inside that container. Mount your host repos root into the container as `/repos` via an env var:
+On Docker the daemon is containerised, so "a directory on the daemon's side" means a path inside that container. Mount your host repos root into the container as `/home/heimdallm/repos` (under the daemon user's home — the executor rejects workdirs outside it) via an env var:
 
 ```bash
 # In docker/.env
-HEIMDALLM_REPOS_DIR=/Users/you/projects       # macOS / Linux
+HEIMDALLM_LOCAL_DIR_BASE=/Users/you/projects       # macOS / Linux
 # or
-HEIMDALLM_REPOS_DIR=/home/you/code
+HEIMDALLM_LOCAL_DIR_BASE=/home/you/code
+```
+
+On desktop the daemon reads the same env var directly (no mount involved) and supports a comma-separated list for multi-workspace setups:
+
+```bash
+export HEIMDALLM_LOCAL_DIR_BASE=/Users/you/projects,/Users/you/other-org
+make dev
 ```
 
 ```bash
 make down && make up
 ```
 
-Then in the web UI, go to a repo's detail screen and under **Local directory** enter the path inside the container — typically `/repos/<repo-name>` (matching the sub-directory of your host's projects root). When unset, the compose file mounts an empty placeholder at `/repos` so the feature is a silent no-op and doesn't break anything.
+Then in the web UI, go to a repo's detail screen and under **Local directory** enter the path inside the container — typically `/home/heimdallm/repos/<repo-name>` (matching the sub-directory of your host's projects root). When unset, the compose file mounts an empty placeholder there so the feature is a silent no-op and doesn't break anything.
 
 The mount is read-only. The agent can read every file under that directory but cannot modify your working tree.
 
