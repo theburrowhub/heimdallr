@@ -398,6 +398,46 @@ func (c *Client) GetPRHeadSHA(repo string, number int) (string, error) {
 	return pr.Head.SHA, nil
 }
 
+// PRSnapshot is the subset of PR fields Tier 3's guard evaluator needs.
+// Returned by GetPRSnapshot in one call so the watch tier doesn't have to
+// combine GetIssue + GetPRHeadSHA.
+type PRSnapshot struct {
+	State     string
+	Draft     bool
+	Author    string
+	UpdatedAt time.Time
+	HeadSHA   string
+}
+
+// GetPRSnapshot returns the current state, draft flag, author, updated_at,
+// and HEAD SHA of a PR via the Pulls API. Tier 3 uses this to refresh state
+// before re-reviewing a watched PR so a merged/closed PR does not burn AI
+// tokens on a stale open-PR record.
+func (c *Client) GetPRSnapshot(repo string, number int) (*PRSnapshot, error) {
+	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
+	resp, err := c.do("GET", path, "application/vnd.github+json")
+	if err != nil {
+		return nil, fmt.Errorf("github: get PR snapshot: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if resp.StatusCode != http.StatusOK {
+		errBody := safeTruncate(string(body), maxErrBodyLen)
+		return nil, fmt.Errorf("github: get PR snapshot (%s #%d): status %d: %s", repo, number, resp.StatusCode, errBody)
+	}
+	var pr PullRequest
+	if err := json.Unmarshal(body, &pr); err != nil {
+		return nil, fmt.Errorf("github: get PR snapshot: unmarshal: %w", err)
+	}
+	return &PRSnapshot{
+		State:     pr.State,
+		Draft:     pr.Draft,
+		Author:    pr.User.Login,
+		UpdatedAt: pr.UpdatedAt,
+		HeadSHA:   pr.Head.SHA,
+	}, nil
+}
+
 // FetchDiff returns the unified diff for a PR.
 func (c *Client) FetchDiff(repo string, number int) (string, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
