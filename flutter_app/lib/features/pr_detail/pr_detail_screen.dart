@@ -55,7 +55,7 @@ class _PRDetailScreenState extends ConsumerState<PRDetailScreen> {
         messenger.showSnackBar(
           SnackBar(
             duration: const Duration(seconds: 5),
-            showCloseIcon: true,
+            
             content: const Text('PR dismissed'),
             action: SnackBarAction(
               label: 'Undo',

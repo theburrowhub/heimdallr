@@ -130,7 +130,7 @@ class _IssueTileState extends ConsumerState<_IssueTile> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           duration: const Duration(seconds: 5),
-          showCloseIcon: true,
+          
           content: Text('Issue #${widget.issue.number} dismissed'),
           action: SnackBarAction(
             label: 'Undo',

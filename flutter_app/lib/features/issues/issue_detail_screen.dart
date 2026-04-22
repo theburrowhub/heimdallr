@@ -52,7 +52,7 @@ class _IssueDetailScreenState extends ConsumerState<IssueDetailScreen> {
         messenger.showSnackBar(
           SnackBar(
             duration: const Duration(seconds: 5),
-            showCloseIcon: true,
+            
             content: const Text('Issue dismissed'),
             action: SnackBarAction(
               label: 'Undo',

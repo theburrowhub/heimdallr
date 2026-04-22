@@ -379,7 +379,7 @@ class _PRTileState extends ConsumerState<_PRTile> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           duration: const Duration(seconds: 5),
-          showCloseIcon: true,
+          
           content: Text('PR #${widget.pr.number} dismissed'),
           action: SnackBarAction(
             label: 'Undo',
