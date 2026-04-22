@@ -2,6 +2,13 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.4.17](https://github.com/theburrowhub/heimdallm/compare/v0.4.16...v0.4.17) (2026-04-22)
+
+
+### Features
+
+* **flutter:** preset templates for Issue Triage & Development tabs ([#204](https://github.com/theburrowhub/heimdallm/issues/204)) ([aacdba8](https://github.com/theburrowhub/heimdallm/commit/aacdba8614c77255472aa68c324f1b9bd19f3dd9))
+
 ## [0.4.16](https://github.com/theburrowhub/heimdallm/compare/v0.4.15...v0.4.16) (2026-04-22)
 
 
