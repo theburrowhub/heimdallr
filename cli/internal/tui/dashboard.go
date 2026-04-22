@@ -153,6 +153,7 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		d.width = msg.Width
 		d.height = msg.Height
+		d.clampCursor()
 		return d, nil
 
 	case tickMsg:
@@ -180,6 +181,7 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		d.clampCursor()
 		return d, nil
 
 	case sseMsg:
@@ -196,6 +198,14 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return d, nil
+}
+
+func (d *Dashboard) contentHeight() int {
+	h := d.height - 10
+	if h < 5 {
+		h = 5
+	}
+	return h
 }
 
 func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -217,6 +227,22 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k", "up":
 		if d.cursor > 0 {
 			d.cursor--
+		}
+	case "pgdown", "ctrl+d":
+		pageSize := d.contentHeight() - 3
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		d.cursor += pageSize
+		d.clampCursor()
+	case "pgup", "ctrl+u":
+		pageSize := d.contentHeight() - 3
+		if pageSize < 1 {
+			pageSize = 1
+		}
+		d.cursor -= pageSize
+		if d.cursor < 0 {
+			d.cursor = 0
 		}
 	case "r":
 		return d, d.fetchData
@@ -245,6 +271,8 @@ func (d *Dashboard) clampCursor() {
 		max = len(d.prs)
 	case tabIssues:
 		max = len(d.issues)
+	case tabConfig:
+		max = len(d.configLines())
 	}
 	if max > 0 && d.cursor >= max {
 		d.cursor = max - 1
@@ -274,11 +302,7 @@ func (d *Dashboard) View() string {
 	b.WriteString("\n\n")
 
 	// Content area
-	contentHeight := d.height - 10
-	if contentHeight < 5 {
-		contentHeight = 5
-	}
-	b.WriteString(d.renderContent(contentHeight))
+	b.WriteString(d.renderContent(d.contentHeight()))
 
 	// Help bar
 	b.WriteString("\n")
@@ -362,18 +386,25 @@ func (d *Dashboard) renderActivity(height int) string {
 	b.WriteString("  " + strings.Repeat("─", 70))
 	b.WriteString("\n")
 
-	visible := d.activity
-	if len(visible) > height-2 {
-		visible = visible[:height-2]
+	maxRows := height - 3
+	if maxRows < 1 {
+		maxRows = 1
 	}
+	start, end := scrollWindow(len(d.activity), d.cursor, maxRows)
 
-	for i, a := range visible {
+	for i := start; i < end; i++ {
+		a := d.activity[i]
 		line := fmt.Sprintf("  %-7s %-25s %s", a.Time, a.Event, a.Info)
 		if i == d.cursor {
 			b.WriteString(selectedRowStyle.Render(line))
 		} else {
 			b.WriteString(line)
 		}
+		b.WriteString("\n")
+	}
+
+	if hint := scrollHint(start, end, len(d.activity)); hint != "" {
+		b.WriteString(hint)
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -391,23 +422,14 @@ func (d *Dashboard) renderPRs(height int) string {
 	b.WriteString("  " + strings.Repeat("─", 86))
 	b.WriteString("\n")
 
-	visible := d.prs
-	if len(visible) > height-2 {
-		start := 0
-		if d.cursor > height-3 {
-			start = d.cursor - (height - 3)
-		}
-		end := start + height - 2
-		if end > len(visible) {
-			end = len(visible)
-		}
-		visible = visible[start:end]
+	maxRows := height - 3
+	if maxRows < 1 {
+		maxRows = 1
 	}
+	start, end := scrollWindow(len(d.prs), d.cursor, maxRows)
 
-	for i, pr := range d.prs {
-		if i >= height-2 {
-			break
-		}
+	for i := start; i < end; i++ {
+		pr := d.prs[i]
 		sev := "---"
 		if pr.LatestReview != nil {
 			sev = pr.LatestReview.Severity
@@ -422,6 +444,11 @@ func (d *Dashboard) renderPRs(height int) string {
 		} else {
 			b.WriteString(line)
 		}
+		b.WriteString("\n")
+	}
+
+	if hint := scrollHint(start, end, len(d.prs)); hint != "" {
+		b.WriteString(hint)
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -439,10 +466,14 @@ func (d *Dashboard) renderIssues(height int) string {
 	b.WriteString("  " + strings.Repeat("─", 90))
 	b.WriteString("\n")
 
-	for i, iss := range d.issues {
-		if i >= height-2 {
-			break
-		}
+	maxRows := height - 3
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	start, end := scrollWindow(len(d.issues), d.cursor, maxRows)
+
+	for i := start; i < end; i++ {
+		iss := d.issues[i]
 		sev := "---"
 		action := "---"
 		if iss.LatestReview != nil {
@@ -461,7 +492,38 @@ func (d *Dashboard) renderIssues(height int) string {
 		}
 		b.WriteString("\n")
 	}
+
+	if hint := scrollHint(start, end, len(d.issues)); hint != "" {
+		b.WriteString(hint)
+		b.WriteString("\n")
+	}
 	return b.String()
+}
+
+func (d *Dashboard) configLines() []string {
+	if d.config == nil {
+		return nil
+	}
+	keys := []string{
+		"poll_interval", "repositories", "ai_primary", "ai_fallback",
+		"review_mode", "retention_days", "issue_tracking",
+	}
+	var lines []string
+	for _, key := range keys {
+		val, ok := d.config[key]
+		if !ok {
+			continue
+		}
+		valStr := formatConfigValue(val)
+		entry := fmt.Sprintf("  %-20s %s", key+":", valStr)
+		for _, l := range strings.Split(entry, "\n") {
+			if d.width > 4 {
+				l = truncateRunes(l, d.width-2)
+			}
+			lines = append(lines, l)
+		}
+	}
+	return lines
 }
 
 func (d *Dashboard) renderConfig(height int) string {
@@ -475,29 +537,59 @@ func (d *Dashboard) renderConfig(height int) string {
 	b.WriteString("  " + strings.Repeat("─", 60))
 	b.WriteString("\n")
 
-	keys := []string{
-		"poll_interval", "repositories", "ai_primary", "ai_fallback",
-		"review_mode", "retention_days", "issue_tracking",
+	allLines := d.configLines()
+	maxRows := height - 3
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	start, end := scrollWindow(len(allLines), d.cursor, maxRows)
+
+	for i := start; i < end; i++ {
+		b.WriteString(allLines[i])
+		b.WriteString("\n")
 	}
 
-	lines := 0
-	for _, key := range keys {
-		if lines >= height-2 {
-			break
-		}
-		val, ok := d.config[key]
-		if !ok {
-			continue
-		}
-		valStr := formatConfigValue(val)
-		b.WriteString(fmt.Sprintf("  %-20s %s\n", key+":", valStr))
-		lines++
+	if hint := scrollHint(start, end, len(allLines)); hint != "" {
+		b.WriteString(hint)
+		b.WriteString("\n")
 	}
 	return b.String()
 }
 
 func (d *Dashboard) renderHelp() string {
-	return helpStyle.Render("[q]uit  [r]efresh  [tab]switch  [j/k]navigate  [1-4]jump to tab")
+	return helpStyle.Render("[q]uit  [r]efresh  [tab]switch  [j/k]navigate  [pgup/dn]page  [1-4]jump to tab")
+}
+
+func scrollWindow(total, cursor, maxVisible int) (start, end int) {
+	if total <= maxVisible {
+		return 0, total
+	}
+	if cursor > maxVisible-1 {
+		start = cursor - (maxVisible - 1)
+	}
+	end = start + maxVisible
+	if end > total {
+		end = total
+		start = end - maxVisible
+	}
+	return
+}
+
+func scrollHint(start, end, total int) string {
+	if total <= end-start {
+		return ""
+	}
+	var parts []string
+	if start > 0 {
+		parts = append(parts, fmt.Sprintf("↑ %d more", start))
+	}
+	if end < total {
+		parts = append(parts, fmt.Sprintf("↓ %d more", total-end))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(colorMuted).Render("  " + strings.Join(parts, "  "))
 }
 
 func formatConfigValue(v any) string {
@@ -574,5 +666,5 @@ func truncateRunes(s string, maxLen int) string {
 	if len(runes) <= maxLen {
 		return s
 	}
-	return string(runes[:maxLen-1]) + "\u2026"
+	return string(runes[:maxLen-1]) + "…"
 }
