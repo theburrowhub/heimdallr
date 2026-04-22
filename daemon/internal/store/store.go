@@ -62,7 +62,13 @@ CREATE TABLE IF NOT EXISTS agents (
   prompt                 TEXT NOT NULL DEFAULT '',
   instructions           TEXT NOT NULL DEFAULT '',
   cli_flags              TEXT NOT NULL DEFAULT '',
+  -- Legacy column, kept so the migration seed below can read from it on
+  -- existing DBs. No code writes to it after this release; the three
+  -- per-category flags below are the source of truth.
   is_default             INTEGER NOT NULL DEFAULT 0,
+  is_default_pr          INTEGER NOT NULL DEFAULT 0,
+  is_default_issue       INTEGER NOT NULL DEFAULT 0,
+  is_default_dev         INTEGER NOT NULL DEFAULT 0,
   created_at             DATETIME NOT NULL,
   issue_prompt           TEXT NOT NULL DEFAULT '',
   issue_instructions     TEXT NOT NULL DEFAULT '',
@@ -141,6 +147,21 @@ func Open(dsn string) (*Store, error) {
 	db.Exec("ALTER TABLE agents ADD COLUMN issue_instructions TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE agents ADD COLUMN implement_prompt TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE agents ADD COLUMN implement_instructions TEXT NOT NULL DEFAULT ''")
+	// Split the single global `is_default` flag into three per-category flags
+	// so users can activate a different prompt for PR review, issue triage,
+	// and auto-implement independently. On existing DBs, seed all three from
+	// the legacy flag the first time the new columns appear — that preserves
+	// current user-visible behaviour (whichever agent was active keeps driving
+	// all three pipelines until the user re-activates per category).
+	if _, err := db.Exec("ALTER TABLE agents ADD COLUMN is_default_pr INTEGER NOT NULL DEFAULT 0"); err == nil {
+		db.Exec("UPDATE agents SET is_default_pr = is_default")
+	}
+	if _, err := db.Exec("ALTER TABLE agents ADD COLUMN is_default_issue INTEGER NOT NULL DEFAULT 0"); err == nil {
+		db.Exec("UPDATE agents SET is_default_issue = is_default")
+	}
+	if _, err := db.Exec("ALTER TABLE agents ADD COLUMN is_default_dev INTEGER NOT NULL DEFAULT 0"); err == nil {
+		db.Exec("UPDATE agents SET is_default_dev = is_default")
+	}
 	return &Store{db: db}, nil
 }
 

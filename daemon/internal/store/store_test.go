@@ -1,6 +1,8 @@
 package store_test
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -255,5 +257,173 @@ func TestStore_AgentImplementFieldsRoundTrip(t *testing.T) {
 	}
 	if got[0].ImplementInstructions != in.ImplementInstructions {
 		t.Errorf("ImplementInstructions = %q, want %q", got[0].ImplementInstructions, in.ImplementInstructions)
+	}
+}
+
+// Activating an agent for one category MUST NOT touch the active flags of
+// the other two — this is the whole point of splitting the single is_default
+// into three per-category flags.
+func TestStore_UpsertAgent_ActivationIsPerCategory(t *testing.T) {
+	s := newTestStore(t)
+
+	// Seed a PR-review-active agent and an issue-triage-active agent.
+	if err := s.UpsertAgent(&store.Agent{ID: "a", Name: "A", IsDefaultPR: true}); err != nil {
+		t.Fatalf("upsert a: %v", err)
+	}
+	if err := s.UpsertAgent(&store.Agent{ID: "b", Name: "B", IsDefaultIssue: true}); err != nil {
+		t.Fatalf("upsert b: %v", err)
+	}
+
+	// Activate a new dev-only agent. Neither A (PR) nor B (issue) should flip.
+	if err := s.UpsertAgent(&store.Agent{ID: "c", Name: "C", IsDefaultDev: true}); err != nil {
+		t.Fatalf("upsert c: %v", err)
+	}
+
+	byID := map[string]*store.Agent{}
+	agents, err := s.ListAgents()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, a := range agents {
+		byID[a.ID] = a
+	}
+	if !byID["a"].IsDefaultPR || byID["a"].IsDefaultIssue || byID["a"].IsDefaultDev {
+		t.Errorf("agent a: got (pr=%v issue=%v dev=%v), want (true false false)",
+			byID["a"].IsDefaultPR, byID["a"].IsDefaultIssue, byID["a"].IsDefaultDev)
+	}
+	if byID["b"].IsDefaultPR || !byID["b"].IsDefaultIssue || byID["b"].IsDefaultDev {
+		t.Errorf("agent b: got (pr=%v issue=%v dev=%v), want (false true false)",
+			byID["b"].IsDefaultPR, byID["b"].IsDefaultIssue, byID["b"].IsDefaultDev)
+	}
+	if byID["c"].IsDefaultPR || byID["c"].IsDefaultIssue || !byID["c"].IsDefaultDev {
+		t.Errorf("agent c: got (pr=%v issue=%v dev=%v), want (false false true)",
+			byID["c"].IsDefaultPR, byID["c"].IsDefaultIssue, byID["c"].IsDefaultDev)
+	}
+}
+
+// Activating a second agent for the SAME category must demote the first.
+func TestStore_UpsertAgent_ActivationReplacesWithinCategory(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.UpsertAgent(&store.Agent{ID: "old", Name: "old", IsDefaultPR: true}); err != nil {
+		t.Fatalf("upsert old: %v", err)
+	}
+	if err := s.UpsertAgent(&store.Agent{ID: "new", Name: "new", IsDefaultPR: true}); err != nil {
+		t.Fatalf("upsert new: %v", err)
+	}
+
+	agents, err := s.ListAgents()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	active := 0
+	for _, a := range agents {
+		if a.IsDefaultPR {
+			active++
+			if a.ID != "new" {
+				t.Errorf("expected `new` to be active, got %q", a.ID)
+			}
+		}
+	}
+	if active != 1 {
+		t.Errorf("want exactly 1 IsDefaultPR agent, got %d", active)
+	}
+}
+
+// Legacy rows with the old single `is_default=1` flag must seed all three
+// per-category flags the first time the new code opens the DB — otherwise
+// an upgrade would silently deactivate the user's only active agent.
+func TestStore_Migration_SeedsPerCategoryFlagsFromLegacyIsDefault(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+
+	// Simulate the old schema: CREATE TABLE without the per-category
+	// columns, then INSERT a row where only the legacy `is_default` is on.
+	legacy, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy: %v", err)
+	}
+	if _, err := legacy.Exec(`
+		CREATE TABLE agents (
+			id                     TEXT PRIMARY KEY,
+			name                   TEXT NOT NULL,
+			cli                    TEXT NOT NULL DEFAULT 'claude',
+			prompt                 TEXT NOT NULL DEFAULT '',
+			instructions           TEXT NOT NULL DEFAULT '',
+			cli_flags              TEXT NOT NULL DEFAULT '',
+			is_default             INTEGER NOT NULL DEFAULT 0,
+			created_at             DATETIME NOT NULL,
+			issue_prompt           TEXT NOT NULL DEFAULT '',
+			issue_instructions     TEXT NOT NULL DEFAULT '',
+			implement_prompt       TEXT NOT NULL DEFAULT '',
+			implement_instructions TEXT NOT NULL DEFAULT ''
+		)
+	`); err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	if _, err := legacy.Exec(
+		`INSERT INTO agents (id, name, is_default, created_at) VALUES ('legacy', 'L', 1, ?)`,
+		time.Now().UTC().Format(time.RFC3339),
+	); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	// Also insert a non-active legacy row to verify it doesn't get activated.
+	if _, err := legacy.Exec(
+		`INSERT INTO agents (id, name, is_default, created_at) VALUES ('other', 'O', 0, ?)`,
+		time.Now().UTC().Format(time.RFC3339),
+	); err != nil {
+		t.Fatalf("insert other row: %v", err)
+	}
+	legacy.Close()
+
+	// Re-open with the current migration code — ALTER TABLE adds the three
+	// new columns and seeds each from `is_default`.
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	agents, err := s.ListAgents()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	byID := map[string]*store.Agent{}
+	for _, a := range agents {
+		byID[a.ID] = a
+	}
+
+	if !byID["legacy"].IsDefaultPR || !byID["legacy"].IsDefaultIssue || !byID["legacy"].IsDefaultDev {
+		t.Errorf("legacy agent: got (pr=%v issue=%v dev=%v), want (true true true) after seed",
+			byID["legacy"].IsDefaultPR, byID["legacy"].IsDefaultIssue, byID["legacy"].IsDefaultDev)
+	}
+	if byID["other"].IsDefaultPR || byID["other"].IsDefaultIssue || byID["other"].IsDefaultDev {
+		t.Errorf("other agent: got (pr=%v issue=%v dev=%v), want all false (was legacy is_default=0)",
+			byID["other"].IsDefaultPR, byID["other"].IsDefaultIssue, byID["other"].IsDefaultDev)
+	}
+}
+
+// DefaultAgentFor returns the agent active for the requested category and
+// ignores agents active in a different category.
+func TestStore_DefaultAgentFor_ReturnsPerCategoryAgent(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.UpsertAgent(&store.Agent{ID: "pr-only", Name: "pr", IsDefaultPR: true}); err != nil {
+		t.Fatalf("upsert pr-only: %v", err)
+	}
+	if err := s.UpsertAgent(&store.Agent{ID: "issue-only", Name: "issue", IsDefaultIssue: true}); err != nil {
+		t.Fatalf("upsert issue-only: %v", err)
+	}
+
+	got, err := s.DefaultAgentFor(store.AgentCategoryPR)
+	if err != nil || got == nil || got.ID != "pr-only" {
+		t.Errorf("DefaultAgentFor(pr) = %+v, err=%v; want pr-only", got, err)
+	}
+	got, err = s.DefaultAgentFor(store.AgentCategoryIssue)
+	if err != nil || got == nil || got.ID != "issue-only" {
+		t.Errorf("DefaultAgentFor(issue) = %+v, err=%v; want issue-only", got, err)
+	}
+	// No agent is dev-default — should return an error (ErrNoRows), not one
+	// of the other two.
+	if got, err := s.DefaultAgentFor(store.AgentCategoryDev); err == nil {
+		t.Errorf("DefaultAgentFor(dev) = %+v, want error for no-match", got)
 	}
 }

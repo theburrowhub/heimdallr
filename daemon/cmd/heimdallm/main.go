@@ -1406,14 +1406,15 @@ func loadOrCreateAPIToken(dir string) (string, error) {
 //
 //  1. repoPromptID — repo-level override (from [ai.repos."org/repo"] *_prompt)
 //  2. agentPromptID — agent-level override (from [ai.agents.<cli>] prompt)
-//  3. global default agent (is_default = true)
+//  3. global default agent for `category` (is_default_<category> = true)
 //
-// Returns nil when nothing matches (or when ListAgents errors — the caller
-// should treat this as "use the built-in default template"). Each resolver
-// above this function then reads its own field pair from the returned Agent,
-// so adding a third prompt type is a 4-line wrapper rather than a copied
-// 30-line loop.
-func resolveAgentByPriority(s *store.Store, repoPromptID, agentPromptID string) *store.Agent {
+// The category parameter selects which of the three per-category global-
+// default flags to filter on. Returns nil when nothing matches (or when
+// ListAgents errors — the caller should treat this as "use the built-in
+// default template"). Each resolver above this function then reads its
+// own field pair from the returned Agent, so adding a third prompt type
+// is a 4-line wrapper rather than a copied 30-line loop.
+func resolveAgentByPriority(s *store.Store, category store.AgentCategory, repoPromptID, agentPromptID string) *store.Agent {
 	agents, err := s.ListAgents()
 	if err != nil || len(agents) == 0 {
 		return nil
@@ -1435,10 +1436,21 @@ func resolveAgentByPriority(s *store.Store, repoPromptID, agentPromptID string) 
 			}
 		}
 	}
-	// 3. Global default
+	// 3. Global default for the requested category
 	for _, ag := range agents {
-		if ag.IsDefault {
-			return ag
+		switch category {
+		case store.AgentCategoryPR:
+			if ag.IsDefaultPR {
+				return ag
+			}
+		case store.AgentCategoryIssue:
+			if ag.IsDefaultIssue {
+				return ag
+			}
+		case store.AgentCategoryDev:
+			if ag.IsDefaultDev {
+				return ag
+			}
 		}
 	}
 	return nil
@@ -1449,7 +1461,7 @@ func resolveAgentByPriority(s *store.Store, repoPromptID, agentPromptID string) 
 // IssuePrompt takes precedence over IssueInstructions (same as Prompt vs
 // Instructions for PR reviews). Both empty = use built-in default template.
 func resolveIssuePrompt(s *store.Store, repoPromptID, agentPromptID string) (string, string) {
-	a := resolveAgentByPriority(s, repoPromptID, agentPromptID)
+	a := resolveAgentByPriority(s, store.AgentCategoryIssue, repoPromptID, agentPromptID)
 	if a == nil {
 		return "", ""
 	}
@@ -1464,7 +1476,7 @@ func resolveIssuePrompt(s *store.Store, repoPromptID, agentPromptID string) (str
 // resolveIssuePrompt; ImplementPrompt takes precedence over
 // ImplementInstructions. Both empty = use built-in default template.
 func resolveImplementPrompt(s *store.Store, repoPromptID, agentPromptID string) (string, string) {
-	a := resolveAgentByPriority(s, repoPromptID, agentPromptID)
+	a := resolveAgentByPriority(s, store.AgentCategoryDev, repoPromptID, agentPromptID)
 	if a == nil {
 		return "", ""
 	}

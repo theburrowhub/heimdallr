@@ -90,21 +90,78 @@ void main() {
           reason: 'PR Review tab missing "${preset.name}"');
     }
 
-    // Switch to Issue Triage and assert its 5 presets render
-    await tester.tap(find.text('Issue Triage'));
+    // Switch to Issue Triage and assert its 5 presets render. Tap the Tab
+    // widget specifically — plain find.text('Issue Triage') is ambiguous
+    // now that the active banner shows the same label.
+    await tester.tap(find.widgetWithText(Tab, 'Issue Triage'));
     await tester.pumpAndSettle();
     for (final preset in ReviewPrompt.issueTriagePresets) {
       expect(find.text(preset.name), findsOneWidget,
           reason: 'Issue Triage tab missing "${preset.name}"');
     }
 
-    // Switch to Development and assert its 5 presets render
-    await tester.tap(find.text('Development'));
+    // Switch to Development and assert its 5 presets render.
+    await tester.tap(find.widgetWithText(Tab, 'Development'));
     await tester.pumpAndSettle();
     for (final preset in ReviewPrompt.developmentPresets) {
       expect(find.text(preset.name), findsOneWidget,
           reason: 'Development tab missing "${preset.name}"');
     }
+  });
+
+  group('per-category activation', () {
+    test('withActive flips only the targeted flag', () {
+      const p = ReviewPrompt(id: 'x', name: 'X',
+          instructions: 'pr', issueInstructions: 'issue', implementInstructions: 'dev');
+      final pr = p.withActive(PromptCategory.prReview, true);
+      expect(pr.isDefaultPr, isTrue);
+      expect(pr.isDefaultIssue, isFalse);
+      expect(pr.isDefaultDev, isFalse);
+
+      final both = pr.withActive(PromptCategory.development, true);
+      expect(both.isDefaultPr, isTrue, reason: 'PR flag preserved');
+      expect(both.isDefaultDev, isTrue);
+      expect(both.isDefaultIssue, isFalse);
+    });
+
+    test('toJson emits per-category flags and no legacy is_default', () {
+      const p = ReviewPrompt(id: 'x', name: 'X',
+          isDefaultPr: true, isDefaultDev: true,
+          instructions: 'pr', implementInstructions: 'dev');
+      final json = p.toJson();
+      expect(json['is_default_pr'], isTrue);
+      expect(json['is_default_issue'], isFalse);
+      expect(json['is_default_dev'], isTrue);
+      expect(json.containsKey('is_default'), isFalse,
+          reason: 'legacy key must not be emitted');
+    });
+
+    test('fromJson seeds all three flags from legacy is_default', () {
+      final json = {
+        'id': 'x', 'name': 'X',
+        'is_default': true,
+        'instructions': 'pr',
+      };
+      final p = ReviewPrompt.fromJson(json);
+      expect(p.isDefaultPr, isTrue);
+      expect(p.isDefaultIssue, isTrue);
+      expect(p.isDefaultDev, isTrue);
+    });
+
+    test('fromJson prefers per-category flags over legacy is_default', () {
+      final json = {
+        'id': 'x', 'name': 'X',
+        'is_default': true,
+        'is_default_pr': false,
+        'is_default_issue': true,
+        'is_default_dev': false,
+        'instructions': 'pr',
+      };
+      final p = ReviewPrompt.fromJson(json);
+      expect(p.isDefaultPr, isFalse);
+      expect(p.isDefaultIssue, isTrue);
+      expect(p.isDefaultDev, isFalse);
+    });
   });
 }
 
