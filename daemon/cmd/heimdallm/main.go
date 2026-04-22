@@ -203,9 +203,18 @@ func main() {
 		if cli == "" {
 			cli = cfg.AI.Primary
 		}
+		// Resolve botLogin once using cached value
+		loginMu.Lock()
+		botLogin := cachedLogin
+		loginMu.Unlock()
+
 		cfgMu.Lock()
 		agentCfg := cfg.AgentConfigFor(cli)
 		globalTimeout := cfg.AI.ExecutionTimeout
+		// Convert config.ResolvedReviewGuards to pipeline.GateConfig via same-shape cast.
+		// config cannot import pipeline (import cycle), so the helper returns a shadow
+		// type that callers cast here.
+		guards := pipeline.GateConfig(cfg.ReviewGuards(botLogin))
 		cfgMu.Unlock()
 		extraFlags := agentCfg.ExtraFlags
 		if extraFlags != "" {
@@ -233,6 +242,7 @@ func main() {
 				NoSessionPersistence: agentCfg.NoSessionPersistence,
 				Timeout:              resolveExecutionTimeout(globalTimeout, agentCfg.ExecutionTimeout),
 			},
+			Guards: guards,
 		}
 	}
 
