@@ -722,6 +722,98 @@ func main() {
 		return nil
 	})
 
+	// Wire the promote callback: runs the auto_implement pipeline for a review_only issue,
+	// effectively reclassifying it to develop from the UI without needing a GitHub label change.
+	srv.SetTriggerPromoteFn(func(issueID int64) error {
+		publishIssueErr := func(msg string) {
+			broker.Publish(sse.Event{
+				Type: sse.EventIssueReviewError,
+				Data: sseData(map[string]any{"issue_id": issueID, "error": msg}),
+			})
+		}
+
+		iss, err := s.GetIssue(issueID)
+		if err != nil {
+			publishIssueErr(fmt.Sprintf("Issue not found: %v", err))
+			return fmt.Errorf("promote issue: get issue %d: %w", issueID, err)
+		}
+
+		cfgMu.Lock()
+		aiCfg := cfg.AIForRepo(iss.Repo)
+		if aiCfg.Primary == "" {
+			aiCfg.Primary = cfg.AI.Primary
+		}
+		agentCfg := cfg.AgentConfigFor(aiCfg.Primary)
+		localDirBase := cfg.GitHub.LocalDirBase
+		globalTimeout := cfg.AI.ExecutionTimeout
+		cfgMu.Unlock()
+		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, iss.Repo, localDirBase)
+
+		// Reconstruct github.Issue from store data and force develop mode.
+		ghIssue := &gh.Issue{
+			ID:      iss.GithubID,
+			Number:  iss.Number,
+			Title:   iss.Title,
+			Body:    iss.Body,
+			State:   iss.State,
+			Repo:    iss.Repo,
+			HTMLURL: fmt.Sprintf("https://github.com/%s/issues/%d", iss.Repo, iss.Number),
+		}
+		ghIssue.User.Login = iss.Author
+		ghIssue.Mode = config.IssueModeDevelop // promote: always run auto_implement
+
+		extraFlags := agentCfg.ExtraFlags
+		if extraFlags != "" {
+			if err := executor.ValidateExtraFlags(extraFlags); err != nil {
+				slog.Warn("promoteIssue: extra_flags rejected", "err", err)
+				extraFlags = ""
+			}
+		}
+
+		issuePrompt, issueInstructions := resolveIssuePrompt(s, aiCfg.IssuePrompt, agentCfg.PromptID)
+		implPrompt, implInstructions := resolveImplementPrompt(s, aiCfg.ImplementPrompt, agentCfg.PromptID)
+
+		opts := issuepipeline.RunOptions{
+			GitHubToken: token,
+			Primary:     aiCfg.Primary,
+			Fallback:    aiCfg.Fallback,
+			ExecOpts: executor.ExecOptions{
+				Model:                agentCfg.Model,
+				MaxTurns:             agentCfg.MaxTurns,
+				ApprovalMode:         agentCfg.ApprovalMode,
+				ExtraFlags:           extraFlags,
+				WorkDir:              aiCfg.LocalDir,
+				Effort:               agentCfg.Effort,
+				PermissionMode:       agentCfg.PermissionMode,
+				Bare:                 agentCfg.Bare,
+				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
+				NoSessionPersistence: agentCfg.NoSessionPersistence,
+				Timeout:              resolveExecutionTimeout(globalTimeout, agentCfg.ExecutionTimeout),
+			},
+			IssuePromptOverride:     issuePrompt,
+			IssueInstructions:       issueInstructions,
+			ImplementPromptOverride: implPrompt,
+			ImplementInstructions:   implInstructions,
+			PRReviewers:           aiCfg.PRReviewers,
+			PRAssignee:            aiCfg.PRAssignee,
+			PRLabels:              aiCfg.PRLabels,
+			PRDraft:               aiCfg.PRDraft != nil && *aiCfg.PRDraft,
+			GeneratePRDescription: aiCfg.GeneratePRDescription != nil && *aiCfg.GeneratePRDescription,
+		}
+
+		slog.Info("promote issue: running auto_implement pipeline",
+			"store_issue_id", issueID, "repo", iss.Repo, "number", iss.Number)
+
+		_, err = issuePipe.Run(context.Background(), ghIssue, opts)
+		if err != nil {
+			broker.Publish(sse.Event{Type: sse.EventIssueReviewError, Data: sseData(map[string]any{
+				"issue_id": issueID, "repo": iss.Repo, "error": err.Error(),
+			})})
+			return err
+		}
+		return nil
+	})
+
 	go func() {
 		slog.Info("daemon started", "port", cfg.Server.Port, "bind", cfg.Server.BindAddr)
 		if err := srv.Start(cfg.Server.Port, cfg.Server.BindAddr); err != nil {

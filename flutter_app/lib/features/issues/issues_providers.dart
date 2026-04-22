@@ -8,6 +8,9 @@ final issueListRefreshProvider = StateProvider<int>((ref) => 0);
 /// Tracks issues currently being reviewed, keyed by "repo:issueNumber".
 final reviewingIssuesProvider = StateProvider<Set<String>>((ref) => const {});
 
+/// Tracks issues currently being promoted to develop, keyed by "repo:issueNumber".
+final promotingIssuesProvider = StateProvider<Set<String>>((ref) => const {});
+
 final issuesProvider = FutureProvider<List<TrackedIssue>>((ref) async {
   ref.watch(issueListRefreshProvider);
   final api = ref.watch(apiClientProvider);

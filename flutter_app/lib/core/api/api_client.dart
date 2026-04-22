@@ -285,6 +285,16 @@ class ApiClient {
     }
   }
 
+  /// Promotes a review_only-classified issue to auto_implement, triggering the
+  /// full develop pipeline without requiring a GitHub label change.
+  Future<void> promoteIssue(int issueId) async {
+    final resp = await _client.post(_uri('/issues/$issueId/promote'),
+        headers: await _authHeaders());
+    if (resp.statusCode != 202) {
+      throw ApiException('POST /issues/$issueId/promote failed: ${resp.statusCode}');
+    }
+  }
+
   Future<void> dismissIssue(int issueId) async {
     final resp = await _client.post(_uri('/issues/$issueId/dismiss'),
         headers: await _authHeaders());

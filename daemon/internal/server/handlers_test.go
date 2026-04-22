@@ -472,6 +472,60 @@ func TestHandlerTriggerIssueReview_NotConfigured(t *testing.T) {
 	}
 }
 
+func TestHandlerPromoteIssue(t *testing.T) {
+	srv, s := setupServer(t)
+	now := time.Now()
+	id, _ := s.UpsertIssue(&store.Issue{
+		GithubID: 800, Repo: "org/r", Number: 20, Title: "t",
+		Body: "b", Author: "a", Assignees: `[]`, Labels: `[]`,
+		State: "open", CreatedAt: now, FetchedAt: now,
+	})
+
+	promoted := make(chan int64, 1)
+	srv.SetTriggerPromoteFn(func(issueID int64) error {
+		promoted <- issueID
+		return nil
+	})
+
+	req := httptest.NewRequest("POST", "/issues/"+itoa(id)+"/promote", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("promote issue: status %d, body: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	json.NewDecoder(w.Body).Decode(&body)
+	if body["status"] != "promote queued" {
+		t.Errorf("promote issue: unexpected body %v", body)
+	}
+
+	select {
+	case got := <-promoted:
+		if got != id {
+			t.Errorf("promoted with issue_id %d, expected %d", got, id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("promote callback not called within 2s")
+	}
+}
+
+func TestHandlerPromoteIssue_NotConfigured(t *testing.T) {
+	srv, s := setupServer(t)
+	now := time.Now()
+	id, _ := s.UpsertIssue(&store.Issue{
+		GithubID: 801, Repo: "org/r", Number: 21, Title: "t",
+		Body: "b", Author: "a", Assignees: `[]`, Labels: `[]`,
+		State: "open", CreatedAt: now, FetchedAt: now,
+	})
+
+	req := httptest.NewRequest("POST", "/issues/"+itoa(id)+"/promote", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when promote not configured, got %d", w.Code)
+	}
+}
+
 func TestIssueEndpointsRequireAuthWhenTokenSet(t *testing.T) {
 	s, err := store.Open(":memory:")
 	if err != nil {
@@ -513,6 +567,7 @@ func TestIssueEndpointsRequireAuthWhenTokenSet(t *testing.T) {
 	// POST endpoints — protected via method-based auth (all POST requires token)
 	postPaths := []string{
 		"/issues/" + issueID + "/review",
+		"/issues/" + issueID + "/promote",
 		"/issues/" + issueID + "/dismiss",
 		"/issues/" + issueID + "/undismiss",
 	}

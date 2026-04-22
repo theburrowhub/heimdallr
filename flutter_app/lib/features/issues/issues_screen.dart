@@ -7,6 +7,8 @@ import '../../shared/widgets/toast.dart';
 import '../dashboard/dashboard_providers.dart';
 import 'issues_providers.dart';
 
+const _actionReviewOnly = 'review_only';
+
 /// Filter state for the issues list.
 final _repoFilterProvider = StateProvider<String?>((ref) => null);
 
@@ -108,6 +110,18 @@ class _IssueTileState extends ConsumerState<_IssueTile> {
     }
   }
 
+  Future<void> _promote() async {
+    ref.read(promotingIssuesProvider.notifier).update((s) => {...s, _reviewKey});
+    try {
+      await ref.read(apiClientProvider).promoteIssue(widget.issue.id);
+      if (mounted) showToast(context, 'Promoted to Develop — pipeline queued');
+    } catch (e) {
+      if (mounted) showToast(context, 'Error: $e', isError: true);
+    } finally {
+      ref.read(promotingIssuesProvider.notifier).update((s) => s.difference({_reviewKey}));
+    }
+  }
+
   Future<void> _dismiss() async {
     final api = ref.read(apiClientProvider);
     try {
@@ -137,7 +151,14 @@ class _IssueTileState extends ConsumerState<_IssueTile> {
     final issue = widget.issue;
     final reviewed = issue.latestReview != null;
     final isReviewing = ref.watch(reviewingIssuesProvider).contains(_reviewKey);
+    final isPromoting = ref.watch(promotingIssuesProvider).contains(_reviewKey);
     final severity = issue.latestReview?.severity ?? '';
+    // Show "Promote to Develop" only when the latest review action was review_only
+    // and not currently running either pipeline on this issue.
+    final canPromote = reviewed &&
+        issue.latestReview!.actionTaken == _actionReviewOnly &&
+        !isReviewing &&
+        !isPromoting;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
@@ -200,12 +221,14 @@ class _IssueTileState extends ConsumerState<_IssueTile> {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (isReviewing)
+                  if (isReviewing || isPromoting)
                     SizedBox(
                       width: 18, height: 18,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: Theme.of(context).colorScheme.primary,
+                        color: isPromoting
+                            ? Theme.of(context).colorScheme.secondary
+                            : Theme.of(context).colorScheme.primary,
                       ),
                     )
                   else if (reviewed)
@@ -213,7 +236,7 @@ class _IssueTileState extends ConsumerState<_IssueTile> {
                   else
                     _chip('PENDING', Colors.grey.shade700),
                   const SizedBox(width: 8),
-                  if (!isReviewing)
+                  if (!isReviewing && !isPromoting) ...[
                     SizedBox(
                       height: 28,
                       child: ElevatedButton(
@@ -224,6 +247,22 @@ class _IssueTileState extends ConsumerState<_IssueTile> {
                         child: const Text('Review'),
                       ),
                     ),
+                    if (canPromote) ...[
+                      const SizedBox(width: 6),
+                      SizedBox(
+                        height: 28,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              textStyle: const TextStyle(fontSize: 12),
+                              backgroundColor: Theme.of(context).colorScheme.secondary,
+                              foregroundColor: Theme.of(context).colorScheme.onSecondary),
+                          onPressed: _promote,
+                          child: const Text('Promote to Dev'),
+                        ),
+                      ),
+                    ],
+                  ],
                   IconButton(
                     icon: const Icon(Icons.close, size: 14),
                     tooltip: 'Dismiss issue',

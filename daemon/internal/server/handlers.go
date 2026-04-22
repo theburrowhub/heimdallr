@@ -37,6 +37,7 @@ type Server struct {
 	reloadFn        func() error
 	triggerReviewFn      func(prID int64) error
 	triggerIssueReviewFn func(issueID int64) error
+	triggerPromoteFn     func(issueID int64) error
 	meFn                 func() (string, error)
 	// configFn returns the current running config as a JSON-serializable map.
 	configFn func() map[string]any
@@ -148,6 +149,13 @@ func (srv *Server) SetTriggerIssueReviewFn(fn func(issueID int64) error) {
 	srv.triggerIssueReviewFn = fn
 }
 
+// SetTriggerPromoteFn wires the promote callback called by POST /issues/{id}/promote.
+// The callback must run the auto_implement pipeline for the given issue regardless
+// of its current classification (review_only → develop promotion).
+func (srv *Server) SetTriggerPromoteFn(fn func(issueID int64) error) {
+	srv.triggerPromoteFn = fn
+}
+
 // SetMeFn wires the authenticated-user callback called by GET /me.
 func (srv *Server) SetMeFn(fn func() (string, error)) { srv.meFn = fn }
 
@@ -234,6 +242,7 @@ func (srv *Server) buildRouter() chi.Router {
 	r.Get("/issues", srv.handleListIssues)
 	r.Get("/issues/{id}", srv.handleGetIssue)
 	r.Post("/issues/{id}/review", srv.handleTriggerIssueReview)
+	r.Post("/issues/{id}/promote", srv.handlePromoteIssue)
 	r.Post("/issues/{id}/dismiss", srv.handleDismissIssue)
 	r.Post("/issues/{id}/undismiss", srv.handleUndismissIssue)
 	r.Get("/repos/{name}/labels", srv.handleRepoLabels)
@@ -921,6 +930,35 @@ func (srv *Server) handleTriggerIssueReview(w http.ResponseWriter, r *http.Reque
 		}
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "review queued"})
+}
+
+// handlePromoteIssue promotes a review_only-classified issue to auto_implement,
+// triggering the full develop pipeline immediately without waiting for a label
+// change on GitHub. It shares the same semaphore as review and triage so total
+// concurrent AI processes stay bounded.
+func (srv *Server) handlePromoteIssue(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if srv.triggerPromoteFn == nil {
+		http.Error(w, "promote trigger not configured", http.StatusServiceUnavailable)
+		return
+	}
+	select {
+	case srv.reviewSem <- struct{}{}:
+	default:
+		http.Error(w, `{"error":"too many concurrent reviews — try again later"}`, http.StatusTooManyRequests)
+		return
+	}
+	go func() {
+		defer func() { <-srv.reviewSem }()
+		if err := srv.triggerPromoteFn(id); err != nil {
+			slog.Error("promote issue failed", "issue_id", id, "err", err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "promote queued"})
 }
 
 func (srv *Server) handleRepoLabels(w http.ResponseWriter, r *http.Request) {
