@@ -19,9 +19,10 @@ const (
 	tabPRs
 	tabIssues
 	tabConfig
+	tabLogs
 )
 
-var tabNames = []string{"Activity", "PRs", "Issues", "Config"}
+var tabNames = []string{"Activity", "PRs", "Issues", "Config", "Logs"}
 
 type Dashboard struct {
 	client *api.Client
@@ -36,6 +37,11 @@ type Dashboard struct {
 	config   map[string]any
 	stats    *api.Stats
 	activity []activityLine
+
+	logLines  []logLine
+	logFollow bool
+	logOffset int
+	logSeeded bool
 
 	err       error
 	connected bool
@@ -67,6 +73,7 @@ func NewDashboard(host, token string) *Dashboard {
 		client:    api.New(host, token),
 		startTime: time.Now(),
 		sseEvents: make(chan api.SSEEvent, 32),
+		logFollow: true,
 	}
 }
 
@@ -178,6 +185,14 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						Info:  fmt.Sprintf("%s #%d", e.Repo, e.ItemNumber),
 					})
 				}
+				if !d.logSeeded {
+					entries := msg.activity.Entries
+					d.logLines = make([]logLine, 0, len(entries))
+					for i := len(entries) - 1; i >= 0; i-- {
+						d.logLines = append(d.logLines, activityToLogLine(entries[i]))
+					}
+					d.logSeeded = true
+				}
 			}
 		}
 		return d, nil
@@ -191,6 +206,17 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.activity = append([]activityLine{line}, d.activity...)
 		if len(d.activity) > 100 {
 			d.activity = d.activity[:100]
+		}
+		d.logLines = append(d.logLines, sseToLogLine(api.SSEEvent(msg)))
+		if len(d.logLines) > 1000 {
+			excess := len(d.logLines) - 1000
+			d.logLines = d.logLines[excess:]
+			if !d.logFollow {
+				d.logOffset -= excess
+				if d.logOffset < 0 {
+					d.logOffset = 0
+				}
+			}
 		}
 		return d, d.listenSSE()
 	}
@@ -212,11 +238,23 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		d.activeTab = (d.activeTab - 1 + tab(len(tabNames))) % tab(len(tabNames))
 		d.cursor = 0
 	case "j", "down":
-		d.cursor++
-		d.clampCursor()
+		if d.activeTab == tabLogs {
+			d.scrollLogsDown()
+		} else {
+			d.cursor++
+			d.clampCursor()
+		}
 	case "k", "up":
-		if d.cursor > 0 {
-			d.cursor--
+		if d.activeTab == tabLogs {
+			d.scrollLogsUp()
+		} else {
+			if d.cursor > 0 {
+				d.cursor--
+			}
+		}
+	case "G":
+		if d.activeTab == tabLogs {
+			d.logFollow = true
 		}
 	case "r":
 		return d, d.fetchData
@@ -232,6 +270,9 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "4":
 		d.activeTab = tabConfig
 		d.cursor = 0
+	case "5":
+		d.activeTab = tabLogs
+		d.cursor = 0
 	}
 	return d, nil
 }
@@ -245,6 +286,8 @@ func (d *Dashboard) clampCursor() {
 		max = len(d.prs)
 	case tabIssues:
 		max = len(d.issues)
+	case tabLogs:
+		return // logs tab uses logOffset/logFollow, not cursor
 	}
 	if max > 0 && d.cursor >= max {
 		d.cursor = max - 1
@@ -346,6 +389,8 @@ func (d *Dashboard) renderContent(height int) string {
 		return d.renderIssues(height)
 	case tabConfig:
 		return d.renderConfig(height)
+	case tabLogs:
+		return d.renderLogs(height)
 	}
 	return ""
 }
@@ -497,7 +542,7 @@ func (d *Dashboard) renderConfig(height int) string {
 }
 
 func (d *Dashboard) renderHelp() string {
-	return helpStyle.Render("[q]uit  [r]efresh  [tab]switch  [j/k]navigate  [1-4]jump to tab")
+	return helpStyle.Render("[q]uit  [r]efresh  [tab]switch  [j/k]scroll  [1-5]jump to tab  [G]follow")
 }
 
 func formatConfigValue(v any) string {
