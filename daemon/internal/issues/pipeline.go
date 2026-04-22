@@ -303,6 +303,16 @@ func (p *Pipeline) runReviewOnly(ctx context.Context, issue *github.Issue, issue
 		)
 	}
 
+	// Filter out the bot's own comments so the LLM doesn't see its own
+	// previous output as "discussion" (confuses re-triage context).
+	var humanComments []github.Comment
+	for _, c := range comments {
+		if p.botLogin != "" && strings.EqualFold(c.Author, p.botLogin) {
+			continue
+		}
+		humanComments = append(humanComments, c)
+	}
+
 	// Build prompt + run the CLI. HasLocalDir mirrors workDir above so the
 	// LLM hears the same story as the mode-selection logic.
 	// Agent profile customization: IssuePromptOverride replaces the entire
@@ -315,7 +325,7 @@ func (p *Pipeline) runReviewOnly(ctx context.Context, issue *github.Issue, issue
 		Labels:        issue.LabelNames(),
 		Assignees:     issue.AssigneeLogins(),
 		Body:          issue.Body,
-		Comments:      comments,
+		Comments:      humanComments,
 		HasLocalDir:   workDir != "",
 		TriageContext: triageCtx,
 	}
