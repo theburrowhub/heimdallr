@@ -24,6 +24,7 @@ type Tier2PR struct {
 	HTMLURL   string
 	Author    string
 	State     string
+	Draft     bool
 	UpdatedAt time.Time
 }
 

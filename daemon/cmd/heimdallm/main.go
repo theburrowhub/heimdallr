@@ -1192,6 +1192,7 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 			HTMLURL:   pr.HTMLURL,
 			Author:    pr.User.Login,
 			State:     pr.State,
+			Draft:     pr.Draft,
 			UpdatedAt: pr.UpdatedAt,
 		})
 	}
@@ -1219,6 +1220,7 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 		HTMLURL:   pr.HTMLURL,
 		User:      gh.User{Login: pr.Author},
 		State:     pr.State,
+		Draft:     pr.Draft,
 		UpdatedAt: pr.UpdatedAt,
 	}
 	a.runReview(ghPR, aiCfg)
