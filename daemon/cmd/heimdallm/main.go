@@ -783,79 +783,37 @@ func main() {
 			return fmt.Errorf("promote issue: get issue %d: %w", issueID, err)
 		}
 
+		// Read the issue tracking config to know which labels to add/remove.
 		cfgMu.Lock()
-		aiCfg := cfg.AIForRepo(iss.Repo)
-		if aiCfg.Primary == "" {
-			aiCfg.Primary = cfg.AI.Primary
-		}
-		agentCfg := cfg.AgentConfigFor(aiCfg.Primary)
-		localDirBase := cfg.GitHub.LocalDirBase
-		globalTimeout := cfg.AI.ExecutionTimeout
+		it := cfg.GitHub.IssueTracking
 		cfgMu.Unlock()
-		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, iss.Repo, localDirBase)
 
-		// Reconstruct github.Issue from store data and force develop mode.
-		ghIssue := &gh.Issue{
-			ID:      iss.GithubID,
-			Number:  iss.Number,
-			Title:   iss.Title,
-			Body:    iss.Body,
-			State:   iss.State,
-			Repo:    iss.Repo,
-			HTMLURL: fmt.Sprintf("https://github.com/%s/issues/%d", iss.Repo, iss.Number),
+		if len(it.DevelopLabels) == 0 {
+			publishIssueErr("No develop labels configured — cannot promote")
+			return fmt.Errorf("promote issue: no develop labels configured")
 		}
-		ghIssue.User.Login = iss.Author
-		ghIssue.Mode = config.IssueModeDevelop // promote: always run auto_implement
 
-		extraFlags := agentCfg.ExtraFlags
-		if extraFlags != "" {
-			if err := executor.ValidateExtraFlags(extraFlags); err != nil {
-				slog.Warn("promoteIssue: extra_flags rejected", "err", err)
-				extraFlags = ""
+		slog.Info("promote issue: updating labels on GitHub",
+			"store_issue_id", issueID, "repo", iss.Repo, "number", iss.Number,
+			"add", it.DevelopLabels[0], "remove", it.ReviewOnlyLabels)
+
+		// Add the first develop label so the polling pipeline classifies as DEV.
+		if err := ghClient.AddIssueLabel(iss.Repo, iss.Number, it.DevelopLabels[0]); err != nil {
+			publishIssueErr(fmt.Sprintf("Failed to add develop label: %v", err))
+			return fmt.Errorf("promote issue: add label: %w", err)
+		}
+
+		// Remove review_only labels so classification is unambiguous.
+		for _, label := range it.ReviewOnlyLabels {
+			if err := ghClient.RemoveIssueLabel(iss.Repo, iss.Number, label); err != nil {
+				slog.Warn("promote issue: could not remove review_only label",
+					"label", label, "repo", iss.Repo, "number", iss.Number, "err", err)
+				// Non-fatal — the develop label is already set, classification will still prefer DEV.
 			}
 		}
 
-		issuePrompt, issueInstructions := resolveIssuePrompt(s, aiCfg.IssuePrompt, agentCfg.PromptID)
-		implPrompt, implInstructions := resolveImplementPrompt(s, aiCfg.ImplementPrompt, agentCfg.PromptID)
-
-		opts := issuepipeline.RunOptions{
-			GitHubToken: token,
-			Primary:     aiCfg.Primary,
-			Fallback:    aiCfg.Fallback,
-			ExecOpts: executor.ExecOptions{
-				Model:                agentCfg.Model,
-				MaxTurns:             agentCfg.MaxTurns,
-				ApprovalMode:         agentCfg.ApprovalMode,
-				ExtraFlags:           extraFlags,
-				WorkDir:              aiCfg.LocalDir,
-				Effort:               agentCfg.Effort,
-				PermissionMode:       agentCfg.PermissionMode,
-				Bare:                 agentCfg.Bare,
-				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
-				NoSessionPersistence: agentCfg.NoSessionPersistence,
-				Timeout:              resolveExecutionTimeout(globalTimeout, agentCfg.ExecutionTimeout),
-			},
-			IssuePromptOverride:     issuePrompt,
-			IssueInstructions:       issueInstructions,
-			ImplementPromptOverride: implPrompt,
-			ImplementInstructions:   implInstructions,
-			PRReviewers:           aiCfg.PRReviewers,
-			PRAssignee:            aiCfg.PRAssignee,
-			PRLabels:              aiCfg.PRLabels,
-			PRDraft:               aiCfg.PRDraft != nil && *aiCfg.PRDraft,
-			GeneratePRDescription: aiCfg.GeneratePRDescription != nil && *aiCfg.GeneratePRDescription,
-		}
-
-		slog.Info("promote issue: running auto_implement pipeline",
+		slog.Info("promote issue: labels updated, polling will pick it up as DEV",
 			"store_issue_id", issueID, "repo", iss.Repo, "number", iss.Number)
-
-		_, err = issuePipe.Run(context.Background(), ghIssue, opts)
-		if err != nil {
-			broker.Publish(sse.Event{Type: sse.EventIssueReviewError, Data: sseData(map[string]any{
-				"issue_id": issueID, "repo": iss.Repo, "error": err.Error(),
-			})})
-			return err
-		}
 		return nil
 	})
 
@@ -1484,11 +1442,34 @@ func (a *tier2Adapter) PRAlreadyReviewed(githubID int64, updatedAt time.Time) bo
 }
 
 // CheckItem implements scheduler.Tier3ItemChecker.
+//
+// For PRs we fetch a full snapshot (state/draft/author/updated_at) via the
+// Pulls API, which lets HandleChange apply the draft and self-author guards
+// against fresh data without a second round-trip. For issues we still call
+// the Issues API (no draft concept).
+//
+// When an item has transitioned to not-open (closed/merged), persist the new
+// state to the store and emit a state-changed SSE event once (only if the
+// store previously recorded "open"), then return false so HandleChange does
+// not run. Closed items never need a review run at Tier 3.
 func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem) (bool, *scheduler.ItemSnapshot, error) {
 	if item.Type == "pr" {
 		snap, err := a.ghClient.GetPRSnapshot(item.Repo, item.Number)
 		if err != nil {
 			return false, nil, err
+		}
+		if snap.State != "open" {
+			existing, _ := a.store.GetPRByGithubID(item.GithubID)
+			wasOpen := existing != nil && existing.State == "open"
+			a.store.UpdatePRStateByGithubID(item.GithubID, "closed")
+			if wasOpen {
+				a.broker.Publish(sse.Event{
+					Type: sse.EventPRStateChanged,
+					Data: fmt.Sprintf(`{"pr_id":%d,"state":"closed"}`, item.GithubID),
+				})
+				slog.Info("tier3: PR closed/merged", "repo", item.Repo, "number", item.Number)
+			}
+			return false, nil, nil
 		}
 		if !snap.UpdatedAt.After(item.LastSeen) {
 			return false, nil, nil
@@ -1500,10 +1481,24 @@ func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem)
 			UpdatedAt: snap.UpdatedAt,
 		}, nil
 	}
-	// Issues still use the Issues API; draft is always false.
+	// Issues: GetIssue returns state + updated_at in one call. Draft is always
+	// false for issues.
 	issue, err := a.ghClient.GetIssue(item.Repo, item.Number)
 	if err != nil {
 		return false, nil, err
+	}
+	if issue.State != "open" {
+		existing, _ := a.store.GetIssueByGithubID(item.GithubID)
+		wasOpen := existing != nil && existing.State == "open"
+		a.store.UpdateIssueStateByGithubID(item.GithubID, "closed")
+		if wasOpen {
+			a.broker.Publish(sse.Event{
+				Type: sse.EventIssueStateChanged,
+				Data: fmt.Sprintf(`{"issue_id":%d,"state":"closed"}`, item.GithubID),
+			})
+			slog.Info("tier3: issue closed", "repo", item.Repo, "number", item.Number)
+		}
+		return false, nil, nil
 	}
 	if !issue.UpdatedAt.After(item.LastSeen) {
 		return false, nil, nil

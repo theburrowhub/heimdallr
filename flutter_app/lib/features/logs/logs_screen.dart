@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/sse_client.dart';
 import '../../core/platform/platform_services_provider.dart';
+import '../../shared/widgets/toast.dart';
 
 // Terminal-style colors per log level
 Color _levelColor(String line) {
@@ -102,11 +103,8 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
   Future<void> _copyAll() async {
     await Clipboard.setData(ClipboardData(text: _lines.join('\n')));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Logs copiados al portapapeles'),
-            duration: Duration(seconds: 2)),
-      );
+      showToast(context, 'Logs copiados al portapapeles',
+          duration: const Duration(seconds: 2));
     }
   }
 

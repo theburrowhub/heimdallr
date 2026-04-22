@@ -75,6 +75,12 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
           _typeChip('it', 'IT', Colors.orange, filters),
           _typeChip('dev', 'DEV', Colors.green, filters),
 
+          const SizedBox(width: 8),
+          // ── State chips ─────────────────────────────────────────────
+          _stateChip('Open', 'open', Colors.green),
+          const SizedBox(width: 4),
+          _stateChip('Closed', 'closed', Colors.grey),
+
           // ── Org multi-select ────────────────────────────────────────
           if (_allOrgs.isNotEmpty)
             _multiSelectPopup(
@@ -92,7 +98,7 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
                     return orgs.contains(org);
                   }).toSet();
                 }
-                notifier.state = filters.copyWith(orgs: orgs, repos: repos);
+                notifier.update(filters.copyWith(orgs: orgs, repos: repos));
               },
             ),
 
@@ -106,7 +112,7 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
               displayFn: (v) => v.contains('/') ? v.split('/').last : v,
               onChanged: (repos) => ref
                   .read(activityFiltersProvider.notifier)
-                  .state = filters.copyWith(repos: repos),
+                  .update(filters.copyWith(repos: repos)),
             ),
 
           // ── Search field ────────────────────────────────────────────
@@ -136,7 +142,7 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
               ),
               onChanged: (v) => ref
                   .read(activityFiltersProvider.notifier)
-                  .state = filters.copyWith(search: v),
+                  .update(filters.copyWith(search: v)),
             ),
           ),
 
@@ -144,8 +150,8 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
           if (filters.hasFilters)
             GestureDetector(
               onTap: () {
-                ref.read(activityFiltersProvider.notifier).state =
-                    const ActivityFilters();
+                ref.read(activityFiltersProvider.notifier).update(
+                    const ActivityFilters());
                 _searchController.clear();
               },
               child: Chip(
@@ -156,6 +162,30 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
                 side: BorderSide(color: Colors.red.shade400.withValues(alpha: 0.4)),
               ),
             ),
+
+          // ── View toggle ─────────────────────────────────────────────
+          IconButton(
+            icon: const Icon(Icons.view_list, size: 18),
+            color: filters.viewMode == 'list'
+                ? Theme.of(context).colorScheme.primary
+                : Colors.grey,
+            visualDensity: VisualDensity.compact,
+            tooltip: 'List view',
+            onPressed: () => ref
+                .read(activityFiltersProvider.notifier)
+                .update(filters.copyWith(viewMode: 'list')),
+          ),
+          IconButton(
+            icon: const Icon(Icons.grid_view, size: 18),
+            color: filters.viewMode == 'grid'
+                ? Theme.of(context).colorScheme.primary
+                : Colors.grey,
+            visualDensity: VisualDensity.compact,
+            tooltip: 'Grid view',
+            onPressed: () => ref
+                .read(activityFiltersProvider.notifier)
+                .update(filters.copyWith(viewMode: 'grid')),
+          ),
         ],
       ),
     );
@@ -212,8 +242,30 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
       onSelected: (_) {
         final types = Set<String>.from(filters.types);
         selected ? types.remove(type) : types.add(type);
-        ref.read(activityFiltersProvider.notifier).state =
-            filters.copyWith(types: types);
+        ref.read(activityFiltersProvider.notifier).update(
+            filters.copyWith(types: types));
+      },
+    );
+  }
+
+  // ── State chip ──────────────────────────────────────────────────────────────
+
+  Widget _stateChip(String label, String value, Color color) {
+    final filters = ref.watch(activityFiltersProvider);
+    final selected = filters.states.contains(value);
+    return FilterChip(
+      label: Text(label,
+          style: TextStyle(fontSize: 11, color: selected ? Colors.white : null)),
+      selected: selected,
+      selectedColor: color,
+      checkmarkColor: Colors.white,
+      visualDensity: VisualDensity.compact,
+      onSelected: (v) {
+        final current = Set<String>.from(filters.states);
+        v ? current.add(value) : current.remove(value);
+        ref.read(activityFiltersProvider.notifier).update(
+              filters.copyWith(states: current),
+            );
       },
     );
   }

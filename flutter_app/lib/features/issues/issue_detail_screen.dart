@@ -47,26 +47,31 @@ class _IssueDetailScreenState extends ConsumerState<IssueDetailScreen> {
       await api.dismissIssue(widget.issueId);
       ref.invalidate(issuesProvider);
       if (context.mounted) {
-        final messenger = ScaffoldMessenger.of(context);
         context.canPop() ? context.pop() : context.go('/');
-        messenger.showSnackBar(
-          SnackBar(
+        showToast(context, 'Issue dismissed',
             duration: const Duration(seconds: 5),
-            showCloseIcon: true,
-            content: const Text('Issue dismissed'),
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: () async {
-                await api.undismissIssue(widget.issueId);
-                ref.invalidate(issuesProvider);
-              },
-            ),
-          ),
-        );
+            actionLabel: 'Undo',
+            onAction: () async {
+              await api.undismissIssue(widget.issueId);
+              ref.invalidate(issuesProvider);
+            });
       }
     } catch (e) {
       if (!context.mounted) return;
       showToast(context, 'Error: $e', isError: true);
+    }
+  }
+
+  Future<void> _promote() async {
+    _startReviewing();
+    final api = ref.read(apiClientProvider);
+    try {
+      await api.promoteIssue(widget.issueId);
+      ref.invalidate(issueDetailProvider(widget.issueId));
+      if (mounted) showToast(context, 'Promoted to auto-implement');
+    } catch (e) {
+      _stopReviewing();
+      if (mounted) showToast(context, 'Error: $e', isError: true);
     }
   }
 
@@ -145,6 +150,18 @@ class _IssueDetailScreenState extends ConsumerState<IssueDetailScreen> {
               label: Text(hasReviews ? 'Re-review' : 'Review'),
               onPressed: _trigger,
             ),
+            if (hasReviews && reviews.last.actionTaken == 'review_only') ...[
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.rocket_launch, size: 16),
+                label: const Text('Promote to Dev'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.secondary,
+                  foregroundColor: Theme.of(context).colorScheme.onSecondary,
+                ),
+                onPressed: _promote,
+              ),
+            ],
             const SizedBox(width: 8),
             OutlinedButton.icon(
               icon: const Icon(Icons.visibility_off_outlined, size: 16),

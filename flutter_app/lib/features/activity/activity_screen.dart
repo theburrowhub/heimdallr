@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/activity.dart';
+import '../../shared/widgets/toast.dart';
 import 'activity_providers.dart';
 import 'widgets/activity_entry_tile.dart';
 import 'widgets/activity_filter_chips.dart';
@@ -258,14 +259,8 @@ class _Timeline extends StatelessWidget {
             // repo + number but not the PR/issue store ID the /prs/:id and
             // /issues/:id routes expect. Follow-up spec (AI report generation)
             // will add a by-number lookup endpoint.
-            final messenger = ScaffoldMessenger.of(context);
-            messenger.hideCurrentSnackBar();
-            messenger.showSnackBar(
-              SnackBar(
-                content: Text('${entry.repo} #${entry.itemNumber}'),
-                duration: const Duration(seconds: 2),
-              ),
-            );
+            showToast(context, '${entry.repo} #${entry.itemNumber}',
+                duration: const Duration(seconds: 2));
           },
         );
     }

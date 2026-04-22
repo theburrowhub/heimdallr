@@ -128,18 +128,13 @@ class _IssueTileState extends ConsumerState<_IssueTile> {
       await api.dismissIssue(widget.issue.id);
       ref.invalidate(issuesProvider);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          duration: const Duration(seconds: 5),
-          showCloseIcon: true,
-          content: Text('Issue #${widget.issue.number} dismissed'),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () async {
+        showToast(context, 'Issue #${widget.issue.number} dismissed',
+            duration: const Duration(seconds: 5),
+            actionLabel: 'Undo',
+            onAction: () async {
               await api.undismissIssue(widget.issue.id);
               ref.invalidate(issuesProvider);
-            },
-          ),
-        ));
+            });
       }
     } catch (e) {
       if (mounted) showToast(context, 'Error: $e', isError: true);

@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/models/pr.dart';
 import '../../core/models/tracked_issue.dart';
 import '../../shared/widgets/severity_badge.dart';
+import '../../shared/widgets/state_badge.dart';
 import '../../shared/widgets/toast.dart';
 import '../../shared/widgets/type_badge.dart';
 import '../activity/activity_screen.dart';
@@ -182,6 +183,11 @@ int _itemPriorityKey(_ActivityItem item) => switch (item) {
         },
 };
 
+String _itemState(_ActivityItem item) => switch (item) {
+  _PRItem(:final pr)       => pr.state,
+  _IssueItem(:final issue) => issue.state,
+};
+
 bool _matchesFilters(_ActivityItem item, ActivityFilters filters) {
   // Type filter
   if (filters.types.isNotEmpty) {
@@ -197,6 +203,10 @@ bool _matchesFilters(_ActivityItem item, ActivityFilters filters) {
   // Repo filter
   if (filters.repos.isNotEmpty) {
     if (!filters.repos.contains(_itemRepo(item))) return false;
+  }
+  // State filter
+  if (filters.states.isNotEmpty) {
+    if (!filters.states.contains(_itemState(item))) return false;
   }
   // Search
   if (filters.search.isNotEmpty) {
@@ -234,6 +244,16 @@ class _ActivityTab extends ConsumerStatefulWidget {
 class _ActivityTabState extends ConsumerState<_ActivityTab> {
   @override
   Widget build(BuildContext context) {
+    // SSE listener for state changes (open/closed transitions)
+    ref.listen(sseStreamProvider, (_, next) {
+      next.whenData((event) {
+        if (event.type == 'pr_state_changed' || event.type == 'issue_state_changed') {
+          ref.invalidate(prsProvider);
+          ref.invalidate(issuesProvider);
+        }
+      });
+    });
+
     final prsAsync    = ref.watch(prsProvider);
     final issuesAsync = ref.watch(issuesProvider);
     final sort        = ref.watch(reviewsSortProvider);
@@ -272,34 +292,66 @@ class _ActivityTabState extends ConsumerState<_ActivityTab> {
       return const Center(child: Text('No activity yet'));
     }
 
+    final viewMode = filters.viewMode;
+
+    // Build filter bar + count header (shared between list and grid)
+    final header = [
+      ActivityFilterBar(
+        allRepos: allRepos,
+        sort: sort,
+        onSortChanged: (mode) => ref.read(reviewsSortProvider.notifier).set(mode),
+      ),
+      if (filters.hasFilters)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          child: Text(
+            '${filtered.length} item${filtered.length == 1 ? '' : 's'}',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+          ),
+        ),
+    ];
+
+    if (filtered.isEmpty && filters.hasFilters) {
+      return Column(
+        children: [
+          ...header,
+          const Expanded(
+            child: Center(child: Text('No items match the current filters.')),
+          ),
+        ],
+      );
+    }
+
+    if (viewMode == 'grid') {
+      return Column(
+        children: [
+          ...header,
+          Expanded(
+            child: GridView.builder(
+              padding: const EdgeInsets.all(8),
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 300,
+                childAspectRatio: 1.6,
+                crossAxisSpacing: 8,
+                mainAxisSpacing: 8,
+              ),
+              itemCount: filtered.length,
+              itemBuilder: (ctx, i) => _ActivityGridTile(item: filtered[i]),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Default: list mode
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        // Sort + Filter bar — single unified row
-        ActivityFilterBar(
-          allRepos: allRepos,
-          sort: sort,
-          onSortChanged: (mode) => ref.read(reviewsSortProvider.notifier).set(mode),
-        ),
-        // Filtered count when filters are active
-        if (filters.hasFilters)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-            child: Text(
-              '${filtered.length} item${filtered.length == 1 ? '' : 's'}',
-              style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
-            ),
-          ),
-        if (filtered.isEmpty && filters.hasFilters)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 32),
-            child: Center(child: Text('No items match the current filters.')),
-          )
-        else
-          ...filtered.map((item) => switch (item) {
-            _PRItem(:final pr) => _PRTile(pr: pr),
-            _IssueItem(:final issue) => _IssueActivityTile(issue: issue),
-          }),
+        ...header,
+        ...filtered.map((item) => switch (item) {
+          _PRItem(:final pr) => _PRTile(pr: pr),
+          _IssueItem(:final issue) => _IssueActivityTile(issue: issue),
+        }),
       ],
     );
   }
@@ -377,18 +429,13 @@ class _PRTileState extends ConsumerState<_PRTile> {
       await api.dismissPR(widget.pr.id);
       ref.invalidate(prsProvider);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          duration: const Duration(seconds: 5),
-          showCloseIcon: true,
-          content: Text('PR #${widget.pr.number} dismissed'),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () async {
+        showToast(context, 'PR #${widget.pr.number} dismissed',
+            duration: const Duration(seconds: 5),
+            actionLabel: 'Undo',
+            onAction: () async {
               await api.undismissPR(widget.pr.id);
               ref.invalidate(prsProvider);
-            },
-          ),
-        ));
+            });
       }
     } catch (e) {
       if (mounted) showToast(context, 'Error: $e', isError: true);
@@ -401,7 +448,9 @@ class _PRTileState extends ConsumerState<_PRTile> {
     final reviewed = pr.latestReview != null;
     final isReviewing = ref.watch(reviewingPRsProvider).containsKey(_reviewKey);
 
-    return Card(
+    return Opacity(
+      opacity: pr.state == 'open' ? 1.0 : 0.6,
+      child: Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -423,11 +472,14 @@ class _PRTileState extends ConsumerState<_PRTile> {
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              // Type badge
+              // Type badge + state badge
               const Padding(
-                padding: EdgeInsets.only(right: 10),
+                padding: EdgeInsets.only(right: 6),
                 child: TypeBadge(type: 'pr'),
               ),
+              const SizedBox(width: 4),
+              StateBadge(state: pr.state),
+              const SizedBox(width: 4),
               // Title + subtitle
               Expanded(
                 child: Column(
@@ -488,6 +540,7 @@ class _PRTileState extends ConsumerState<_PRTile> {
           ),
         ),
       ),
+      ),
     );
   }
 
@@ -519,7 +572,9 @@ class _IssueActivityTile extends StatelessWidget {
     final reviewed = issue.latestReview != null;
     final severity = issue.latestReview?.severity ?? '';
 
-    return Card(
+    return Opacity(
+      opacity: issue.state == 'open' ? 1.0 : 0.6,
+      child: Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -536,11 +591,14 @@ class _IssueActivityTile extends StatelessWidget {
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              // Type badge
+              // Type badge + state badge
               Padding(
-                padding: const EdgeInsets.only(right: 10),
+                padding: const EdgeInsets.only(right: 6),
                 child: TypeBadge(type: _type),
               ),
+              const SizedBox(width: 4),
+              StateBadge(state: issue.state),
+              const SizedBox(width: 4),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -572,6 +630,7 @@ class _IssueActivityTile extends StatelessWidget {
           ),
         ),
       ),
+      ),
     );
   }
 
@@ -582,5 +641,86 @@ class _IssueActivityTile extends StatelessWidget {
       case 'medium':   return Colors.orange.shade700;
       default:         return Colors.green.shade700;
     }
+  }
+}
+
+// ── Grid tile ─────────────────────────────────────────────────────────────────
+
+class _ActivityGridTile extends StatelessWidget {
+  final _ActivityItem item;
+  const _ActivityGridTile({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final String type;
+    final Color color;
+    final String state;
+    final String title;
+    final String subtitle;
+    final String? severity;
+    final DateTime timestamp;
+
+    switch (item) {
+      case _PRItem(:final pr):
+        type = 'PR';
+        color = Colors.blue;
+        state = pr.state;
+        title = pr.title;
+        subtitle = '${pr.repo} #${pr.number} · ${pr.author}';
+        severity = pr.latestReview?.severity;
+        timestamp = pr.updatedAt;
+      case _IssueItem(:final issue):
+        final isDev = issue.latestReview?.actionTaken == 'auto_implement';
+        type = isDev ? 'DEV' : 'IT';
+        color = isDev ? Colors.green : Colors.orange;
+        state = issue.state;
+        title = issue.title;
+        subtitle = '${issue.repo} #${issue.number} · ${issue.author}';
+        severity = issue.latestReview?.severity;
+        timestamp = issue.fetchedAt;
+    }
+
+    return Opacity(
+      opacity: state == 'open' ? 1.0 : 0.6,
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(3)),
+                  child: Text(type, style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
+                ),
+                const Spacer(),
+                StateBadge(state: state),
+              ]),
+              const SizedBox(height: 6),
+              Text(title, maxLines: 2, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+              const SizedBox(height: 4),
+              Text(subtitle, style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              const Spacer(),
+              Row(children: [
+                if (severity != null)
+                  SeverityBadge(severity: severity),
+                const Spacer(),
+                Text(_timeAgo(timestamp), style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
   }
 }
