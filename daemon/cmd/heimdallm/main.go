@@ -1323,6 +1323,36 @@ func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem)
 	if err != nil {
 		return false, err
 	}
+
+	// State reconciliation: detect open → closed transitions.
+	// Store updates are idempotent; SSE publishes fire-and-forget.
+	// Closed items remain in the watch queue and are eventually evicted by
+	// the backoff/EvictStale mechanism — no interface changes required.
+	if item.Type == "pr" {
+		prState, err := a.ghClient.GetPRState(item.Repo, item.Number)
+		if err != nil {
+			slog.Warn("tier3: could not fetch PR state", "repo", item.Repo, "number", item.Number, "err", err)
+		} else if prState != "open" {
+			if err := a.store.UpdatePRStateByGithubID(item.GithubID, "closed"); err != nil {
+				slog.Warn("tier3: update PR state failed", "err", err)
+			}
+			a.broker.Publish(sse.Event{
+				Type: sse.EventPRStateChanged,
+				Data: fmt.Sprintf(`{"pr_id":%d,"state":"closed"}`, item.GithubID),
+			})
+			slog.Info("tier3: PR closed/merged", "repo", item.Repo, "number", item.Number)
+		}
+	} else if issue.State != "open" {
+		if err := a.store.UpdateIssueStateByGithubID(item.GithubID, "closed"); err != nil {
+			slog.Warn("tier3: update issue state failed", "err", err)
+		}
+		a.broker.Publish(sse.Event{
+			Type: sse.EventIssueStateChanged,
+			Data: fmt.Sprintf(`{"issue_id":%d,"state":"closed"}`, item.GithubID),
+		})
+		slog.Info("tier3: issue closed", "repo", item.Repo, "number", item.Number)
+	}
+
 	changed := issue.UpdatedAt.After(item.LastSeen)
 	return changed, nil
 }
