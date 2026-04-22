@@ -2,6 +2,13 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.4.19](https://github.com/theburrowhub/heimdallm/compare/v0.4.18...v0.4.19) (2026-04-22)
+
+
+### Features
+
+* per-category active prompt (PR Review / Issue Triage / Development) ([#214](https://github.com/theburrowhub/heimdallm/issues/214)) ([eea4061](https://github.com/theburrowhub/heimdallm/commit/eea406185e3005f053fea6b6cf8667ccda5c4bd8))
+
 ## [0.4.18](https://github.com/theburrowhub/heimdallm/compare/v0.4.17...v0.4.18) (2026-04-22)
 
 
