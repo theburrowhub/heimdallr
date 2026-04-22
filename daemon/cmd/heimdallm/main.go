@@ -956,20 +956,46 @@ func processDiscoveredRepos(
 		return
 	}
 	// Persist the updated monitored/non-monitored lists via the K/V store
-	// so the Flutter app's cached view survives a daemon restart. On
-	// json.Marshal failure (theoretical — []string can't fail today, but
-	// belt-and-braces against future type changes) skip the write so we
-	// never persist "" into the store, which would break ApplyStore on
-	// next reload.
-	if reposJSON, err := json.Marshal(reposSnap); err != nil {
-		slog.Warn("poll: marshal repositories failed", "err", err)
-	} else if _, err := st.SetConfig("repositories", string(reposJSON)); err != nil {
-		slog.Warn("poll: persist repositories failed", "err", err)
+	// so the Flutter app's cached view survives a daemon restart.
+	//
+	// Two guards against the #183 bug, where a nil snapshot of
+	// NonMonitored (brief race window: reload swaps *a.cfg between the
+	// caller's mutex unlock and this helper) marshalled to the literal
+	// string "null" and clobbered the operator's list on the next
+	// reload — MergeStoreLayer parsed "null" as "no entries", and
+	// upsertDiscoveredRepos on the next poll re-added every PR's repo
+	// into Repositories because NonMonitored was gone from the `known`
+	// set. End state: ops' "not monitored" choice silently evaporated
+	// every few minutes.
+	//
+	//   1. Skip the write entirely when the snapshot is nil. We only
+	//      persist state the caller gave us explicitly; a nil slice is
+	//      never a legitimate "clear" signal from the poll path — only
+	//      the PUT /config handler intentionally writes empty lists.
+	//      Keeps the existing store row intact, letting MergeStoreLayer
+	//      carry the operator's TOML list through the race.
+	//   2. Only touch the row when the serialized value actually
+	//      changed. Cuts both the corruption window and the write load:
+	//      a no-op poll (added>0 but the lists didn't shift) no longer
+	//      rewrites these rows at all.
+	existing, _ := st.ListConfigs()
+	if reposSnap != nil {
+		if reposJSON, err := json.Marshal(reposSnap); err != nil {
+			slog.Warn("poll: marshal repositories failed", "err", err)
+		} else if string(reposJSON) != existing["repositories"] {
+			if _, err := st.SetConfig("repositories", string(reposJSON)); err != nil {
+				slog.Warn("poll: persist repositories failed", "err", err)
+			}
+		}
 	}
-	if nmJSON, err := json.Marshal(nonMonSnap); err != nil {
-		slog.Warn("poll: marshal non_monitored failed", "err", err)
-	} else if _, err := st.SetConfig("non_monitored", string(nmJSON)); err != nil {
-		slog.Warn("poll: persist non_monitored failed", "err", err)
+	if nonMonSnap != nil {
+		if nmJSON, err := json.Marshal(nonMonSnap); err != nil {
+			slog.Warn("poll: marshal non_monitored failed", "err", err)
+		} else if string(nmJSON) != existing["non_monitored"] {
+			if _, err := st.SetConfig("non_monitored", string(nmJSON)); err != nil {
+				slog.Warn("poll: persist non_monitored failed", "err", err)
+			}
+		}
 	}
 
 	// Update first-seen map in the same store so GET /config can expose
