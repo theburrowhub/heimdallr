@@ -205,6 +205,24 @@ func (s *Store) LatestIssueReview(issueID int64) (*IssueReview, error) {
 	return scanIssueReview(row)
 }
 
+// CountFailedAutoImplement returns the number of consecutive failed
+// auto_implement attempts for an issue (action_taken =
+// "auto_implement_failed"). The count resets conceptually when a successful
+// review lands (the dedup logic in the fetcher stops retrying once the cap is
+// hit, so the counter never actually needs a reset in practice). Used by the
+// fetcher to enforce the max-retry cap (#223).
+func (s *Store) CountFailedAutoImplement(issueID int64) (int, error) {
+	row := s.db.QueryRow(
+		`SELECT COUNT(*) FROM issue_reviews WHERE issue_id = ? AND action_taken = 'auto_implement_failed'`,
+		issueID,
+	)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count failed auto_implement for issue %d: %w", issueID, err)
+	}
+	return n, nil
+}
+
 func scanIssue(s scanner) (*Issue, error) {
 	var i Issue
 	var createdAt, fetchedAt string

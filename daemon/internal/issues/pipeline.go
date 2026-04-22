@@ -303,6 +303,16 @@ func (p *Pipeline) runReviewOnly(ctx context.Context, issue *github.Issue, issue
 		)
 	}
 
+	// Filter out the bot's own comments so the LLM doesn't see its own
+	// previous output as "discussion" (confuses re-triage context).
+	var humanComments []github.Comment
+	for _, c := range comments {
+		if p.botLogin != "" && strings.EqualFold(c.Author, p.botLogin) {
+			continue
+		}
+		humanComments = append(humanComments, c)
+	}
+
 	// Build prompt + run the CLI. HasLocalDir mirrors workDir above so the
 	// LLM hears the same story as the mode-selection logic.
 	// Agent profile customization: IssuePromptOverride replaces the entire
@@ -315,7 +325,7 @@ func (p *Pipeline) runReviewOnly(ctx context.Context, issue *github.Issue, issue
 		Labels:        issue.LabelNames(),
 		Assignees:     issue.AssigneeLogins(),
 		Body:          issue.Body,
-		Comments:      comments,
+		Comments:      humanComments,
 		HasLocalDir:   workDir != "",
 		TriageContext: triageCtx,
 	}
@@ -492,6 +502,23 @@ func (p *Pipeline) runAutoImplement(ctx context.Context, issue *github.Issue, is
 		return nil, fmt.Errorf("issues pipeline: commit: %w", err)
 	}
 	if err := p.git.Push(ctx, workDir, issue.Repo, branch, opts.GitHubToken); err != nil {
+		// Record the push failure so the fetcher can enforce the
+		// MaxAutoImplementFailures retry cap (#223). Without this row the
+		// dedup logic would have no visibility into failed attempts and the
+		// daemon would retry forever on non-fast-forward errors.
+		failedRev := &store.IssueReview{
+			IssueID:     issueID,
+			CLIUsed:     cli,
+			Summary:     fmt.Sprintf("auto_implement push failed: %v", err),
+			Triage:      "{}",
+			Suggestions: "[]",
+			ActionTaken: "auto_implement_failed",
+			CreatedAt:   time.Now().UTC(),
+		}
+		if _, storeErr := p.store.InsertIssueReview(failedRev); storeErr != nil {
+			slog.Warn("issues pipeline: could not record push failure in store",
+				"repo", issue.Repo, "number", issue.Number, "err", storeErr)
+		}
 		p.publishError(issueID, issue, fmt.Errorf("push: %w", err))
 		return nil, fmt.Errorf("issues pipeline: push: %w", err)
 	}

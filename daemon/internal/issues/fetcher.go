@@ -23,6 +23,14 @@ import (
 // drift apart unnoticed.
 const RecomputeGrace = 30 * time.Second
 
+// MaxAutoImplementFailures is the maximum number of consecutive failed
+// auto_implement push attempts before the fetcher permanently skips an issue.
+// Exceeding this cap indicates a structural problem (non-fast-forward, repo
+// access) that retrying cannot fix without human intervention. The user must
+// resolve the conflict and dismiss or re-open the issue to resume processing.
+// See issue #223.
+const MaxAutoImplementFailures = 3
+
 // IssuesFetcher is the subset of github.Client that fetches classified
 // issues. Kept as an interface so the fetcher can be tested without an HTTP
 // server standing in.
@@ -42,6 +50,10 @@ type PipelineRunner interface {
 type issueDedupStore interface {
 	GetIssueByGithubID(githubID int64) (*store.Issue, error)
 	LatestIssueReview(issueID int64) (*store.IssueReview, error)
+	// CountFailedAutoImplement returns the number of stored
+	// "auto_implement_failed" review rows for the issue. Used to enforce
+	// MaxAutoImplementFailures; see issue #223.
+	CountFailedAutoImplement(issueID int64) (int, error)
 }
 
 // OptionsFn lets the caller map each classified issue to its RunOptions.
@@ -121,7 +133,10 @@ func (f *Fetcher) ProcessRepo(ctx context.Context, repo string, cfg config.Issue
 // alreadyProcessed reports whether the issue can be skipped because:
 //   - it was dismissed by the user, or
 //   - it was already reviewed and has no new activity (UpdatedAt ≤ last
-//     review + grace window).
+//     review + grace window), or
+//   - a PR was already created via auto_implement, or
+//   - the auto_implement push has failed MaxAutoImplementFailures times,
+//     indicating a structural problem that human intervention must resolve.
 //
 // The err return signals a lookup failure — the caller logs it and proceeds
 // as if the issue were unprocessed, so a flaky store never stops the
@@ -154,6 +169,15 @@ func (f *Fetcher) alreadyProcessed(issue *github.Issue) (bool, string, error) {
 	// it to stop the pipeline from picking it up again.
 	if latest.ActionTaken == "auto_implement" && latest.PRCreated > 0 {
 		return true, "already implemented (PR created)", nil
+	}
+
+	// If the auto_implement push has failed too many times, stop retrying.
+	failCount, fcErr := f.store.CountFailedAutoImplement(row.ID)
+	if fcErr != nil {
+		slog.Warn("issues fetcher: could not count failed auto_implement attempts, skipping cap check",
+			"repo", issue.Repo, "number", issue.Number, "err", fcErr)
+	} else if failCount >= MaxAutoImplementFailures {
+		return true, fmt.Sprintf("auto_implement failed %d times (cap %d), requires human intervention", failCount, MaxAutoImplementFailures), nil
 	}
 
 	ref := latest.CommentedAt
