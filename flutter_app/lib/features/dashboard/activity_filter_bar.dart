@@ -164,7 +164,6 @@ class _ActivityFilterBarState extends ConsumerState<ActivityFilterBar> {
             ),
 
           // ── View toggle ─────────────────────────────────────────────
-          const Spacer(),
           IconButton(
             icon: const Icon(Icons.view_list, size: 18),
             color: filters.viewMode == 'list'
