@@ -274,7 +274,11 @@ func (srv *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleListPRs(w http.ResponseWriter, r *http.Request) {
-	prs, err := srv.store.ListPRs()
+	var states []string
+	if s := r.URL.Query().Get("state"); s != "" {
+		states = strings.Split(s, ",")
+	}
+	prs, err := srv.store.ListPRs(states...)
 	if err != nil {
 		slog.Error("handleListPRs: store error", "err", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -842,7 +846,11 @@ func toIssueReviewResponse(r *store.IssueReview) *issueReviewResponse {
 }
 
 func (srv *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
-	issues, err := srv.store.ListIssues()
+	var states []string
+	if s := r.URL.Query().Get("state"); s != "" {
+		states = strings.Split(s, ",")
+	}
+	issues, err := srv.store.ListIssues(states...)
 	if err != nil {
 		slog.Error("handleListIssues: store error", "err", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
