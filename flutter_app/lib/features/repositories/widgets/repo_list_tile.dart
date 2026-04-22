@@ -28,7 +28,14 @@ class RepoListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasDir = config.localDir != null && config.localDir!.isNotEmpty;
+    // Effective local_dir = explicit (`config.localDir`) wins over the
+    // daemon-detected fallback. Match the grid-tile logic so both views
+    // render the auto-detect state consistently.
+    final configuredDir = (config.localDir ?? '').isNotEmpty ? config.localDir : null;
+    final detectedDir = appConfig.localDirsDetected[repo];
+    final effectiveDir = configuredDir ?? detectedDir;
+    final hasDir = effectiveDir != null && effectiveDir.isNotEmpty;
+    final isAutoDetected = configuredDir == null && detectedDir != null;
     final theme = Theme.of(context);
     final selectedBg = theme.colorScheme.primary.withValues(alpha:0.12);
 
@@ -137,14 +144,26 @@ class RepoListTile extends StatelessWidget {
                       Icon(
                         hasDir ? Icons.folder : Icons.folder_off_outlined,
                         size: 13,
-                        color: hasDir ? Colors.green.shade500 : Colors.grey.shade600,
+                        color: hasDir
+                            ? (isAutoDetected
+                                ? Colors.blue.shade400
+                                : Colors.green.shade500)
+                            : Colors.grey.shade600,
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        hasDir ? config.localDir!.split('/').last : 'No local dir',
+                        hasDir
+                            ? (isAutoDetected
+                                ? 'Auto: ${effectiveDir.split('/').last}'
+                                : effectiveDir.split('/').last)
+                            : 'No local dir',
                         style: TextStyle(
                           fontSize: 11,
-                          color: hasDir ? Colors.green.shade500 : Colors.grey.shade600,
+                          color: hasDir
+                              ? (isAutoDetected
+                                  ? Colors.blue.shade400
+                                  : Colors.green.shade500)
+                              : Colors.grey.shade600,
                         ),
                       ),
                     ]),

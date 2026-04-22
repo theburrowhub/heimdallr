@@ -29,7 +29,15 @@ class RepoGridTile extends StatelessWidget {
     final parts = repo.split('/');
     final org = parts.length > 1 ? parts[0] : '';
     final name = parts.length > 1 ? parts.sublist(1).join('/') : repo;
-    final hasDir = config.localDir != null && config.localDir!.isNotEmpty;
+    // Effective local_dir = explicit (`config.localDir`) wins over the
+    // daemon-detected fallback. Both tiles (grid + list) need to paint
+    // the detected case so operators know full-repo analysis will kick
+    // in even without a per-repo override.
+    final configuredDir = (config.localDir ?? '').isNotEmpty ? config.localDir : null;
+    final detectedDir = appConfig.localDirsDetected[repo];
+    final effectiveDir = configuredDir ?? detectedDir;
+    final hasDir = effectiveDir != null && effectiveDir.isNotEmpty;
+    final isAutoDetected = configuredDir == null && detectedDir != null;
     final primary = Theme.of(context).colorScheme.primary;
 
     return InkWell(
@@ -149,15 +157,28 @@ class RepoGridTile extends StatelessWidget {
             Row(children: [
               Icon(
                 hasDir ? Icons.folder : Icons.folder_off_outlined,
-                size: 12, color: hasDir ? Colors.green.shade500 : Colors.grey.shade600,
+                size: 12,
+                color: hasDir
+                    ? (isAutoDetected
+                        ? Colors.blue.shade400
+                        : Colors.green.shade500)
+                    : Colors.grey.shade600,
               ),
               const SizedBox(width: 4),
               Flexible(
                 child: Text(
-                  hasDir ? config.localDir!.split('/').last : 'No local dir',
+                  hasDir
+                      ? (isAutoDetected
+                          ? 'Auto: ${effectiveDir.split('/').last}'
+                          : effectiveDir.split('/').last)
+                      : 'No local dir',
                   style: TextStyle(
                     fontSize: 10.5,
-                    color: hasDir ? Colors.green.shade500 : Colors.grey.shade600,
+                    color: hasDir
+                        ? (isAutoDetected
+                            ? Colors.blue.shade400
+                            : Colors.green.shade500)
+                        : Colors.grey.shade600,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
