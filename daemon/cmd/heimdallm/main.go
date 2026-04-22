@@ -356,6 +356,7 @@ func main() {
 		c := cfg
 		reposList := append([]string(nil), c.GitHub.Repositories...)
 		nonMonList := append([]string(nil), c.GitHub.NonMonitored...)
+		localDirBaseList := append([]string(nil), c.GitHub.LocalDirBase...)
 		cfgMu.Unlock()
 		repoOverrides := make(map[string]map[string]any)
 		for repo, ai := range c.AI.Repos {
@@ -449,6 +450,7 @@ func main() {
 			"poll_interval":               c.GitHub.PollInterval,
 			"repositories":                reposList,
 			"non_monitored":               nonMonList,
+			"local_dir_base":              localDirBaseList,
 			"ai_primary":                  c.AI.Primary,
 			"ai_fallback":                 c.AI.Fallback,
 			"review_mode":                 c.AI.ReviewMode,
