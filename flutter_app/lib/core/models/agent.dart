@@ -271,7 +271,15 @@ class PresetDef {
     this.instructions = '',
     this.issueInstructions = '',
     this.implementInstructions = '',
-  });
+  }) : assert(
+          (instructions == '' ? 0 : 1) +
+                  (issueInstructions == '' ? 0 : 1) +
+                  (implementInstructions == '' ? 0 : 1) <=
+              1,
+          'PresetDef must populate at most one of instructions / '
+          'issueInstructions / implementInstructions — a preset belongs to '
+          'exactly one category.',
+        );
 }
 
 // Backwards compat alias
