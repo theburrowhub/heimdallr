@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build assets for (e.g. v0.6.0)'
+        required: true
 
 env:
   REGISTRY: ghcr.io
@@ -12,6 +17,7 @@ env:
 
 jobs:
   release-please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -31,18 +37,23 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════════════
   docker-build-push:
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: >-
+      always() &&
+      (needs.release-please.outputs.release_created == 'true' ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       attestations: write
       id-token: write
+    env:
+      TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -61,9 +72,9 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
-            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
-            type=semver,pattern={{major}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{version}},value=${{ env.TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.TAG }}
+            type=semver,pattern={{major}},value=${{ env.TAG }}
             type=sha,prefix=
 
       - name: Build and push Docker image
@@ -91,7 +102,10 @@ jobs:
   build-linux:
     name: Build Linux packages (.deb / .rpm / .AppImage)
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: >-
+      always() &&
+      (needs.release-please.outputs.release_created == 'true' ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -99,7 +113,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
           fetch-depth: 0
 
       # ── Toolchains ──────────────────────────────────────────────────────────
@@ -149,7 +163,7 @@ jobs:
       - name: Build Flutter app (Linux release)
         working-directory: flutter_app
         run: |
-          VERSION="${{ needs.release-please.outputs.tag_name }}"
+          VERSION="${{ inputs.tag || needs.release-please.outputs.tag_name }}"
           VERSION="${VERSION#v}"
           flutter build linux --release \
             --build-name="$VERSION" \
@@ -158,7 +172,7 @@ jobs:
       # ── Prepare staging tree ──────────────────────────────────────────────────
       - name: Prepare staging directory
         run: |
-          VERSION="${{ needs.release-please.outputs.tag_name }}"
+          VERSION="${{ inputs.tag || needs.release-please.outputs.tag_name }}"
           VERSION="${VERSION#v}"
           BUNDLE="flutter_app/build/linux/x64/release/bundle"
 
@@ -305,7 +319,7 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          tag_name: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
           files: |
             ${{ env.DEB_PATH }}
             ${{ env.RPM_PATH }}
@@ -319,7 +333,10 @@ jobs:
   build-macos:
     name: Build Heimdallm.dmg
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: >-
+      always() &&
+      (needs.release-please.outputs.release_created == 'true' ||
+       github.event_name == 'workflow_dispatch')
     runs-on: macos-14
     permissions:
       contents: write
@@ -327,7 +344,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
           fetch-depth: 0
 
       # ── Toolchains ──────────────────────────────────────────────────────────
@@ -369,7 +386,7 @@ jobs:
       - name: Build Flutter app (release)
         working-directory: flutter_app
         run: |
-          VERSION="${{ needs.release-please.outputs.tag_name }}"
+          VERSION="${{ inputs.tag || needs.release-please.outputs.tag_name }}"
           VERSION="${VERSION#v}"
           flutter build macos --release \
             --build-name="$VERSION" \
@@ -447,7 +464,7 @@ jobs:
       - name: Create DMG
         run: |
           APP="${APP}"
-          VERSION="${{ needs.release-please.outputs.tag_name }}"
+          VERSION="${{ inputs.tag || needs.release-please.outputs.tag_name }}"
           DMG="dist/Heimdallm-${VERSION}.dmg"
           mkdir -p dist
 
@@ -482,7 +499,7 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          tag_name: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
           files: ${{ env.DMG_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -493,14 +510,17 @@ jobs:
   goreleaser-cli:
     name: Build CLI binaries (GoReleaser)
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: >-
+      always() &&
+      (needs.release-please.outputs.release_created == 'true' ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
@@ -514,4 +534,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          GORELEASER_CURRENT_TAG: ${{ needs.release-please.outputs.tag_name }}
+          GORELEASER_CURRENT_TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
