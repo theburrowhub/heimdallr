@@ -1178,10 +1178,48 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 	// blocking store I/O below.
 	processDiscoveredRepos(added, reposSnap, nonMonSnap, a.store, a.broker, time.Now())
 
+	// Resolve bot login for the self-author guard.
+	a.loginMu.Lock()
+	botLogin := *a.login
+	a.loginMu.Unlock()
+	if botLogin == "" {
+		if u, err := a.ghClient.AuthenticatedUser(); err == nil {
+			botLogin = u
+			a.loginMu.Lock()
+			*a.login = u
+			a.loginMu.Unlock()
+		}
+	}
+
+	a.cfgMu.Lock()
+	// Convert config.ResolvedReviewGuards to pipeline.GateConfig via same-shape cast.
+	// Shadow type exists because config cannot import pipeline (import cycle).
+	guards := pipeline.GateConfig((*a.cfg).ReviewGuards(botLogin))
+	a.cfgMu.Unlock()
+
 	out := make([]scheduler.Tier2PR, 0, len(prs))
 	for _, pr := range prs {
 		if pr.Repo == "" {
 			slog.Warn("adapter: skipping PR with empty repo", "pr_number", pr.Number)
+			continue
+		}
+		reason := pipeline.Evaluate(pipeline.PRGate{
+			State:  pr.State,
+			Draft:  pr.Draft,
+			Author: pr.User.Login,
+		}, guards)
+		if reason != pipeline.SkipReasonNone {
+			a.broker.Publish(sse.Event{
+				Type: sse.EventReviewSkipped,
+				Data: sseData(map[string]any{
+					"repo":      pr.Repo,
+					"pr_number": pr.Number,
+					"pr_title":  pr.Title,
+					"reason":    string(reason),
+				}),
+			})
+			slog.Info("tier2: skipping PR",
+				"repo", pr.Repo, "pr", pr.Number, "reason", string(reason))
 			continue
 		}
 		out = append(out, scheduler.Tier2PR{
