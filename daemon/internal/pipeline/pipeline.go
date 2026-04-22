@@ -122,18 +122,33 @@ func (p *Pipeline) applyPrompt(repoPromptID, agentPromptID string, tmpl *string,
 
 // RunOptions carries per-execution settings derived from global + repo + agent config.
 type RunOptions struct {
-	Primary       string
-	Fallback      string
+	Primary        string
+	Fallback       string
 	PromptOverride string // repo-level prompt (highest priority)
-	AgentPromptID string  // agent-level prompt (used if no repo-level override)
-	ReviewMode    string
-	ExecOpts      executor.ExecOptions // model, flags, workdir
+	AgentPromptID  string // agent-level prompt (used if no repo-level override)
+	ReviewMode     string
+	ExecOpts       executor.ExecOptions // model, flags, workdir
+	// Guards are evaluated at the top of Run as defense-in-depth. Callers
+	// (Tier 2 / Tier 3) should have already filtered with pipeline.Evaluate
+	// before pushing PRs into the pipeline; this layer prevents regressions
+	// if a new caller forgets.
+	Guards GateConfig
 }
 
 // Run executes the full review pipeline for one PR and publishes the review to GitHub.
 // Config priority: repo-level > agent-level > global default.
 // SQLite is the source of truth: review is stored first, then published.
 // If publishing fails, it is retried on the next call (when GitHubReviewID == 0).
+//
+// Return contract:
+//   - (review, nil)  — normal success path; review has been stored (and
+//     published unless GitHub was unreachable, in which case GitHubReviewID==0
+//     and PublishPending will retry).
+//   - (nil, err)     — a non-recoverable error before the review was stored.
+//   - (nil, nil)     — the defense-in-depth gate (opts.Guards) rejected the
+//     PR. Callers MUST nil-check the returned review before dereferencing it.
+//     Skip-event publication is the caller's responsibility; the pipeline
+//     only logs on this path so missed caller-side filtering is diagnosable.
 func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, error) {
 	primary := opts.Primary
 	fallback := opts.Fallback
@@ -156,6 +171,19 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 	prID, err := p.store.UpsertPR(prRow)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: upsert PR: %w", err)
+	}
+
+	// Defense-in-depth: refuse to run the CLI if the gate rejects this PR.
+	// Callers publish the skip event themselves — we only log here so a
+	// missed caller-side check is visible in daemon logs.
+	if reason := Evaluate(PRGate{
+		State:  pr.State,
+		Draft:  pr.Draft,
+		Author: pr.User.Login,
+	}, opts.Guards); reason != SkipReasonNone {
+		slog.Warn("pipeline: gate skip (caller did not filter)",
+			"repo", pr.Repo, "pr", pr.Number, "reason", string(reason))
+		return nil, nil
 	}
 
 	p.notify.Notify("PR Review Started", fmt.Sprintf("%s #%d", pr.Repo, pr.Number))

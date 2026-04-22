@@ -398,33 +398,47 @@ func (c *Client) GetPRHeadSHA(repo string, number int) (string, error) {
 	return pr.Head.SHA, nil
 }
 
-// GetPRStateAndUpdatedAt returns the effective state ("open" or "closed") and
-// the updated_at timestamp of a PR. Uses the Pulls API to detect merged PRs
-// (merged_at != null → "closed"). Combines state + freshness in one API call
-// so callers don't need a separate GetIssue call for PRs.
-func (c *Client) GetPRStateAndUpdatedAt(repo string, number int) (state string, updatedAt time.Time, err error) {
+// PRSnapshot is the subset of PR fields Tier 3's guard evaluator needs.
+// Returned by GetPRSnapshot in one call so the watch tier doesn't have to
+// combine GetIssue + GetPRHeadSHA. The Pulls API returns state="closed" for
+// merged PRs already (merged_at is non-null but the top-level state is still
+// normalised to "closed"), so Tier 3's not_open guard fires correctly without
+// an explicit merged_at check.
+type PRSnapshot struct {
+	State     string
+	Draft     bool
+	Author    string
+	UpdatedAt time.Time
+	HeadSHA   string
+}
+
+// GetPRSnapshot returns the current state, draft flag, author, updated_at,
+// and HEAD SHA of a PR via the Pulls API. Tier 3 uses this to refresh state
+// before re-reviewing a watched PR so a merged/closed PR does not burn AI
+// tokens on a stale open-PR record.
+func (c *Client) GetPRSnapshot(repo string, number int) (*PRSnapshot, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
 	resp, err := c.do("GET", path, "application/vnd.github+json")
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("github: get PR %s#%d: %w", repo, number, err)
+		return nil, fmt.Errorf("github: get PR snapshot: %w", err)
 	}
+	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", time.Time{}, fmt.Errorf("github: get PR %s#%d: status %d", repo, number, resp.StatusCode)
+		errBody := safeTruncate(string(body), maxErrBodyLen)
+		return nil, fmt.Errorf("github: get PR snapshot (%s #%d): status %d: %s", repo, number, resp.StatusCode, errBody)
 	}
-	var pr struct {
-		State     string    `json:"state"`
-		MergedAt  *string   `json:"merged_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-	}
+	var pr PullRequest
 	if err := json.Unmarshal(body, &pr); err != nil {
-		return "", time.Time{}, fmt.Errorf("github: decode PR %s#%d: %w", repo, number, err)
+		return nil, fmt.Errorf("github: get PR snapshot: unmarshal: %w", err)
 	}
-	if pr.MergedAt != nil {
-		return "closed", pr.UpdatedAt, nil
-	}
-	return pr.State, pr.UpdatedAt, nil
+	return &PRSnapshot{
+		State:     pr.State,
+		Draft:     pr.Draft,
+		Author:    pr.User.Login,
+		UpdatedAt: pr.UpdatedAt,
+		HeadSHA:   pr.Head.SHA,
+	}, nil
 }
 
 // FetchDiff returns the unified diff for a PR.

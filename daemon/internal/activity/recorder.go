@@ -69,6 +69,8 @@ func (r *Recorder) handle(ev sse.Event) error {
 		return r.recordReviewCompleted(ev)
 	case sse.EventReviewError:
 		return r.recordReviewError(ev)
+	case sse.EventReviewSkipped:
+		return r.recordReviewSkipped(ev)
 	case sse.EventIssueReviewCompleted:
 		return r.recordIssueTriage(ev)
 	case sse.EventIssueImplemented:
@@ -208,6 +210,23 @@ func (r *Recorder) recordIssueReviewError(ev sse.Event) error {
 			"item_type": "issue",
 			"cli_used":  p.CLIUsed,
 			"error":     p.Error,
+		})
+	return err
+}
+
+func (r *Recorder) recordReviewSkipped(ev sse.Event) error {
+	var p struct {
+		Repo     string `json:"repo"`
+		PRNumber int    `json:"pr_number"`
+		PRTitle  string `json:"pr_title"`
+		Reason   string `json:"reason"`
+	}
+	if err := decode(ev.Data, &p); err != nil {
+		return err
+	}
+	_, err := r.store.InsertActivity(time.Now(), orgOf(p.Repo), p.Repo, "pr",
+		p.PRNumber, p.PRTitle, "review_skipped", p.Reason, map[string]any{
+			"reason": p.Reason,
 		})
 	return err
 }

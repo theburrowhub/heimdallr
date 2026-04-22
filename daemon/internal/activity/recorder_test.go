@@ -279,6 +279,31 @@ func TestRecorder_UnknownEventIsIgnored(t *testing.T) {
 	}
 }
 
+func TestRecorder_ReviewSkipped(t *testing.T) {
+	_, fs, events := newTestRecorder(t)
+
+	events <- sse.Event{
+		Type: sse.EventReviewSkipped,
+		Data: `{"repo":"org/name","pr_number":42,"pr_title":"Fix X","reason":"draft"}`,
+	}
+
+	waitFor(t, func() bool { return fs.count() == 1 })
+
+	got := fs.at(0)
+	if got.action != "review_skipped" {
+		t.Errorf("action = %q, want review_skipped", got.action)
+	}
+	if got.outcome != "draft" {
+		t.Errorf("outcome = %q, want draft", got.outcome)
+	}
+	if got.itemType != "pr" || got.itemNumber != 42 {
+		t.Errorf("item = %s#%d, want pr#42", got.itemType, got.itemNumber)
+	}
+	if got.repo != "org/name" || got.org != "org" {
+		t.Errorf("repo/org = %q/%q, want org/name + org", got.repo, got.org)
+	}
+}
+
 func TestRecorder_StoreFailureIsLoggedAndDropped(t *testing.T) {
 	_, fs, events := newTestRecorder(t)
 	fs.setFailNext(true)

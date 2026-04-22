@@ -203,9 +203,18 @@ func main() {
 		if cli == "" {
 			cli = cfg.AI.Primary
 		}
+		// Resolve botLogin once using cached value
+		loginMu.Lock()
+		botLogin := cachedLogin
+		loginMu.Unlock()
+
 		cfgMu.Lock()
 		agentCfg := cfg.AgentConfigFor(cli)
 		globalTimeout := cfg.AI.ExecutionTimeout
+		// Convert config.ResolvedReviewGuards to pipeline.GateConfig via same-shape cast.
+		// config cannot import pipeline (import cycle), so the helper returns a shadow
+		// type that callers cast here.
+		guards := pipeline.GateConfig(cfg.ReviewGuards(botLogin))
 		cfgMu.Unlock()
 		extraFlags := agentCfg.ExtraFlags
 		if extraFlags != "" {
@@ -233,6 +242,7 @@ func main() {
 				NoSessionPersistence: agentCfg.NoSessionPersistence,
 				Timeout:              resolveExecutionTimeout(globalTimeout, agentCfg.ExecutionTimeout),
 			},
+			Guards: guards,
 		}
 	}
 
@@ -252,6 +262,34 @@ func main() {
 			reviewMu.Unlock()
 		}()
 
+		// Caller-side gate: evaluate review guards BEFORE announcing the review.
+		// This prevents review_started from being emitted for PRs that will be
+		// rejected, which would leave the Flutter dashboard spinner stuck forever.
+		loginMu.Lock()
+		botLogin := cachedLogin
+		loginMu.Unlock()
+		cfgMu.Lock()
+		guards := pipeline.GateConfig(cfg.ReviewGuards(botLogin))
+		cfgMu.Unlock()
+		if reason := pipeline.Evaluate(pipeline.PRGate{
+			State:  pr.State,
+			Draft:  pr.Draft,
+			Author: pr.User.Login,
+		}, guards); reason != pipeline.SkipReasonNone {
+			broker.Publish(sse.Event{
+				Type: sse.EventReviewSkipped,
+				Data: sseData(map[string]any{
+					"repo":      pr.Repo,
+					"pr_number": pr.Number,
+					"pr_title":  pr.Title,
+					"reason":    string(reason),
+				}),
+			})
+			slog.Info("runReview: skipping PR",
+				"repo", pr.Repo, "pr", pr.Number, "reason", string(reason))
+			return
+		}
+
 		// Safety check: log exactly what we're about to review
 		slog.Info("pipeline: reviewing PR",
 			"repo", pr.Repo, "number", pr.Number, "github_id", pr.ID, "title", pr.Title)
@@ -262,6 +300,12 @@ func main() {
 		if err != nil {
 			slog.Error("pipeline run failed", "repo", pr.Repo, "pr", pr.Number, "err", err)
 			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: sseData(map[string]any{"pr_number": pr.Number, "repo": pr.Repo, "error": err.Error()})})
+			return
+		}
+		if rev == nil {
+			// Defense-in-depth gate in pipeline.Run rejected this PR. Callers are
+			// expected to filter upstream, so this is the safety net — exit quietly
+			// without emitting a completed/error event.
 			return
 		}
 		slog.Info("pipeline: review done",
@@ -279,18 +323,19 @@ func main() {
 	// tier2Adapter bridges main.go's concrete types to the Pipeline's
 	// Tier 2 / Tier 3 interfaces.
 	adapter := &tier2Adapter{
-		ghClient:  ghClient,
-		ghToken:   token,
-		pipeline:  p,
-		issuePipe: issuePipe,
-		fetcher:   issueFetcher,
-		store:     s,
-		broker:    broker,
-		cfgMu:     &cfgMu,
-		cfg:       &cfg,
-		loginMu:   &loginMu,
-		login:     &cachedLogin,
-		runReview: runReview,
+		ghClient:             ghClient,
+		ghToken:              token,
+		pipeline:             p,
+		issuePipe:            issuePipe,
+		fetcher:              issueFetcher,
+		store:                s,
+		broker:               broker,
+		cfgMu:                &cfgMu,
+		cfg:                  &cfg,
+		loginMu:              &loginMu,
+		login:                &cachedLogin,
+		runReview:            runReview,
+		lastSkippedUpdatedAt: make(map[int64]time.Time),
 	}
 
 	buildPipeline := func(c *config.Config) *scheduler.Pipeline {
@@ -614,6 +659,22 @@ func main() {
 		if err != nil {
 			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: sseData(map[string]any{"pr_id": prID, "error": err.Error()})})
 			return err
+		}
+		if rev == nil {
+			// pipeline.Run's defense-in-depth gate rejected this PR (e.g. an
+			// operator triggered a re-review on a closed/merged PR). Emit a
+			// review_skipped event so the UI can surface the reason instead of
+			// leaving the request hanging silently.
+			broker.Publish(sse.Event{
+				Type: sse.EventReviewSkipped,
+				Data: sseData(map[string]any{
+					"repo":      pr.Repo,
+					"pr_number": pr.Number,
+					"pr_title":  pr.Title,
+					"reason":    string(pipeline.SkipReasonNotOpen),
+				}),
+			})
+			return nil
 		}
 		broker.Publish(sse.Event{Type: sse.EventReviewCompleted, Data: sseData(map[string]any{
 			"pr_number": pr.Number,
@@ -989,6 +1050,13 @@ type tier2Adapter struct {
 	loginMu   *sync.Mutex
 	login     *string
 	runReview func(pr *gh.PullRequest, aiCfg config.RepoAI)
+
+	// skipMu protects lastSkippedUpdatedAt, which deduplicates review_skipped
+	// SSE events across consecutive poll cycles for the same (PR ID, updated_at)
+	// pair. Entries are pruned at the end of each FetchPRsToReview cycle so the
+	// map stays bounded to the current set of review-requested PRs.
+	skipMu                sync.Mutex
+	lastSkippedUpdatedAt  map[int64]time.Time
 }
 
 // discoveryStore is the subset of *store.Store that processDiscoveredRepos
@@ -1136,12 +1204,77 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 	// blocking store I/O below.
 	processDiscoveredRepos(added, reposSnap, nonMonSnap, a.store, a.broker, time.Now())
 
+	// Resolve bot login for the self-author guard.
+	a.loginMu.Lock()
+	botLogin := *a.login
+	a.loginMu.Unlock()
+	if botLogin == "" {
+		if u, err := a.ghClient.AuthenticatedUser(); err == nil {
+			botLogin = u
+			a.loginMu.Lock()
+			*a.login = u
+			a.loginMu.Unlock()
+		} else {
+			// Empty botLogin silently disables the self-author guard for this
+			// cycle; log so operators can diagnose why it's not firing.
+			slog.Warn("adapter: failed to resolve bot login, self-author guard disabled this cycle", "err", err)
+		}
+	}
+
+	a.cfgMu.Lock()
+	// Convert config.ResolvedReviewGuards to pipeline.GateConfig via same-shape cast.
+	// Shadow type exists because config cannot import pipeline (import cycle).
+	guards := pipeline.GateConfig((*a.cfg).ReviewGuards(botLogin))
+	a.cfgMu.Unlock()
+
 	out := make([]scheduler.Tier2PR, 0, len(prs))
+	// seenIDs tracks every PR GitHub ID encountered this cycle so we can prune
+	// the skip-dedup map to only live PRs after the loop.
+	seenIDs := make(map[int64]struct{}, len(prs))
 	for _, pr := range prs {
 		if pr.Repo == "" {
 			slog.Warn("adapter: skipping PR with empty repo", "pr_number", pr.Number)
 			continue
 		}
+		seenIDs[pr.ID] = struct{}{}
+		reason := pipeline.Evaluate(pipeline.PRGate{
+			State:  pr.State,
+			Draft:  pr.Draft,
+			Author: pr.User.Login,
+		}, guards)
+		if reason != pipeline.SkipReasonNone {
+			// Dedup: only emit review_skipped once per (PR ID, updated_at). A
+			// long-lived draft PR stays in the search results every cycle, but
+			// its updated_at doesn't change, so we suppress the repeat events.
+			a.skipMu.Lock()
+			prev, seen := a.lastSkippedUpdatedAt[pr.ID]
+			alreadyEmitted := seen && !pr.UpdatedAt.After(prev)
+			if !alreadyEmitted {
+				a.lastSkippedUpdatedAt[pr.ID] = pr.UpdatedAt
+			}
+			a.skipMu.Unlock()
+
+			if !alreadyEmitted {
+				a.broker.Publish(sse.Event{
+					Type: sse.EventReviewSkipped,
+					Data: sseData(map[string]any{
+						"repo":      pr.Repo,
+						"pr_number": pr.Number,
+						"pr_title":  pr.Title,
+						"reason":    string(reason),
+					}),
+				})
+				slog.Info("tier2: skipping PR",
+					"repo", pr.Repo, "pr", pr.Number, "reason", string(reason))
+			}
+			continue
+		}
+		// PR passed the gate — clear any prior skip record so if it is later
+		// re-skipped (e.g. converted to draft) we emit the event again.
+		a.skipMu.Lock()
+		delete(a.lastSkippedUpdatedAt, pr.ID)
+		a.skipMu.Unlock()
+
 		out = append(out, scheduler.Tier2PR{
 			ID:        pr.ID,
 			Number:    pr.Number,
@@ -1150,9 +1283,20 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 			HTMLURL:   pr.HTMLURL,
 			Author:    pr.User.Login,
 			State:     pr.State,
+			Draft:     pr.Draft,
 			UpdatedAt: pr.UpdatedAt,
 		})
 	}
+
+	// Prune skip-dedup entries for PRs that left the review-requested set
+	// (closed, review request removed, etc.) so the map stays bounded.
+	a.skipMu.Lock()
+	for id := range a.lastSkippedUpdatedAt {
+		if _, inCurrentBatch := seenIDs[id]; !inCurrentBatch {
+			delete(a.lastSkippedUpdatedAt, id)
+		}
+	}
+	a.skipMu.Unlock()
 
 	return out, nil
 }
@@ -1177,6 +1321,7 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 		HTMLURL:   pr.HTMLURL,
 		User:      gh.User{Login: pr.Author},
 		State:     pr.State,
+		Draft:     pr.Draft,
 		UpdatedAt: pr.UpdatedAt,
 	}
 	a.runReview(ghPR, aiCfg)
@@ -1317,15 +1462,23 @@ func (a *tier2Adapter) PRAlreadyReviewed(githubID int64, updatedAt time.Time) bo
 }
 
 // CheckItem implements scheduler.Tier3ItemChecker.
-func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem) (bool, error) {
+//
+// For PRs we fetch a full snapshot (state/draft/author/updated_at) via the
+// Pulls API, which lets HandleChange apply the draft and self-author guards
+// against fresh data without a second round-trip. For issues we still call
+// the Issues API (no draft concept).
+//
+// When an item has transitioned to not-open (closed/merged), persist the new
+// state to the store and emit a state-changed SSE event once (only if the
+// store previously recorded "open"), then return false so HandleChange does
+// not run. Closed items never need a review run at Tier 3.
+func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem) (bool, *scheduler.ItemSnapshot, error) {
 	if item.Type == "pr" {
-		// Single API call: /pulls/{n} gives state + merged_at + updated_at.
-		prState, updatedAt, err := a.ghClient.GetPRStateAndUpdatedAt(item.Repo, item.Number)
+		snap, err := a.ghClient.GetPRSnapshot(item.Repo, item.Number)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
-		if prState != "open" {
-			// Only publish SSE on the first detection — check stored state first.
+		if snap.State != "open" {
 			existing, _ := a.store.GetPRByGithubID(item.GithubID)
 			wasOpen := existing != nil && existing.State == "open"
 			a.store.UpdatePRStateByGithubID(item.GithubID, "closed")
@@ -1336,15 +1489,23 @@ func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem)
 				})
 				slog.Info("tier3: PR closed/merged", "repo", item.Repo, "number", item.Number)
 			}
-			return false, nil // closed — don't trigger HandleChange
+			return false, nil, nil
 		}
-		return updatedAt.After(item.LastSeen), nil
+		if !snap.UpdatedAt.After(item.LastSeen) {
+			return false, nil, nil
+		}
+		return true, &scheduler.ItemSnapshot{
+			State:     snap.State,
+			Draft:     snap.Draft,
+			Author:    snap.Author,
+			UpdatedAt: snap.UpdatedAt,
+		}, nil
 	}
-
-	// Issues: GetIssue returns state + updated_at in one call.
+	// Issues: GetIssue returns state + updated_at in one call. Draft is always
+	// false for issues.
 	issue, err := a.ghClient.GetIssue(item.Repo, item.Number)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if issue.State != "open" {
 		existing, _ := a.store.GetIssueByGithubID(item.GithubID)
@@ -1357,52 +1518,88 @@ func (a *tier2Adapter) CheckItem(ctx context.Context, item *scheduler.WatchItem)
 			})
 			slog.Info("tier3: issue closed", "repo", item.Repo, "number", item.Number)
 		}
-		return false, nil // closed — don't trigger HandleChange
+		return false, nil, nil
 	}
-	return issue.UpdatedAt.After(item.LastSeen), nil
+	if !issue.UpdatedAt.After(item.LastSeen) {
+		return false, nil, nil
+	}
+	return true, &scheduler.ItemSnapshot{
+		State:     issue.State,
+		Author:    issue.User.Login,
+		UpdatedAt: issue.UpdatedAt,
+	}, nil
 }
 
 // HandleChange implements scheduler.Tier3ItemChecker.
-func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchItem) error {
+func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchItem, snap *scheduler.ItemSnapshot) error {
 	if item.Type == "pr" {
-		// Dedup: skip if the PR was already reviewed at or after the last
-		// detected change — mirrors the same check Tier 2 performs.
-		// NOTE (TOCTOU): between this check and the runReview call below, another
-		// goroutine could complete the same review. The impact is a rare harmless
-		// duplicate review; the in-flight guard in runReview prevents concurrent
-		// reviews of the same PR.
+		if snap == nil {
+			return nil
+		}
+
+		// Guard: apply review guards against the FRESH state from snap, not
+		// the stale store copy. This closes the closed/merged-PR hole —
+		// Tier 3 previously reviewed PRs that had merged between cycles.
+		a.loginMu.Lock()
+		botLogin := *a.login
+		a.loginMu.Unlock()
+
+		a.cfgMu.Lock()
+		// Convert config.ResolvedReviewGuards to pipeline.GateConfig via same-shape
+		// cast (config cannot import pipeline — import cycle).
+		guards := pipeline.GateConfig((*a.cfg).ReviewGuards(botLogin))
+		c := *a.cfg
+		aiCfg := c.AIForRepo(item.Repo)
+		a.cfgMu.Unlock()
+
+		stored, _ := a.store.GetPRByGithubID(item.GithubID)
+		title := ""
+		if stored != nil {
+			title = stored.Title
+		}
+
+		reason := pipeline.Evaluate(pipeline.PRGate{
+			State:  snap.State,
+			Draft:  snap.Draft,
+			Author: snap.Author,
+		}, guards)
+		if reason != pipeline.SkipReasonNone {
+			a.broker.Publish(sse.Event{
+				Type: sse.EventReviewSkipped,
+				Data: sseData(map[string]any{
+					"repo":      item.Repo,
+					"pr_number": item.Number,
+					"pr_title":  title,
+					"reason":    string(reason),
+				}),
+			})
+			slog.Info("tier3: skipping PR",
+				"repo", item.Repo, "pr", item.Number, "reason", string(reason))
+			return nil
+		}
+
+		// Mirror the existing Tier 2 updated_at dedup.
 		if a.PRAlreadyReviewed(item.GithubID, item.LastSeen) {
 			slog.Debug("tier3: PR already reviewed, skipping", "pr", item.Number, "repo", item.Repo)
 			return nil
 		}
 
-		a.cfgMu.Lock()
-		c := *a.cfg
-		aiCfg := c.AIForRepo(item.Repo)
-		a.cfgMu.Unlock()
-
-		// Fetch the full PR from the store so runReview receives all
-		// fields (Title, Author, URL, etc.) instead of a sparse struct.
-		stored, _ := a.store.GetPRByGithubID(item.GithubID)
 		ghPR := &gh.PullRequest{
-			ID:     item.GithubID,
-			Number: item.Number,
-			Repo:   item.Repo,
+			ID:        item.GithubID,
+			Number:    item.Number,
+			Repo:      item.Repo,
+			State:     snap.State,
+			Draft:     snap.Draft,
+			UpdatedAt: snap.UpdatedAt,
 		}
 		if stored != nil {
 			ghPR.Title = stored.Title
 			ghPR.HTMLURL = stored.URL
-			ghPR.User = gh.User{Login: stored.Author}
-			ghPR.State = stored.State
-			ghPR.UpdatedAt = stored.UpdatedAt
+			ghPR.User = gh.User{Login: snap.Author}
 		}
 		a.runReview(ghPR, aiCfg)
+		return nil
 	}
-	// For issues we cannot trigger an immediate re-triage from Tier 3,
-	// but returning nil signals the caller (RunTier3) to call
-	// queue.ResetBackoff — which resets the item's backoff to 1m so it
-	// gets re-checked quickly rather than waiting at a potentially 15m
-	// backoff for Tier 2's next full cycle.
 	if item.Type == "issue" {
 		slog.Info("tier3: issue change detected, backoff will reset",
 			"repo", item.Repo, "number", item.Number)
