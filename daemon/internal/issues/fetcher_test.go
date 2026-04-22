@@ -25,10 +25,12 @@ func (c *fakeClient) FetchIssues(repo string, cfg config.IssueTrackingConfig, au
 }
 
 type dedupEntry struct {
-	row     *store.Issue
-	review  *store.IssueReview
-	rowErr  error
-	revErr  error
+	row               *store.Issue
+	review            *store.IssueReview
+	rowErr            error
+	revErr            error
+	failedAutoImpl    int // stub for CountFailedAutoImplement
+	failedAutoImplErr error
 }
 
 type fakeDedup struct {
@@ -59,6 +61,18 @@ func (d *fakeDedup) LatestIssueReview(issueID int64) (*store.IssueReview, error)
 		}
 	}
 	return nil, sql.ErrNoRows
+}
+
+func (d *fakeDedup) CountFailedAutoImplement(issueID int64) (int, error) {
+	for _, e := range d.byGithubID {
+		if e.row != nil && e.row.ID == issueID {
+			if e.failedAutoImplErr != nil {
+				return 0, e.failedAutoImplErr
+			}
+			return e.failedAutoImpl, nil
+		}
+	}
+	return 0, nil
 }
 
 type fakePipeline struct {
@@ -272,5 +286,76 @@ func TestFetcher_DedupLookupErrorTreatedAsUnprocessed(t *testing.T) {
 	processed, _ := f.ProcessRepo(context.Background(), "org/repo", enabledCfg(), "alice", noOpts)
 	if processed != 1 {
 		t.Errorf("flaky store must not block the pipeline, got processed=%d", processed)
+	}
+}
+
+// ── MaxAutoImplementFailures cap (#223) ──────────────────────────────────────
+
+func TestFetcher_SkipsIssueAfterMaxAutoImplementFailures(t *testing.T) {
+	// An issue that has already failed MaxAutoImplementFailures times must be
+	// skipped unconditionally — retrying a structural push failure (e.g.
+	// non-fast-forward) without human intervention will never succeed.
+	reviewedAt := time.Now().Add(-2 * time.Hour)
+	// UpdatedAt is recent so the grace-window check alone would not skip it —
+	// the failure cap must be what blocks it.
+	issue := fixture(1, time.Now())
+	dedup := &fakeDedup{byGithubID: map[int64]dedupEntry{
+		issue.ID: {
+			row:            &store.Issue{ID: 10, GithubID: issue.ID},
+			review:         &store.IssueReview{IssueID: 10, ActionTaken: "auto_implement_failed", CreatedAt: reviewedAt},
+			failedAutoImpl: issues.MaxAutoImplementFailures, // exactly at the cap
+		},
+	}}
+	p := &fakePipeline{}
+	f := issues.NewFetcher(&fakeClient{issues: []*github.Issue{issue}}, dedup, p)
+
+	processed, err := f.ProcessRepo(context.Background(), "org/repo", enabledCfg(), "alice", noOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if processed != 0 || len(p.calls) != 0 {
+		t.Errorf("issue at max failure cap should be skipped, got processed=%d calls=%v", processed, p.calls)
+	}
+}
+
+func TestFetcher_DoesNotSkipBelowMaxAutoImplementFailures(t *testing.T) {
+	// An issue with fewer than MaxAutoImplementFailures failures must still
+	// be attempted — the cap has not been reached.
+	reviewedAt := time.Now().Add(-2 * time.Hour)
+	issue := fixture(1, time.Now())
+	dedup := &fakeDedup{byGithubID: map[int64]dedupEntry{
+		issue.ID: {
+			row:            &store.Issue{ID: 10, GithubID: issue.ID},
+			review:         &store.IssueReview{IssueID: 10, ActionTaken: "auto_implement_failed", CreatedAt: reviewedAt},
+			failedAutoImpl: issues.MaxAutoImplementFailures - 1, // one below the cap
+		},
+	}}
+	p := &fakePipeline{}
+	f := issues.NewFetcher(&fakeClient{issues: []*github.Issue{issue}}, dedup, p)
+
+	processed, _ := f.ProcessRepo(context.Background(), "org/repo", enabledCfg(), "alice", noOpts)
+	if processed != 1 {
+		t.Errorf("issue below failure cap must still run, got processed=%d calls=%v", processed, p.calls)
+	}
+}
+
+func TestFetcher_CountFailedAutoImplErrDoesNotSkip(t *testing.T) {
+	// When CountFailedAutoImplement returns an error, the fetcher must log
+	// and proceed (fail-safe: never block an issue due to a flaky store).
+	reviewedAt := time.Now().Add(-2 * time.Hour)
+	issue := fixture(1, time.Now())
+	dedup := &fakeDedup{byGithubID: map[int64]dedupEntry{
+		issue.ID: {
+			row:               &store.Issue{ID: 10, GithubID: issue.ID},
+			review:            &store.IssueReview{IssueID: 10, CreatedAt: reviewedAt},
+			failedAutoImplErr: errors.New("db timeout"),
+		},
+	}}
+	p := &fakePipeline{}
+	f := issues.NewFetcher(&fakeClient{issues: []*github.Issue{issue}}, dedup, p)
+
+	processed, _ := f.ProcessRepo(context.Background(), "org/repo", enabledCfg(), "alice", noOpts)
+	if processed != 1 {
+		t.Errorf("count error must not block the pipeline, got processed=%d", processed)
 	}
 }

@@ -492,6 +492,23 @@ func (p *Pipeline) runAutoImplement(ctx context.Context, issue *github.Issue, is
 		return nil, fmt.Errorf("issues pipeline: commit: %w", err)
 	}
 	if err := p.git.Push(ctx, workDir, issue.Repo, branch, opts.GitHubToken); err != nil {
+		// Record the push failure so the fetcher can enforce the
+		// MaxAutoImplementFailures retry cap (#223). Without this row the
+		// dedup logic would have no visibility into failed attempts and the
+		// daemon would retry forever on non-fast-forward errors.
+		failedRev := &store.IssueReview{
+			IssueID:     issueID,
+			CLIUsed:     cli,
+			Summary:     fmt.Sprintf("auto_implement push failed: %v", err),
+			Triage:      "{}",
+			Suggestions: "[]",
+			ActionTaken: "auto_implement_failed",
+			CreatedAt:   time.Now().UTC(),
+		}
+		if _, storeErr := p.store.InsertIssueReview(failedRev); storeErr != nil {
+			slog.Warn("issues pipeline: could not record push failure in store",
+				"repo", issue.Repo, "number", issue.Number, "err", storeErr)
+		}
 		p.publishError(issueID, issue, fmt.Errorf("push: %w", err))
 		return nil, fmt.Errorf("issues pipeline: push: %w", err)
 	}
