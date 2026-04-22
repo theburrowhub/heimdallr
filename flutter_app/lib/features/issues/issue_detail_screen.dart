@@ -47,22 +47,8 @@ class _IssueDetailScreenState extends ConsumerState<IssueDetailScreen> {
       await api.dismissIssue(widget.issueId);
       ref.invalidate(issuesProvider);
       if (context.mounted) {
-        final messenger = ScaffoldMessenger.of(context);
         context.canPop() ? context.pop() : context.go('/');
-        messenger.showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            
-            content: const Text('Issue dismissed'),
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: () async {
-                await api.undismissIssue(widget.issueId);
-                ref.invalidate(issuesProvider);
-              },
-            ),
-          ),
-        );
+        showToast(context, 'Issue dismissed', duration: const Duration(seconds: 5));
       }
     } catch (e) {
       if (!context.mounted) return;

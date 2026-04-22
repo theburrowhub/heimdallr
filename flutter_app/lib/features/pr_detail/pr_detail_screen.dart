@@ -49,23 +49,8 @@ class _PRDetailScreenState extends ConsumerState<PRDetailScreen> {
       await api.dismissPR(widget.prId);
       ref.invalidate(prsProvider);
       if (context.mounted) {
-        // Capture messenger BEFORE navigating away — after pop the context is invalid
-        final messenger = ScaffoldMessenger.of(context);
         context.canPop() ? context.pop() : context.go('/');
-        messenger.showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 5),
-            
-            content: const Text('PR dismissed'),
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: () async {
-                await api.undismissPR(widget.prId);
-                ref.invalidate(prsProvider);
-              },
-            ),
-          ),
-        );
+        showToast(context, 'PR dismissed', duration: const Duration(seconds: 5));
       }
     } catch (e) {
       if (!context.mounted) return;

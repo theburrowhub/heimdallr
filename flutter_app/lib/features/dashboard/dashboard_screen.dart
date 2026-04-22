@@ -377,18 +377,8 @@ class _PRTileState extends ConsumerState<_PRTile> {
       await api.dismissPR(widget.pr.id);
       ref.invalidate(prsProvider);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          duration: const Duration(seconds: 5),
-          
-          content: Text('PR #${widget.pr.number} dismissed'),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () async {
-              await api.undismissPR(widget.pr.id);
-              ref.invalidate(prsProvider);
-            },
-          ),
-        ));
+        showToast(context, 'PR #${widget.pr.number} dismissed',
+            duration: const Duration(seconds: 5));
       }
     } catch (e) {
       if (mounted) showToast(context, 'Error: $e', isError: true);

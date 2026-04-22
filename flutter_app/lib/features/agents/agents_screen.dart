@@ -834,9 +834,7 @@ class _PromptEditorDialogState extends State<_PromptEditorDialog>
                         _implInstrCtrl.text.trim().isNotEmpty || _implTemplateCtrl.text.trim().isNotEmpty,
                     };
                     if (!hasContent) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Please provide instructions or a template')),
-                      );
+                      showToast(context, 'Please provide instructions or a template', isError: true);
                       return;
                     }
                     Navigator.pop(context, ReviewPrompt(
