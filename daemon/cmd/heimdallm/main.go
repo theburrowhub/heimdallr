@@ -469,6 +469,8 @@ func main() {
 					DiscoveryOrgs:  orgs,
 				}
 			},
+			Publisher:      bus.NewRepoPublisher(eventBus.JetStream()),
+			JS:             eventBus.JetStream(),
 			PRFetcher:      adapter,
 			PRProcessor:    adapter,
 			IssueProcessor: adapter,
