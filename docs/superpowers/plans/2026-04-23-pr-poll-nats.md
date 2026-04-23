@@ -103,7 +103,7 @@ func TestPRReviewPublisher_Dedup(t *testing.T) {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 go test ./internal/bus/ -run "TestPRReviewPublisher" -v
 ```
 
@@ -148,7 +148,7 @@ func (p *PRReviewPublisher) PublishPRReview(ctx context.Context, repo string, nu
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 go test ./internal/bus/ -run "TestPRReviewPublisher" -v
 ```
 
@@ -157,7 +157,7 @@ Expected: Both tests PASS.
 - [ ] **Step 5: Run full bus test suite**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 go test ./internal/bus/ -v -count=1
 ```
 
@@ -166,7 +166,7 @@ Expected: All tests pass (18 existing + 2 new = 20).
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 git add internal/bus/publisher.go internal/bus/publisher_test.go
 git commit -m "feat(bus): add PRReviewPublisher with dedup via Nats-Msg-Id (#303)"
 ```
@@ -290,7 +290,7 @@ func TestRunTier2_PublishesPRsToNATS(t *testing.T) {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 go test ./internal/scheduler/ -run TestRunTier2_PublishesPRs -v
 ```
 
@@ -367,7 +367,7 @@ To:
 - [ ] **Step 5: Run tier2 test**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 go test ./internal/scheduler/ -run TestRunTier2_PublishesPRs -v
 ```
 
@@ -394,7 +394,7 @@ And in `Start()`, update the `Tier2Deps` construction in the RunTier2 goroutine 
 - [ ] **Step 7: Verify full scheduler build + tests**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 go build ./internal/scheduler/
 go test ./internal/scheduler/ -v -count=1
 ```
@@ -404,7 +404,7 @@ Expected: Build clean, all tests pass.
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 git add internal/scheduler/tier2.go internal/scheduler/tier2_test.go internal/scheduler/pipeline.go
 git commit -m "feat(scheduler): replace goroutine spawn with NATS publish in Tier 2 (#303)"
 ```
@@ -436,7 +436,7 @@ The section should look like:
 - [ ] **Step 2: Verify build**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 go build ./cmd/heimdallm/
 ```
 
@@ -445,7 +445,7 @@ Expected: Clean build.
 - [ ] **Step 3: Run full test suite**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 go test ./... -count=1
 ```
 
@@ -454,7 +454,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 git add cmd/heimdallm/main.go
 git commit -m "feat: wire PR review NATS publisher into daemon (#303)"
 ```
@@ -466,7 +466,7 @@ git commit -m "feat: wire PR review NATS publisher into daemon (#303)"
 - [ ] **Step 1: Run affected packages with race detector**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 go test ./internal/bus/ ./internal/scheduler/ ./cmd/heimdallm/ -race -count=1
 ```
 
@@ -475,14 +475,14 @@ Expected: All pass (except pre-existing tier3 race).
 - [ ] **Step 2: Build the binary**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 go build -o bin/heimdallm ./cmd/heimdallm/
 ```
 
 - [ ] **Step 3: Smoke test**
 
 ```bash
-cd /Users/jamuriano/personal-workspace/auto-pr/daemon
+cd daemon
 HEIMDALLM_DATA_DIR=$(mktemp -d) HEIMDALLM_AI_PRIMARY=claude-code timeout 5 ./bin/heimdallm 2>&1 | head -15
 ```
 

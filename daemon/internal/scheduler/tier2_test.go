@@ -72,7 +72,7 @@ func TestRunTier2_PublishesPRsToNATS(t *testing.T) {
 	reposChan := make(chan []string, 1)
 	reposChan <- []string{"org/repo1", "org/repo2"}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	go scheduler.RunTier2(ctx, scheduler.Tier2Deps{
@@ -90,7 +90,7 @@ func TestRunTier2_PublishesPRsToNATS(t *testing.T) {
 
 	// Poll until the cold-start processTick publishes (RunTier2 waits 2s
 	// for Tier 1's first batch before firing). Bounded by ctx timeout.
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(3 * time.Second)
 	for {
 		calls := prPub.getCalls()
 		if len(calls) > 0 {
