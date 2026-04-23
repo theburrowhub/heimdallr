@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS reviews (
   suggestions         TEXT NOT NULL,
   severity            TEXT NOT NULL,
   created_at          DATETIME NOT NULL,
+  published_at        TEXT NOT NULL DEFAULT '',
   github_review_id    INTEGER NOT NULL DEFAULT 0,
   github_review_state TEXT NOT NULL DEFAULT '',
   head_sha            TEXT NOT NULL DEFAULT ''
@@ -139,6 +140,12 @@ func Open(dsn string) (*Store, error) {
 	db.Exec("ALTER TABLE reviews ADD COLUMN github_review_id INTEGER NOT NULL DEFAULT 0")
 	db.Exec("ALTER TABLE reviews ADD COLUMN github_review_state TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE reviews ADD COLUMN head_sha TEXT NOT NULL DEFAULT ''")
+	// published_at anchors the updated_at dedup window on the actual
+	// post-to-GitHub time. Stored as TEXT (sqlite datetime format, see
+	// sqliteTimeFormat) with empty-string default so legacy rows read as
+	// time.Time{} and callers can fall back to created_at. See
+	// theburrowhub/heimdallm#243 Fix 3.
+	db.Exec("ALTER TABLE reviews ADD COLUMN published_at TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE agents ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE agents ADD COLUMN cli_flags TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE agents RENAME COLUMN prompt TO prompt") // no-op, ensures column exists
