@@ -13,6 +13,7 @@ import (
 	gh "github.com/heimdallm/daemon/internal/github"
 	"github.com/heimdallm/daemon/internal/scheduler"
 	"github.com/heimdallm/daemon/internal/sse"
+	"github.com/heimdallm/daemon/internal/store"
 )
 
 // TestTier3Adapter_HandleChange_SkipsClosedPR verifies the Tier 3 correctness
@@ -38,8 +39,9 @@ func TestTier3Adapter_HandleChange_SkipsClosedPR(t *testing.T) {
 	)
 
 	runReviewCalls := 0
-	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) {
+	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) *store.Review {
 		runReviewCalls++
+		return nil
 	}
 
 	a := &tier2Adapter{
