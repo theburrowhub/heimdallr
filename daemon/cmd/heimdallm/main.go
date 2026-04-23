@@ -587,7 +587,11 @@ func main() {
 
 		// Rebuild ReviewResult from stored JSON
 		var issues []executor.Issue
-		json.Unmarshal([]byte(rev.Issues), &issues)
+		if err := json.Unmarshal([]byte(rev.Issues), &issues); err != nil {
+			slog.Error("publish-worker: corrupt issues JSON, skipping",
+				"review_id", msg.ReviewID, "err", err)
+			return nil // permanent — ack
+		}
 		result := &executor.ReviewResult{
 			Summary:  rev.Summary,
 			Issues:   issues,
@@ -600,7 +604,14 @@ func main() {
 			pipeline.SeverityToEvent(rev.Severity, len(issues)),
 		)
 		if err != nil {
-			// Transient — nak for NATS retry
+			errStr := err.Error()
+			// 4xx errors (except 429 rate limit) are permanent — no point retrying.
+			// 5xx and network errors are transient — nak for NATS retry.
+			if strings.Contains(errStr, "status 4") && !strings.Contains(errStr, "status 429") {
+				slog.Error("publish-worker: permanent GitHub error, skipping",
+					"review_id", msg.ReviewID, "err", err)
+				return nil // permanent — ack
+			}
 			return fmt.Errorf("submit review to GitHub: %w", err)
 		}
 
@@ -1634,7 +1645,12 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 		// allowing two concurrent reviews on the same PR (#243 pattern).
 		Head: gh.Branch{SHA: pr.HeadSHA},
 	}
-	_ = a.runReview(ghPR, aiCfg)
+	rev := a.runReview(ghPR, aiCfg)
+	if rev != nil && rev.GitHubReviewID == 0 && a.publishPub != nil {
+		if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
+			slog.Warn("ProcessPR: failed to enqueue publish", "review_id", rev.ID, "err", err)
+		}
+	}
 	return nil
 }
 
@@ -1937,7 +1953,12 @@ func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchIt
 			ghPR.HTMLURL = stored.URL
 			ghPR.User = gh.User{Login: snap.Author}
 		}
-		_ = a.runReview(ghPR, aiCfg)
+		rev := a.runReview(ghPR, aiCfg)
+		if rev != nil && rev.GitHubReviewID == 0 && a.publishPub != nil {
+			if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
+				slog.Warn("HandleChange: failed to enqueue publish", "review_id", rev.ID, "err", err)
+			}
+		}
 		return nil
 	}
 	if item.Type == "issue" {
