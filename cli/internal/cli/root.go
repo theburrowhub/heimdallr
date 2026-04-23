@@ -80,8 +80,11 @@ func NewRootCmd(version string) *cobra.Command {
 
 	root.AddCommand(
 		newStatusCmd(),
+		newReposCmd(),
 		newPRsCmd(),
+		newPRDetailCmd(),
 		newIssuesCmd(),
+		newIssueDetailCmd(),
 		newFollowCmd(),
 		newReviewPRCmd(),
 		newReviewIssueCmd(),
