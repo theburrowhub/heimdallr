@@ -362,6 +362,21 @@ func TestTier2Adapter_ProcessPR_ConcurrentCallsCollapseToOneReview(t *testing.T)
 		t.Fatalf("seed PR: %v", err)
 	}
 
+	// holdingClaim signals that a runReview call has just won the claim
+	// (immediately after ClaimInFlightReview returns ok). It is closed
+	// exactly once — by whichever goroutine wins — so the test can launch
+	// the second ProcessPR knowing the row is taken.
+	//
+	// release blocks the claim-holder inside runReview until the test
+	// explicitly frees it; this replaces the earlier `time.Sleep(50ms)`
+	// heuristic with a deterministic hand-off, addressing the review
+	// feedback on the original PR #283. With this pattern, the second
+	// goroutine is guaranteed to call ClaimInFlightReview while the row
+	// is still held — no scheduler-timing assumption required.
+	holdingClaim := make(chan struct{})
+	release := make(chan struct{})
+	var claimSignaler sync.Once
+
 	var reviewBody int32
 	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) {
 		// Mirror the production claim logic from runReview in main.go. If
@@ -376,16 +391,22 @@ func TestTier2Adapter_ProcessPR_ConcurrentCallsCollapseToOneReview(t *testing.T)
 		}
 		ok, err := s.ClaimInFlightReview(storedPR.ID, pr.Head.SHA)
 		if err != nil || !ok {
+			// Claim failed (err or row already held by the other goroutine) —
+			// this is the production "already in flight, skip" branch. Do
+			// NOT touch reviewBody; the whole point of the regression test
+			// is that this path runs exactly once across both goroutines.
 			return
 		}
 		defer func() { _ = s.ReleaseInFlightReview(storedPR.ID, pr.Head.SHA) }()
 
 		atomic.AddInt32(&reviewBody, 1)
-		// Hold the claim long enough that a parallel ProcessPR on the same
-		// (pr_id, head_sha) has time to contend for it. 50 ms is the same
-		// magnitude the scheduler uses between poll ticks for the contended
-		// case; production tick cadence is 60 s so this is extremely generous.
-		time.Sleep(50 * time.Millisecond)
+		// Signal the test that the claim is held, then block until the
+		// test explicitly releases. sync.Once protects against the
+		// theoretical case where both goroutines pass the claim check
+		// (which would be the #264 regression itself — we still want the
+		// signal delivered exactly once so the test harness is robust).
+		claimSignaler.Do(func() { close(holdingClaim) })
+		<-release
 	}
 
 	broker := sse.NewBroker()
@@ -420,24 +441,75 @@ func TestTier2Adapter_ProcessPR_ConcurrentCallsCollapseToOneReview(t *testing.T)
 		UpdatedAt: time.Now(),
 	}
 
-	// Two goroutines enter ProcessPR concurrently. This is exactly the race
-	// that #264 showed unprotected in production: two poll ticks 60 s apart
-	// both found the PR in the "to review" list because the first review
-	// hadn't stored its result yet.
+	// Deterministic two-phase race:
+	//
+	//   1. Goroutine A calls ProcessPR → runReview → claims the row, signals
+	//      `holdingClaim`, and blocks on `release`.
+	//   2. Test waits on `holdingClaim` — A is now guaranteed to hold the
+	//      row in SQLite.
+	//   3. Goroutine B calls ProcessPR → runReview → Claim fails atomically
+	//      (SQLite INSERT OR IGNORE) and returns without touching reviewBody.
+	//   4. Test verifies reviewBody == 1 while A still holds the claim.
+	//   5. Test closes `release`, A completes, the row is released.
+	//
+	// This is the same property #258 intended and that #264 proved was
+	// broken in production (PR #263 received two back-to-back reviews 60 s
+	// apart because the claim was silently skipped). Using channel hand-off
+	// instead of a sleep removes the previous test's dependency on
+	// scheduler timing — a concern raised in the review of the original
+	// PR #283.
 	var wg sync.WaitGroup
 	wg.Add(2)
+	ctx := context.Background()
+
+	// Goroutine A — expected to win the claim and hold it.
 	go func() {
 		defer wg.Done()
-		_ = a.ProcessPR(context.Background(), pr)
+		_ = a.ProcessPR(ctx, pr)
 	}()
+
+	// Wait for A to actually hold the row before starting B, so B is
+	// guaranteed to race against an already-claimed row rather than racing
+	// A for the row itself. 2 s is plenty of slack for any CI.
+	select {
+	case <-holdingClaim:
+	case <-time.After(2 * time.Second):
+		close(release) // avoid leaking the goroutine if something went wrong
+		wg.Wait()
+		t.Fatalf("no goroutine won the claim within 2s — setup broken")
+	}
+
+	// Goroutine B — expected to fail the claim and return fast.
+	doneB := make(chan struct{})
 	go func() {
 		defer wg.Done()
-		_ = a.ProcessPR(context.Background(), pr)
+		defer close(doneB)
+		_ = a.ProcessPR(ctx, pr)
 	}()
+
+	select {
+	case <-doneB:
+	case <-time.After(2 * time.Second):
+		close(release)
+		wg.Wait()
+		t.Fatalf("goroutine B did not return within 2s while row was held — claim contention broken")
+	}
+
+	// B has returned. A is still inside runReview, blocked on `release`.
+	// Only A's path should have reached the review body.
+	if got := atomic.LoadInt32(&reviewBody); got != 1 {
+		close(release)
+		wg.Wait()
+		t.Fatalf("review body ran %d time(s) while claim was held, want exactly 1 — #264 regression",
+			got)
+	}
+
+	// Release A and wait for both goroutines to exit.
+	close(release)
 	wg.Wait()
 
 	if got := atomic.LoadInt32(&reviewBody); got != 1 {
-		t.Errorf("concurrent ProcessPR ran the review body %d time(s), want exactly 1 — #264 regression",
+		t.Errorf("review body ran %d time(s) total, want exactly 1 — #264 regression",
 			got)
 	}
 
