@@ -64,6 +64,18 @@ func (s *Store) ListUnpublishedReviews() ([]*Review, error) {
 	return reviews, rows.Err()
 }
 
+// UpdateReviewHeadSHA backfills the head_sha column on a legacy review row.
+// Used by the pipeline's fail-closed dedup: if a previous review had no SHA
+// (from before the column was populated), we populate it from the current
+// snapshot instead of proceeding to a full re-review.
+func (s *Store) UpdateReviewHeadSHA(reviewID int64, headSHA string) error {
+	_, err := s.db.Exec("UPDATE reviews SET head_sha = ? WHERE id = ?", headSHA, reviewID)
+	if err != nil {
+		return fmt.Errorf("store: update review head_sha: %w", err)
+	}
+	return nil
+}
+
 // MarkReviewPublished records the GitHub review ID and state after a successful
 // SubmitReview call. The state is one of GitHub's review states; see Review for
 // the full set. Pass the sentinel pair (-1, "") to mark an orphan review that

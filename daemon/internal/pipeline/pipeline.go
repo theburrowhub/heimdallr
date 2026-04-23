@@ -201,17 +201,42 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 	// If the last stored review is for the same HEAD SHA, return it unchanged.
 	//
 	// The Search Issues API used by Tier 2 does not populate head.sha, so we
-	// resolve it on-demand. Resolver failure degrades gracefully — we fall
-	// through and run the review rather than block on a transient API error.
+	// resolve it on-demand. We must NOT proceed to Execute when we cannot
+	// confirm the SHA, because a transient API failure would otherwise bypass
+	// the cross-instance dedup and let every peer bot run the review on top
+	// of the same commit. See theburrowhub/heimdallm#243.
 	if pr.Head.SHA == "" {
-		if sha, err := p.gh.GetPRHeadSHA(pr.Repo, pr.Number); err != nil {
-			slog.Warn("pipeline: could not resolve HEAD SHA, skipping dedup guard",
-				"repo", pr.Repo, "pr", pr.Number, "err", err)
-		} else {
-			pr.Head.SHA = sha
+		sha, err := p.gh.GetPRHeadSHA(pr.Repo, pr.Number)
+		if err != nil {
+			// One short retry absorbs rate-limit blips without turning the
+			// fail-closed stance into a permanent outage.
+			sha, err = p.gh.GetPRHeadSHA(pr.Repo, pr.Number)
 		}
+		if err != nil {
+			slog.Warn("pipeline: HEAD SHA unresolved — skipping review (fail-closed)",
+				"repo", pr.Repo, "pr", pr.Number, "err", err)
+			return nil, fmt.Errorf("pipeline: resolve HEAD SHA: %w", err)
+		}
+		pr.Head.SHA = sha
 	}
 	prevReview, _ := p.store.LatestReviewForPR(prID)
+	// Legacy rows (before the head_sha column was populated) have empty
+	// HeadSHA and would otherwise bypass the guard because "" never equals a
+	// real SHA. Treat as "cannot confirm safe" — backfill the column from the
+	// current snapshot and skip. The user can trigger a re-review manually if
+	// they want one, but we never spend Claude credits on a legacy row whose
+	// dedup state is ambiguous.
+	if prevReview != nil && prevReview.HeadSHA == "" && pr.Head.SHA != "" {
+		slog.Info("pipeline: backfilling empty HeadSHA on legacy review row, skipping re-review",
+			"repo", pr.Repo, "pr", pr.Number, "review_id", prevReview.ID, "head_sha", pr.Head.SHA)
+		if err := p.store.UpdateReviewHeadSHA(prevReview.ID, pr.Head.SHA); err != nil {
+			slog.Warn("pipeline: failed to backfill HeadSHA",
+				"review_id", prevReview.ID, "err", err)
+		} else {
+			prevReview.HeadSHA = pr.Head.SHA
+		}
+		return prevReview, nil
+	}
 	if prevReview != nil && pr.Head.SHA != "" && prevReview.HeadSHA == pr.Head.SHA {
 		slog.Info("pipeline: skipping re-review, HEAD SHA unchanged",
 			"repo", pr.Repo, "pr", pr.Number, "head_sha", pr.Head.SHA)
