@@ -105,3 +105,64 @@ func TestPRReviewPublisher_Dedup(t *testing.T) {
 		t.Errorf("expected 1 (dedup), got %d", count)
 	}
 }
+
+func TestPRPublishPublisher_Publish(t *testing.T) {
+	b := newTestBus(t)
+	ctx := context.Background()
+
+	pub := bus.NewPRPublishPublisher(b.JetStream())
+
+	if err := pub.PublishPRPublish(ctx, 42); err != nil {
+		t.Fatalf("PublishPRPublish: %v", err)
+	}
+
+	cons, err := b.JetStream().Consumer(ctx, bus.StreamWork, bus.ConsumerPublish)
+	if err != nil {
+		t.Fatalf("consumer: %v", err)
+	}
+	msgs, err := cons.Fetch(1, jetstream.FetchMaxWait(2*time.Second))
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	var got bus.PRPublishMsg
+	for m := range msgs.Messages() {
+		if err := bus.Decode(m.Data(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		m.Ack()
+	}
+	if got.ReviewID != 42 {
+		t.Errorf("ReviewID = %d, want 42", got.ReviewID)
+	}
+}
+
+func TestPRPublishPublisher_Dedup(t *testing.T) {
+	b := newTestBus(t)
+	ctx := context.Background()
+
+	pub := bus.NewPRPublishPublisher(b.JetStream())
+
+	if err := pub.PublishPRPublish(ctx, 42); err != nil {
+		t.Fatalf("publish 1: %v", err)
+	}
+	if err := pub.PublishPRPublish(ctx, 42); err != nil {
+		t.Fatalf("publish 2: %v", err)
+	}
+
+	cons, err := b.JetStream().Consumer(ctx, bus.StreamWork, bus.ConsumerPublish)
+	if err != nil {
+		t.Fatalf("consumer: %v", err)
+	}
+	msgs, err := cons.Fetch(2, jetstream.FetchMaxWait(1*time.Second))
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	count := 0
+	for m := range msgs.Messages() {
+		count++
+		m.Ack()
+	}
+	if count != 1 {
+		t.Errorf("expected 1 (dedup), got %d", count)
+	}
+}

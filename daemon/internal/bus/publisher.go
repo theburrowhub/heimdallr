@@ -64,3 +64,29 @@ func (p *PRReviewPublisher) PublishPRReview(ctx context.Context, repo string, nu
 	}
 	return nil
 }
+
+// PRPublishPublisher publishes review publish requests to NATS JetStream.
+type PRPublishPublisher struct {
+	js jetstream.JetStream
+}
+
+// NewPRPublishPublisher creates a publisher that writes to SubjPRPublish.
+func NewPRPublishPublisher(js jetstream.JetStream) *PRPublishPublisher {
+	return &PRPublishPublisher{js: js}
+}
+
+// PublishPRPublish enqueues a review for GitHub publication.
+// Dedup via Nats-Msg-Id prevents the scanner and review worker from
+// double-publishing the same review.
+func (p *PRPublishPublisher) PublishPRPublish(ctx context.Context, reviewID int64) error {
+	data, err := Encode(PRPublishMsg{ReviewID: reviewID})
+	if err != nil {
+		return fmt.Errorf("bus: encode pr publish: %w", err)
+	}
+	msgID := fmt.Sprintf("rev:%d", reviewID)
+	_, err = p.js.Publish(ctx, SubjPRPublish, data, jetstream.WithMsgID(msgID))
+	if err != nil {
+		return fmt.Errorf("bus: publish pr publish: %w", err)
+	}
+	return nil
+}

@@ -76,6 +76,15 @@ func (s *Store) ListUnpublishedReviews() ([]*Review, error) {
 	return reviews, rows.Err()
 }
 
+// GetReview returns a single review by its local row ID.
+func (s *Store) GetReview(id int64) (*Review, error) {
+	row := s.db.QueryRow(
+		"SELECT id, pr_id, cli_used, summary, issues, suggestions, severity, created_at, published_at, github_review_id, github_review_state, head_sha FROM reviews WHERE id = ?",
+		id,
+	)
+	return scanReview(row)
+}
+
 // UpdateReviewHeadSHA backfills the head_sha column on a legacy review row.
 // Used by the pipeline's fail-closed dedup: if a previous review had no SHA
 // (from before the column was populated), we populate it from the current

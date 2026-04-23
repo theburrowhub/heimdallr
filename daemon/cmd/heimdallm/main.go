@@ -275,7 +275,7 @@ func main() {
 		}
 	}
 
-	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) {
+	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) *store.Review {
 		// Persistent in-flight claim: survives daemon restart and config reload.
 		// Keyed on (pr_id, head_sha) so a new commit on the same PR is not
 		// gated by a stale in-flight row from a prior HEAD. See
@@ -318,7 +318,7 @@ func main() {
 			} else if !ok {
 				slog.Info("runReview: already in flight (persistent), skipping",
 					"pr", pr.Number, "repo", pr.Repo, "head_sha", pr.Head.SHA)
-				return
+				return nil
 			} else {
 				claimed = true
 				claimPRID = stored.ID
@@ -385,7 +385,7 @@ func main() {
 			})
 			slog.Info("runReview: skipping PR",
 				"repo", pr.Repo, "pr", pr.Number, "reason", string(reason))
-			return
+			return nil
 		}
 
 		// Safety check: log exactly what we're about to review
@@ -407,16 +407,16 @@ func main() {
 						"reason":    cbErr.Reason,
 					}),
 				})
-				return
+				return nil
 			}
 			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: sseData(map[string]any{"pr_number": pr.Number, "repo": pr.Repo, "error": err.Error()})})
-			return
+			return nil
 		}
 		if rev == nil {
 			// Defense-in-depth gate in pipeline.Run rejected this PR. Callers are
 			// expected to filter upstream, so this is the safety net — exit quietly
 			// without emitting a completed/error event.
-			return
+			return nil
 		}
 		slog.Info("pipeline: review done",
 			"repo", pr.Repo, "number", pr.Number, "severity", rev.Severity,
@@ -427,9 +427,13 @@ func main() {
 			"pr_id":     rev.PRID,
 			"severity":  rev.Severity,
 		})})
+		return rev
 	}
 
 	// ── Multi-tier Pipeline ──────────────────────────────────────────────
+	js := eventBus.JetStream()
+	publishPub := bus.NewPRPublishPublisher(js)
+
 	// tier2Adapter bridges main.go's concrete types to the Pipeline's
 	// Tier 2 / Tier 3 interfaces.
 	adapter := &tier2Adapter{
@@ -445,10 +449,9 @@ func main() {
 		loginMu:              &loginMu,
 		login:                &cachedLogin,
 		runReview:            runReview,
+		publishPub:           publishPub,
 		lastSkippedUpdatedAt: make(map[int64]time.Time),
 	}
-
-	js := eventBus.JetStream()
 
 	buildPipeline := func(c *config.Config) *scheduler.Pipeline {
 		return scheduler.NewPipeline(scheduler.PipelineConfig{
@@ -522,7 +525,16 @@ func main() {
 		cfgMu.Unlock()
 		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, pr.Repo, localDirBase)
 
-		runReview(pr, aiCfg)
+		rev := runReview(pr, aiCfg)
+
+		// If review succeeded but wasn't published to GitHub yet,
+		// enqueue for the publish worker.
+		if rev != nil && rev.GitHubReviewID == 0 {
+			if err := publishPub.PublishPRPublish(ctx, rev.ID); err != nil {
+				slog.Warn("review-worker: failed to enqueue publish",
+					"review_id", rev.ID, "err", err)
+			}
+		}
 
 		// Maintain Tier 3 watching (Task 9 replaces WatchQueue entirely).
 		cfgMu.Lock()
@@ -539,6 +551,87 @@ func main() {
 	go func() {
 		if err := reviewWorker.Start(workerCtx); err != nil {
 			slog.Error("review worker stopped", "err", err)
+		}
+	}()
+
+	// ── NATS PR publish worker ──────────────────────────────────────────
+	// Consumes publish requests and submits stored reviews to GitHub.
+	// Replaces the manual retry loop in PublishPending with NATS retry
+	// semantics (NakWithDelay for transient GitHub errors).
+	publishHandler := func(ctx context.Context, msg bus.PRPublishMsg) error {
+		rev, err := s.GetReview(msg.ReviewID)
+		if err != nil {
+			slog.Warn("publish-worker: review not found, skipping",
+				"review_id", msg.ReviewID, "err", err)
+			return nil // permanent — ack
+		}
+		if rev.GitHubReviewID != 0 {
+			slog.Info("publish-worker: already published, skipping",
+				"review_id", msg.ReviewID, "github_review_id", rev.GitHubReviewID)
+			return nil // idempotent — ack
+		}
+
+		pr, err := s.GetPR(rev.PRID)
+		if err != nil {
+			slog.Warn("publish-worker: PR not found, marking orphaned",
+				"review_id", msg.ReviewID, "pr_id", rev.PRID, "err", err)
+			_ = s.MarkReviewPublished(rev.ID, -1, "", time.Now().UTC())
+			return nil // permanent — ack
+		}
+		if pr.Repo == "" {
+			slog.Info("publish-worker: PR has no repo, marking orphaned",
+				"review_id", msg.ReviewID)
+			_ = s.MarkReviewPublished(rev.ID, -1, "", time.Now().UTC())
+			return nil // permanent — ack
+		}
+
+		// Rebuild ReviewResult from stored JSON
+		var issues []executor.Issue
+		if err := json.Unmarshal([]byte(rev.Issues), &issues); err != nil {
+			slog.Error("publish-worker: corrupt issues JSON, skipping",
+				"review_id", msg.ReviewID, "err", err)
+			return nil // permanent — ack
+		}
+		result := &executor.ReviewResult{
+			Summary:  rev.Summary,
+			Issues:   issues,
+			Severity: rev.Severity,
+		}
+
+		ghID, ghState, err := ghClient.SubmitReview(
+			pr.Repo, pr.Number,
+			pipeline.BuildGitHubBody(result),
+			pipeline.SeverityToEvent(rev.Severity, len(issues)),
+		)
+		if err != nil {
+			errStr := err.Error()
+			// 4xx errors (except 429 rate limit) are permanent — no point retrying.
+			// 5xx and network errors are transient — nak for NATS retry.
+			if strings.Contains(errStr, "status 4") && !strings.Contains(errStr, "status 429") {
+				slog.Error("publish-worker: permanent GitHub error, skipping",
+					"review_id", msg.ReviewID, "err", err)
+				return nil // permanent — ack
+			}
+			return fmt.Errorf("submit review to GitHub: %w", err)
+		}
+
+		publishedAt := time.Now().UTC()
+		if err := s.MarkReviewPublished(rev.ID, ghID, ghState, publishedAt); err != nil {
+			slog.Warn("publish-worker: failed to mark published",
+				"review_id", rev.ID, "err", err)
+		}
+		slog.Info("publish-worker: review published",
+			"review_id", rev.ID, "github_review_id", ghID,
+			"github_review_state", ghState)
+		return nil // success — ack
+	}
+
+	publishW := worker.NewPublishWorker(js, publishHandler)
+	publishWCtx, publishWCancel := context.WithCancel(context.Background())
+	defer publishWCancel()
+	go func() {
+		if err := publishW.Start(publishWCtx); err != nil {
+			slog.Error("publish worker stopped", "err", err)
 		}
 	}()
 
@@ -1249,7 +1342,8 @@ type tier2Adapter struct {
 	cfg       **config.Config
 	loginMu   *sync.Mutex
 	login     *string
-	runReview func(pr *gh.PullRequest, aiCfg config.RepoAI)
+	runReview  func(pr *gh.PullRequest, aiCfg config.RepoAI) *store.Review
+	publishPub *bus.PRPublishPublisher
 
 	// skipMu protects lastSkippedUpdatedAt, which deduplicates review_skipped
 	// SSE events across consecutive poll cycles for the same (PR ID, updated_at)
@@ -1551,13 +1645,26 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 		// allowing two concurrent reviews on the same PR (#243 pattern).
 		Head: gh.Branch{SHA: pr.HeadSHA},
 	}
-	a.runReview(ghPR, aiCfg)
+	rev := a.runReview(ghPR, aiCfg)
+	if rev != nil && rev.GitHubReviewID == 0 && a.publishPub != nil {
+		if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
+			slog.Warn("ProcessPR: failed to enqueue publish", "review_id", rev.ID, "err", err)
+		}
+	}
 	return nil
 }
 
 // PublishPending implements scheduler.Tier2PRProcessor.
 func (a *tier2Adapter) PublishPending() {
-	a.pipeline.PublishPending()
+	reviews, err := a.store.ListUnpublishedReviews()
+	if err != nil || len(reviews) == 0 {
+		return
+	}
+	for _, rev := range reviews {
+		if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
+			slog.Warn("publish-pending: enqueue failed", "review_id", rev.ID, "err", err)
+		}
+	}
 }
 
 // ProcessRepo implements scheduler.Tier2IssueProcessor.
@@ -1846,7 +1953,12 @@ func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchIt
 			ghPR.HTMLURL = stored.URL
 			ghPR.User = gh.User{Login: snap.Author}
 		}
-		a.runReview(ghPR, aiCfg)
+		rev := a.runReview(ghPR, aiCfg)
+		if rev != nil && rev.GitHubReviewID == 0 && a.publishPub != nil {
+			if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
+				slog.Warn("HandleChange: failed to enqueue publish", "review_id", rev.ID, "err", err)
+			}
+		}
 		return nil
 	}
 	if item.Type == "issue" {
