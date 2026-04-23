@@ -224,3 +224,32 @@ func TestIssuePublisher_Implement(t *testing.T) {
 		t.Errorf("unexpected: %+v", got)
 	}
 }
+
+func TestStateCheckPublisher_Publish(t *testing.T) {
+	b := newTestBus(t)
+	ctx := context.Background()
+
+	pub := bus.NewStateCheckPublisher(b.JetStream())
+	if err := pub.PublishStateCheck(ctx, "pr", "org/repo", 42, 12345); err != nil {
+		t.Fatalf("PublishStateCheck: %v", err)
+	}
+
+	cons, err := b.JetStream().Consumer(ctx, bus.StreamWork, bus.ConsumerState)
+	if err != nil {
+		t.Fatalf("consumer: %v", err)
+	}
+	msgs, err := cons.Fetch(1, jetstream.FetchMaxWait(2*time.Second))
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	var got bus.StateCheckMsg
+	for m := range msgs.Messages() {
+		if err := bus.Decode(m.Data(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		m.Ack()
+	}
+	if got.Type != "pr" || got.Repo != "org/repo" || got.Number != 42 || got.GithubID != 12345 {
+		t.Errorf("unexpected: %+v", got)
+	}
+}

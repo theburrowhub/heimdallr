@@ -128,3 +128,31 @@ func (p *NATSIssuePublisher) PublishIssueImplement(ctx context.Context, repo str
 	}
 	return nil
 }
+
+// StateCheckPublisher publishes state check requests to NATS JetStream.
+type StateCheckPublisher struct {
+	js jetstream.JetStream
+}
+
+// NewStateCheckPublisher creates a publisher for state check requests.
+func NewStateCheckPublisher(js jetstream.JetStream) *StateCheckPublisher {
+	return &StateCheckPublisher{js: js}
+}
+
+// PublishStateCheck publishes a state check request for a watched item.
+func (p *StateCheckPublisher) PublishStateCheck(ctx context.Context, typ, repo string, number int, githubID int64) error {
+	data, err := Encode(StateCheckMsg{
+		Type:     typ,
+		Repo:     repo,
+		Number:   number,
+		GithubID: githubID,
+	})
+	if err != nil {
+		return fmt.Errorf("bus: encode state check: %w", err)
+	}
+	_, err = p.js.Publish(ctx, SubjStateCheck, data)
+	if err != nil {
+		return fmt.Errorf("bus: publish state check: %w", err)
+	}
+	return nil
+}
