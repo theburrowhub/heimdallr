@@ -94,13 +94,13 @@ func TestMarkReviewPublished_RoundTripsStateAndID(t *testing.T) {
 	})
 
 	rev := &store.Review{
-		PRID:      prID,
-		CLIUsed:   "claude",
-		Summary:   "ok",
-		Issues:    "[]",
+		PRID:        prID,
+		CLIUsed:     "claude",
+		Summary:     "ok",
+		Issues:      "[]",
 		Suggestions: "[]",
-		Severity:  "low",
-		CreatedAt: time.Now().UTC().Truncate(time.Second),
+		Severity:    "low",
+		CreatedAt:   time.Now().UTC().Truncate(time.Second),
 	}
 	revID, err := s.InsertReview(rev)
 	if err != nil {
@@ -117,7 +117,8 @@ func TestMarkReviewPublished_RoundTripsStateAndID(t *testing.T) {
 			latest.GitHubReviewID, latest.GitHubReviewState)
 	}
 
-	if err := s.MarkReviewPublished(revID, 98765, "APPROVED"); err != nil {
+	publishedAt := time.Now().UTC().Truncate(time.Second)
+	if err := s.MarkReviewPublished(revID, 98765, "APPROVED", publishedAt); err != nil {
 		t.Fatalf("mark published: %v", err)
 	}
 
@@ -130,6 +131,11 @@ func TestMarkReviewPublished_RoundTripsStateAndID(t *testing.T) {
 	}
 	if got.GitHubReviewState != "APPROVED" {
 		t.Errorf("GitHubReviewState = %q, want %q", got.GitHubReviewState, "APPROVED")
+	}
+	// PublishedAt should round-trip — it's the new anchor the dedup uses,
+	// so a storage regression here would silently re-break #243.
+	if !got.PublishedAt.Equal(publishedAt) {
+		t.Errorf("PublishedAt = %v, want %v", got.PublishedAt, publishedAt)
 	}
 }
 

@@ -410,7 +410,14 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 		slog.Warn("pipeline: failed to publish to GitHub, will retry",
 			"pr", pr.Number, "err", publishErr)
 	} else {
-		_ = p.store.MarkReviewPublished(rev.ID, ghReviewID, ghReviewState)
+		// Stamp PublishedAt immediately after the API returned success — this
+		// is the anchor the dedup window uses. Anchoring on CreatedAt (set
+		// before Claude ran) is what let #243 loop repeatedly.
+		publishedAt := time.Now().UTC()
+		if err := p.store.MarkReviewPublished(rev.ID, ghReviewID, ghReviewState, publishedAt); err != nil {
+			slog.Warn("pipeline: failed to mark review published", "review_id", rev.ID, "err", err)
+		}
+		rev.PublishedAt = publishedAt
 		rev.GitHubReviewID = ghReviewID
 		rev.GitHubReviewState = ghReviewState
 		slog.Info("pipeline: review published to GitHub",
@@ -441,7 +448,7 @@ func (p *Pipeline) PublishPending() {
 		// Skip reviews for PRs with no repo — orphaned records that will never publish.
 		// Mark them as permanently published (fake ID -1, empty state) to stop retry noise.
 		if pr.Repo == "" {
-			_ = p.store.MarkReviewPublished(rev.ID, -1, "")
+			_ = p.store.MarkReviewPublished(rev.ID, -1, "", time.Now().UTC())
 			slog.Info("pipeline: skipping pending review for PR with no repo", "review_id", rev.ID)
 			continue
 		}
@@ -464,7 +471,10 @@ func (p *Pipeline) PublishPending() {
 			slog.Warn("pipeline: retry publish failed", "review_id", rev.ID, "err", err)
 			continue
 		}
-		_ = p.store.MarkReviewPublished(rev.ID, ghID, ghState)
+		// Stamp the retry's PublishedAt so dedup anchors on the actual
+		// post-to-GitHub time (not the original CreatedAt), matching the
+		// Run() path. See theburrowhub/heimdallm#243.
+		_ = p.store.MarkReviewPublished(rev.ID, ghID, ghState, time.Now().UTC())
 		slog.Info("pipeline: pending review published",
 			"review_id", rev.ID,
 			"github_review_id", ghID,

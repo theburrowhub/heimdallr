@@ -1490,9 +1490,15 @@ func (a *tier2Adapter) PRAlreadyReviewed(githubID int64, updatedAt time.Time) bo
 	if err != nil || rev == nil {
 		return false
 	}
-	// Add a 30-second grace period: GitHub bumps updated_at by ~2s when
-	// a review is submitted, which would otherwise trigger an immediate re-review.
-	return !updatedAt.After(rev.CreatedAt.Add(30 * time.Second))
+	// Prefer PublishedAt (stamped when SubmitReview returned); fall back to
+	// CreatedAt for legacy rows. CreatedAt is stamped BEFORE the Claude call,
+	// so a 30s grace on CreatedAt was useless for reviews taking >30s — the
+	// 2026-04-22 cost-runaway regression. See theburrowhub/heimdallm#243.
+	anchor := rev.PublishedAt
+	if anchor.IsZero() {
+		anchor = rev.CreatedAt
+	}
+	return pipeline.ReviewFreshEnough(anchor, updatedAt, pipeline.GraceDefault)
 }
 
 // CheckItem implements scheduler.Tier3ItemChecker.

@@ -192,3 +192,101 @@ func TestRun_LegacyRowWithEmptyHeadSHAIsBackfilledAndSkipped(t *testing.T) {
 		t.Errorf("stored HeadSHA = %q, want %q", reviews[0].HeadSHA, "abc123")
 	}
 }
+
+// newTestAdapter constructs a minimal tier2Adapter-equivalent that exposes
+// PRAlreadyReviewed for the test. Mirrors the real adapter in main.go but
+// without the Flutter/scheduler/config deps we don't need here.
+func newTestAdapter(s *store.Store) interface {
+	PRAlreadyReviewed(githubID int64, updatedAt time.Time) bool
+} {
+	return pipeline.NewTestAdapter(s)
+}
+
+// TestPRAlreadyReviewed_SlowReviewDoesNotReloop is the core regression for
+// the 2026-04-22 cost-runaway (theburrowhub/heimdallm#243). Before Fix 3 the
+// dedup anchored on CreatedAt (stamped BEFORE Claude ran). Any review taking
+// longer than the 30 s grace window fell out of dedup the instant it posted,
+// and the very next poll would re-review the same commit.
+func TestPRAlreadyReviewed_SlowReviewDoesNotReloop(t *testing.T) {
+	s := newMemStore(t)
+	prRow := &store.PR{GithubID: 99, Repo: "org/r", Number: 99, Title: "t",
+		State: "open", UpdatedAt: time.Now()}
+	prID, err := s.UpsertPR(prRow)
+	if err != nil {
+		t.Fatalf("upsert pr: %v", err)
+	}
+
+	// Review started 3 minutes ago, posted to GitHub 30s ago (PublishedAt).
+	startedAt := time.Now().Add(-3 * time.Minute)
+	publishedAt := time.Now().Add(-30 * time.Second)
+	if _, err := s.InsertReview(&store.Review{
+		PRID: prID, CLIUsed: "claude", Issues: "[]", Suggestions: "[]",
+		Severity: "low", CreatedAt: startedAt, PublishedAt: publishedAt,
+		HeadSHA: "abc",
+	}); err != nil {
+		t.Fatalf("insert review: %v", err)
+	}
+
+	// GitHub's PR.updated_at was bumped 15s after PublishedAt — still inside
+	// the 2-minute grace. Should be treated as "already reviewed".
+	updatedAt := publishedAt.Add(15 * time.Second)
+	adapter := newTestAdapter(s)
+	if !adapter.PRAlreadyReviewed(99, updatedAt) {
+		t.Errorf("slow review (3 min) must not re-loop when updated_at is within 2m grace of PublishedAt")
+	}
+}
+
+// TestPRAlreadyReviewed_FallsBackToCreatedAtWhenPublishedAtZero covers the
+// upgrade path: rows stored before the published_at column existed have zero
+// PublishedAt. They must still dedup via CreatedAt so upgrading the daemon
+// does not cause a one-time re-review stampede against every open PR.
+func TestPRAlreadyReviewed_FallsBackToCreatedAtWhenPublishedAtZero(t *testing.T) {
+	s := newMemStore(t)
+	prRow := &store.PR{GithubID: 100, Repo: "org/r", Number: 100, Title: "t",
+		State: "open", UpdatedAt: time.Now()}
+	prID, err := s.UpsertPR(prRow)
+	if err != nil {
+		t.Fatalf("upsert pr: %v", err)
+	}
+	createdAt := time.Now().Add(-30 * time.Second)
+	if _, err := s.InsertReview(&store.Review{
+		PRID: prID, CLIUsed: "claude", Issues: "[]", Suggestions: "[]",
+		Severity: "low", CreatedAt: createdAt, // PublishedAt zero
+		HeadSHA: "abc",
+	}); err != nil {
+		t.Fatalf("insert review: %v", err)
+	}
+
+	updatedAt := createdAt.Add(10 * time.Second)
+	adapter := newTestAdapter(s)
+	if !adapter.PRAlreadyReviewed(100, updatedAt) {
+		t.Errorf("legacy row (PublishedAt zero) must fall back to CreatedAt and still dedup")
+	}
+}
+
+// TestPRAlreadyReviewed_AllowsReviewAfterGraceWindow locks in the upper
+// bound: a 2-minute grace is deliberate, not "effectively infinite". A push
+// 5 minutes after the review must be treated as a genuine change.
+func TestPRAlreadyReviewed_AllowsReviewAfterGraceWindow(t *testing.T) {
+	s := newMemStore(t)
+	prRow := &store.PR{GithubID: 101, Repo: "org/r", Number: 101, Title: "t",
+		State: "open", UpdatedAt: time.Now()}
+	prID, err := s.UpsertPR(prRow)
+	if err != nil {
+		t.Fatalf("upsert pr: %v", err)
+	}
+	publishedAt := time.Now().Add(-5 * time.Minute) // well outside 2m grace
+	if _, err := s.InsertReview(&store.Review{
+		PRID: prID, CLIUsed: "claude", Issues: "[]", Suggestions: "[]",
+		Severity: "low", CreatedAt: publishedAt.Add(-1 * time.Minute),
+		PublishedAt: publishedAt, HeadSHA: "abc",
+	}); err != nil {
+		t.Fatalf("insert review: %v", err)
+	}
+
+	updatedAt := time.Now()
+	adapter := newTestAdapter(s)
+	if adapter.PRAlreadyReviewed(101, updatedAt) {
+		t.Errorf("activity 5 min after publish must be treated as new change (grace only 2m)")
+	}
+}
