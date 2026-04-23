@@ -538,13 +538,11 @@ func main() {
 			}
 		}
 
-		// Maintain Tier 3 watching (Task 9 replaces WatchQueue entirely).
-		cfgMu.Lock()
-		q := pipe.Queue()
-		cfgMu.Unlock()
-		q.Push(&scheduler.WatchItem{
-			Type: "pr", Repo: pr.Repo, Number: pr.Number, GithubID: pr.ID,
-		})
+		// Enroll for state watching via NATS KV.
+		if err := eventBus.WatchKV().Enroll(ctx, "pr", pr.Repo, pr.Number, pr.ID); err != nil {
+			slog.Warn("review-worker: failed to enroll watch",
+				"repo", pr.Repo, "pr", pr.Number, "err", err)
+		}
 	}
 
 	reviewWorker := worker.NewReviewWorker(eventBus.JetStream(), reviewHandler)
@@ -791,6 +789,86 @@ func main() {
 	go func() {
 		if err := implementW.Start(implementWCtx); err != nil {
 			slog.Error("implement worker stopped", "err", err)
+		}
+	}()
+
+	// ── State check poller ──────────────────────────────────────────────
+	// Scans the NATS KV watch bucket every 30s and publishes StateCheckMsg
+	// for items due for a state check. Replaces the in-memory WatchQueue.
+	stateCheckPub := bus.NewStateCheckPublisher(js)
+	statePollerCtx, statePollerCancel := context.WithCancel(context.Background())
+	defer statePollerCancel()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-statePollerCtx.Done():
+				return
+			case <-ticker.C:
+				watchKV := eventBus.WatchKV()
+				if evicted, err := watchKV.EvictStale(statePollerCtx); err != nil {
+					slog.Warn("state-poller: evict failed", "err", err)
+				} else if evicted > 0 {
+					slog.Debug("state-poller: evicted stale items", "count", evicted)
+				}
+
+				ready, err := watchKV.ScanReady(statePollerCtx)
+				if err != nil {
+					slog.Warn("state-poller: scan failed", "err", err)
+					continue
+				}
+				for _, entry := range ready {
+					if err := stateCheckPub.PublishStateCheck(statePollerCtx, entry.Type, entry.Repo, entry.Number, entry.GithubID); err != nil {
+						slog.Warn("state-poller: publish failed",
+							"type", entry.Type, "repo", entry.Repo, "number", entry.Number, "err", err)
+					}
+				}
+			}
+		}
+	}()
+
+	// ── NATS state check worker ─────────────────────────────────────────
+	// Consumes state check requests, calls GitHub API, updates KV backoff.
+	// Reuses the existing CheckItem/HandleChange logic from tier2Adapter.
+	stateHandler := func(ctx context.Context, msg bus.StateCheckMsg) (bool, error) {
+		item := &scheduler.WatchItem{
+			Type:     msg.Type,
+			Repo:     msg.Repo,
+			Number:   msg.Number,
+			GithubID: msg.GithubID,
+		}
+
+		// Read LastSeen from KV for the dedup check inside CheckItem.
+		// Key separator is "." (NATS KV doesn't allow ":").
+		key := fmt.Sprintf("%s.%d", msg.Type, msg.GithubID)
+		entry, err := eventBus.WatchKV().Get(ctx, key)
+		if err == nil {
+			item.LastSeen = entry.LastSeen
+		} else {
+			slog.Warn("state-handler: KV get failed, using zero LastSeen",
+				"key", key, "err", err)
+		}
+
+		changed, snap, err := adapter.CheckItem(ctx, item)
+		if err != nil {
+			return false, err
+		}
+		if !changed {
+			return false, nil
+		}
+		if err := adapter.HandleChange(ctx, item, snap); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+
+	stateW := worker.NewStateWorker(js, eventBus.WatchKV(), stateHandler)
+	stateWCtx, stateWCancel := context.WithCancel(context.Background())
+	defer stateWCancel()
+	go func() {
+		if err := stateW.Start(stateWCtx); err != nil {
+			slog.Error("state worker stopped", "err", err)
 		}
 	}()
 
