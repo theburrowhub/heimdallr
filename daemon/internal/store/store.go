@@ -141,9 +141,10 @@ func Open(dsn string) (*Store, error) {
 	db.Exec("ALTER TABLE reviews ADD COLUMN github_review_state TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE reviews ADD COLUMN head_sha TEXT NOT NULL DEFAULT ''")
 	// published_at anchors the updated_at dedup window on the actual
-	// post-to-GitHub time. Stored as TEXT (RFC3339) with empty-string
-	// default so legacy rows read as time.Time{} and callers can fall
-	// back to created_at. See theburrowhub/heimdallm#243 Fix 3.
+	// post-to-GitHub time. Stored as TEXT (sqlite datetime format, see
+	// sqliteTimeFormat) with empty-string default so legacy rows read as
+	// time.Time{} and callers can fall back to created_at. See
+	// theburrowhub/heimdallm#243 Fix 3.
 	db.Exec("ALTER TABLE reviews ADD COLUMN published_at TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE agents ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE agents ADD COLUMN cli_flags TEXT NOT NULL DEFAULT ''")

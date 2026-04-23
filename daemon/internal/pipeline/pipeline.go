@@ -481,7 +481,15 @@ func (p *Pipeline) PublishPending() {
 		// Stamp the retry's PublishedAt so dedup anchors on the actual
 		// post-to-GitHub time (not the original CreatedAt), matching the
 		// Run() path. See theburrowhub/heimdallm#243.
-		_ = p.store.MarkReviewPublished(rev.ID, ghID, ghState, time.Now().UTC())
+		//
+		// Surface MarkReviewPublished errors: losing this write leaves the
+		// dedup with no anchor for the retry, so the next poll cycle could
+		// re-review the same commit. Operators need the log line to
+		// diagnose that class of regression.
+		if err := p.store.MarkReviewPublished(rev.ID, ghID, ghState, time.Now().UTC()); err != nil {
+			slog.Warn("pipeline: failed to mark pending review published, dedup anchor missing",
+				"review_id", rev.ID, "err", err)
+		}
 		slog.Info("pipeline: pending review published",
 			"review_id", rev.ID,
 			"github_review_id", ghID,
