@@ -30,8 +30,11 @@ type Bus struct {
 }
 
 // New creates a Bus with the given config. Call Start to launch the server.
-// MaxConcurrentWorkers must be > 0 (config.applyDefaults guarantees this).
+// MaxConcurrentWorkers must be > 0; if not, it is clamped to 1.
 func New(cfg Config) *Bus {
+	if cfg.MaxConcurrentWorkers <= 0 {
+		cfg.MaxConcurrentWorkers = 1
+	}
 	return &Bus{cfg: cfg}
 }
 
@@ -58,7 +61,7 @@ func (b *Bus) Start(ctx context.Context) error {
 	}
 	b.server = srv
 
-	conn, err := nats.Connect(nats.DefaultURL, nats.InProcessServer(srv), nats.Name("heimdallm-daemon"))
+	conn, err := nats.Connect("", nats.InProcessServer(srv), nats.Name("heimdallm-daemon"))
 	if err != nil {
 		srv.Shutdown()
 		return fmt.Errorf("bus: connect: %w", err)
@@ -93,8 +96,16 @@ func (b *Bus) Start(ctx context.Context) error {
 func (b *Bus) Stop() {
 	b.stopOnce.Do(func() {
 		if b.conn != nil {
+			// Drain() initiates a graceful drain asynchronously: it
+			// unsubscribes, processes pending messages, flushes, and then
+			// closes the connection. Wait for the connection to reach
+			// CLOSED state before shutting down the embedded server so
+			// in-flight JetStream acks are not truncated.
 			if err := b.conn.Drain(); err != nil {
 				slog.Warn("bus: drain failed", "err", err)
+			}
+			for !b.conn.IsClosed() {
+				time.Sleep(50 * time.Millisecond)
 			}
 		}
 		if b.server != nil {
