@@ -80,7 +80,7 @@ The `.deb`, `.rpm`, and `.AppImage` packages all include:
 | Format | Packages |
 |--------|----------|
 | `.deb` | libgtk-3-0, libayatana-appindicator3-1, libnotify4, libsecret-1-0 |
-| `.rpm` | gtk3, libnotify, libsecret |
+| `.rpm` | gtk3, libayatana-appindicator-gtk3, libnotify, libsecret |
 
 RPM dependencies use RPM package names (not Debian names).
 
