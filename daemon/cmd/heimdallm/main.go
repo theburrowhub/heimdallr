@@ -845,6 +845,9 @@ func main() {
 		entry, err := eventBus.WatchKV().Get(ctx, key)
 		if err == nil {
 			item.LastSeen = entry.LastSeen
+		} else {
+			slog.Warn("state-handler: KV get failed, using zero LastSeen",
+				"key", key, "err", err)
 		}
 
 		changed, snap, err := adapter.CheckItem(ctx, item)

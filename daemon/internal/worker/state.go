@@ -77,14 +77,20 @@ func (w *StateWorker) Start(ctx context.Context) error {
 			slog.Warn("state-worker: check failed",
 				"type", checkMsg.Type, "repo", checkMsg.Repo,
 				"number", checkMsg.Number, "err", handlerErr)
-			w.watchKV.IncreaseBackoff(ctx, key)
+			if kvErr := w.watchKV.IncreaseBackoff(ctx, key); kvErr != nil {
+				slog.Warn("state-worker: KV increase backoff failed", "key", key, "err", kvErr)
+			}
 		} else if changed {
 			slog.Info("state-worker: change detected",
 				"type", checkMsg.Type, "repo", checkMsg.Repo,
 				"number", checkMsg.Number)
-			w.watchKV.ResetBackoff(ctx, key, time.Now())
+			if kvErr := w.watchKV.ResetBackoff(ctx, key, time.Now()); kvErr != nil {
+				slog.Warn("state-worker: KV reset backoff failed", "key", key, "err", kvErr)
+			}
 		} else {
-			w.watchKV.IncreaseBackoff(ctx, key)
+			if kvErr := w.watchKV.IncreaseBackoff(ctx, key); kvErr != nil {
+				slog.Warn("state-worker: KV increase backoff failed", "key", key, "err", kvErr)
+			}
 		}
 
 		msg.Ack()

@@ -84,7 +84,10 @@ func (w *WatchKV) ResetBackoff(ctx context.Context, key string, observedAt time.
 	entry.BackoffNs = int64(InitialBackoff)
 	entry.NextCheck = time.Now().Add(InitialBackoff)
 	entry.LastSeen = observedAt
-	data, _ := json.Marshal(entry)
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("watch: marshal reset: %w", err)
+	}
 	_, err = w.kv.Put(ctx, key, data)
 	return err
 }
@@ -101,7 +104,10 @@ func (w *WatchKV) IncreaseBackoff(ctx context.Context, key string) error {
 	}
 	entry.BackoffNs = int64(newBackoff)
 	entry.NextCheck = time.Now().Add(newBackoff)
-	data, _ := json.Marshal(entry)
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("watch: marshal increase: %w", err)
+	}
 	_, err = w.kv.Put(ctx, key, data)
 	return err
 }
@@ -113,8 +119,11 @@ func (w *WatchKV) Delete(ctx context.Context, key string) error {
 
 // ForceUpdate writes the entry directly (used in tests to set arbitrary state).
 func (w *WatchKV) ForceUpdate(ctx context.Context, entry *WatchEntry) error {
-	data, _ := json.Marshal(entry)
-	_, err := w.kv.Put(ctx, entry.Key(), data)
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("watch: marshal force: %w", err)
+	}
+	_, err = w.kv.Put(ctx, entry.Key(), data)
 	return err
 }
 
