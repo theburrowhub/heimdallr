@@ -79,7 +79,7 @@ func TestReviewWorker_ConsumesAndCallsHandler(t *testing.T) {
 	}
 }
 
-func TestReviewWorker_AcksOnHandlerReturn(t *testing.T) {
+func TestReviewWorker_AcksAfterHandler(t *testing.T) {
 	b := newTestBus(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

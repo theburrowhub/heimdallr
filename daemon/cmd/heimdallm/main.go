@@ -32,8 +32,8 @@ import (
 	"github.com/heimdallm/daemon/internal/scheduler"
 	"github.com/heimdallm/daemon/internal/server"
 	"github.com/heimdallm/daemon/internal/sse"
-	"github.com/heimdallm/daemon/internal/worker"
 	"github.com/heimdallm/daemon/internal/store"
+	"github.com/heimdallm/daemon/internal/worker"
 	"github.com/heimdallm/daemon/launchagent"
 )
 
@@ -534,8 +534,10 @@ func main() {
 	}
 
 	reviewWorker := worker.NewReviewWorker(eventBus.JetStream(), reviewHandler)
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
 	go func() {
-		if err := reviewWorker.Start(context.Background()); err != nil {
+		if err := reviewWorker.Start(workerCtx); err != nil {
 			slog.Error("review worker stopped", "err", err)
 		}
 	}()

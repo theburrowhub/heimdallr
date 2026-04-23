@@ -3,7 +3,9 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 
 	"github.com/heimdallm/daemon/internal/bus"
 	"github.com/nats-io/nats.go/jetstream"
@@ -46,8 +48,10 @@ func (w *ReviewWorker) Start(ctx context.Context) error {
 	for {
 		msg, err := iter.Next()
 		if err != nil {
-			// Context cancelled or iterator stopped — clean exit.
-			return nil
+			if ctx.Err() != nil {
+				return nil // clean shutdown
+			}
+			return fmt.Errorf("review-worker: iter.Next: %w", err)
 		}
 
 		var prMsg bus.PRReviewMsg
@@ -60,7 +64,20 @@ func (w *ReviewWorker) Start(ctx context.Context) error {
 		slog.Info("review-worker: processing",
 			"repo", prMsg.Repo, "pr", prMsg.Number, "github_id", prMsg.GithubID)
 
-		w.handler(ctx, prMsg)
+		w.safeHandle(ctx, prMsg)
 		msg.Ack()
 	}
+}
+
+// safeHandle calls the handler with panic recovery so a single bad PR
+// cannot kill the worker goroutine.
+func (w *ReviewWorker) safeHandle(ctx context.Context, msg bus.PRReviewMsg) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("review-worker: handler panic",
+				"repo", msg.Repo, "pr", msg.Number, "panic", r,
+				"stack", string(debug.Stack()))
+		}
+	}()
+	w.handler(ctx, msg)
 }
