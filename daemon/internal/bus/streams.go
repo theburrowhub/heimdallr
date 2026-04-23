@@ -33,6 +33,8 @@ func (b *Bus) ensureStreams(ctx context.Context) error {
 			Retention: jetstream.InterestPolicy,
 			MaxAge:    1 * time.Hour,
 			Storage:   jetstream.FileStorage,
+			// No Duplicates window — SSE events are idempotent and dedup is unnecessary.
+			// NATS applies a server-side default; this is intentional.
 		},
 	}
 	for _, sc := range streams {

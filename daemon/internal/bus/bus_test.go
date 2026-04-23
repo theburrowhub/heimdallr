@@ -31,14 +31,22 @@ func TestBus_DoubleStop(t *testing.T) {
 	b.Stop() // must not panic
 }
 
-func TestBus_DefaultWorkers(t *testing.T) {
+func TestBus_ExplicitWorkers(t *testing.T) {
 	dir := t.TempDir()
-	b := bus.New(bus.Config{DataDir: dir, MaxConcurrentWorkers: 0})
+	b := bus.New(bus.Config{DataDir: dir, MaxConcurrentWorkers: 7})
 	if err := b.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(b.Stop)
-	// Verify it started without error (default of 5 applied internally)
+
+	ctx := context.Background()
+	c, err := b.JetStream().Consumer(ctx, bus.StreamWork, bus.ConsumerReview)
+	if err != nil {
+		t.Fatalf("consumer: %v", err)
+	}
+	if c.CachedInfo().Config.MaxAckPending != 7 {
+		t.Errorf("MaxAckPending = %d, want 7", c.CachedInfo().Config.MaxAckPending)
+	}
 }
 
 func TestBus_StreamsCreated(t *testing.T) {

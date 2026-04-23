@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -29,10 +30,8 @@ type Bus struct {
 }
 
 // New creates a Bus with the given config. Call Start to launch the server.
+// MaxConcurrentWorkers must be > 0 (config.applyDefaults guarantees this).
 func New(cfg Config) *Bus {
-	if cfg.MaxConcurrentWorkers <= 0 {
-		cfg.MaxConcurrentWorkers = 5
-	}
 	return &Bus{cfg: cfg}
 }
 
@@ -53,7 +52,7 @@ func (b *Bus) Start(ctx context.Context) error {
 		return fmt.Errorf("bus: create server: %w", err)
 	}
 	srv.Start()
-	if !srv.ReadyForConnections(5_000_000_000) { // 5s timeout
+	if !srv.ReadyForConnections(5 * time.Second) {
 		srv.Shutdown()
 		return fmt.Errorf("bus: server not ready after 5s")
 	}
@@ -94,7 +93,9 @@ func (b *Bus) Start(ctx context.Context) error {
 func (b *Bus) Stop() {
 	b.stopOnce.Do(func() {
 		if b.conn != nil {
-			b.conn.Drain()
+			if err := b.conn.Drain(); err != nil {
+				slog.Warn("bus: drain failed", "err", err)
+			}
 		}
 		if b.server != nil {
 			b.server.Shutdown()
