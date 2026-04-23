@@ -312,18 +312,28 @@ func main() {
 				claimSHA = pr.Head.SHA
 			}
 		} else {
-			// Defensive log: the claim guard was short-circuited, either
-			// because this PR hasn't been upserted yet (early-stage) OR
-			// because the caller didn't supply Head.SHA. The second case
-			// is the wiring regression theburrowhub/heimdallm#264 fixed —
-			// keeping this log line ensures any future caller that forgets
-			// to plumb SHA (or a GH API outage that leaves SHA empty) shows
-			// up instead of silently re-opening the #243 double-review
-			// window. Downstream defenses (fail-closed SHA in pipeline.Run,
-			// circuit breaker, PublishedAt grace) still cap the cost.
-			reason := "stored PR not found"
-			if stored != nil {
+			// Defensive log: the claim guard was short-circuited. Surfaces
+			// the wiring regression theburrowhub/heimdallm#264 (empty SHA)
+			// and the early-stage "PR not yet upserted" path; downstream
+			// defenses (fail-closed SHA in pipeline.Run, circuit breaker,
+			// PublishedAt grace) still cap cost in both cases.
+			//
+			// The reason string is computed from the actual predicates
+			// rather than an else-branch nil check, so a future edit to
+			// the outer guard doesn't silently mislead operators — the
+			// log stays truthful no matter what combination of conditions
+			// steered us into this branch.
+			var reason string
+			switch {
+			case stored == nil:
+				reason = "stored PR not found"
+			case pr.Head.SHA == "":
 				reason = "empty Head.SHA from caller"
+			default:
+				// Unreachable under today's guard (stored != nil && SHA != "")
+				// but kept so a future added clause still yields a
+				// non-misleading message.
+				reason = "claim precondition failed"
 			}
 			slog.Info("runReview: in-flight claim skipped (defenses still apply)",
 				"pr", pr.Number, "repo", pr.Repo, "reason", reason)
