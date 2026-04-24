@@ -958,7 +958,7 @@ func main() {
 			case <-ticker.C:
 				// Gradually enroll one open item not yet in watch_state per tick.
 				// Backfills items from before the NATS migration without blocking startup.
-				enrollOpenItems(s, watchStore)
+				enrollOpenItems(statePollerCtx, s, watchStore)
 
 				if evicted, err := watchStore.EvictStale(statePollerCtx); err != nil {
 					slog.Warn("state-poller: evict failed", "err", err)
@@ -1023,7 +1023,8 @@ func main() {
 		if err != nil {
 			// 404 means the repo/PR was deleted or we don't have access.
 			// Remove from watch to stop retrying.
-			if strings.Contains(err.Error(), "status 404") {
+			var apiErr *gh.APIError
+			if errors.As(err, &apiErr) && apiErr.StatusCode == 404 {
 				if delErr := watchStore.Delete(ctx, key); delErr != nil {
 					slog.Warn("state-handler: failed to delete unreachable item", "key", key, "err", delErr)
 				}
@@ -2784,8 +2785,7 @@ func ptrIntOr(p *int, defaultV int) int {
 // Called once per state-poller tick (every 30s) to gradually backfill items
 // from before the NATS migration. Uses a batch query with LEFT JOIN to find
 // unenrolled items without holding a read lock during writes.
-func enrollOpenItems(s *store.Store, ws *bus.WatchStore) {
-	ctx := context.Background()
+func enrollOpenItems(ctx context.Context, s *store.Store, ws *bus.WatchStore) {
 	for _, q := range []struct {
 		typ   string
 		query string
@@ -2823,7 +2823,7 @@ func enrollOpenItems(s *store.Store, ws *bus.WatchStore) {
 		for _, it := range batch {
 			if err := ws.Enroll(ctx, q.typ, it.repo, it.number, it.ghID); err != nil {
 				slog.Warn("state-poller: backfill enroll failed", "type", q.typ, "repo", it.repo, "number", it.number, "err", err)
-				return
+				break // skip rest of this type, try next type
 			}
 		}
 		if len(batch) > 0 {
