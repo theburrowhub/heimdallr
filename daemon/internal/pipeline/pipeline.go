@@ -219,8 +219,6 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 		return nil, nil
 	}
 
-	p.notify.Notify("PR Review Started", fmt.Sprintf("%s #%d", pr.Repo, pr.Number))
-
 	// 2. Fetch diff
 	diff, err := p.gh.FetchDiff(pr.Repo, pr.Number)
 	if err != nil {
@@ -262,22 +260,37 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 	// current snapshot and skip. The user can trigger a re-review manually if
 	// they want one, but we never spend Claude credits on a legacy row whose
 	// dedup state is ambiguous.
+	// Both skip paths return (nil, nil) — the same contract the gate-skip
+	// branch above uses. Returning prevReview here was the source of the
+	// activity-log spam observed in #322 (Bug 4): the caller in
+	// cmd/heimdallm/main.go has a defensive `if rev == nil { return }` that
+	// suppresses the EventReviewCompleted SSE / "review done" log /
+	// activity_log row when Run does not produce a fresh review. Returning a
+	// non-nil prevReview bypassed that filter and made every poll cycle on a
+	// stable PR look like a brand-new review in every UI surface, even though
+	// no Claude credits were spent.
 	if prevReview != nil && prevReview.HeadSHA == "" && pr.Head.SHA != "" {
 		slog.Info("pipeline: backfilling empty HeadSHA on legacy review row, skipping re-review",
 			"repo", pr.Repo, "pr", pr.Number, "review_id", prevReview.ID, "head_sha", pr.Head.SHA)
 		if err := p.store.UpdateReviewHeadSHA(prevReview.ID, pr.Head.SHA); err != nil {
 			slog.Warn("pipeline: failed to backfill HeadSHA",
 				"review_id", prevReview.ID, "err", err)
-		} else {
-			prevReview.HeadSHA = pr.Head.SHA
 		}
-		return prevReview, nil
+		return nil, nil
 	}
 	if prevReview != nil && pr.Head.SHA != "" && prevReview.HeadSHA == pr.Head.SHA {
 		slog.Info("pipeline: skipping re-review, HEAD SHA unchanged",
 			"repo", pr.Repo, "pr", pr.Number, "head_sha", pr.Head.SHA)
-		return prevReview, nil
+		return nil, nil
 	}
+
+	// All early-exit paths above are exhausted: from this point we are
+	// committed to running the CLI and posting a real review. Notify here
+	// (not at the top of Run) so the desktop notification only fires when a
+	// review is actually about to happen. Fixes #322 Bug 3 — a SHA-skip path
+	// would otherwise spam "PR Review Started" once per poll cycle on stable
+	// PRs whose updated_at keeps getting bumped by CI bots / cross-refs.
+	p.notify.Notify("PR Review Started", fmt.Sprintf("%s #%d", pr.Repo, pr.Number))
 
 	// 2b. Fetch PR comments for context (non-fatal: proceed without if unavailable)
 	prComments, err := p.gh.FetchComments(pr.Repo, pr.Number)

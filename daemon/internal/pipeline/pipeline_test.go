@@ -69,6 +69,20 @@ func (f *fakeNotify) Notify(title, message string) {
 	f.events = append(f.events, title)
 }
 
+// countNotify returns how many times `title` appears in the recorded
+// fakeNotify events. Used by SHA-skip regression tests to assert no
+// duplicate "PR Review Started" notifications fire when the pipeline
+// short-circuits on an unchanged HEAD SHA (#322 Bug 3).
+func countNotify(events []string, title string) int {
+	n := 0
+	for _, e := range events {
+		if e == title {
+			n++
+		}
+	}
+	return n
+}
+
 func TestPipeline_Run(t *testing.T) {
 	s, err := store.Open(":memory:")
 	if err != nil {
@@ -319,7 +333,8 @@ func TestPipeline_Run_SkipsReviewOnSameHeadSHA(t *testing.T) {
 
 	exec := &fakeExecCounter{}
 	gh := &fakeGHCounter{diff: "+line"}
-	p := pipeline.New(s, gh, exec, &fakeNotify{})
+	notify := &fakeNotify{}
+	p := pipeline.New(s, gh, exec, notify)
 
 	pr := &github.PullRequest{
 		ID: 42, Number: 42, Title: "Feature", Repo: "org/repo",
@@ -359,8 +374,21 @@ func TestPipeline_Run_SkipsReviewOnSameHeadSHA(t *testing.T) {
 	if len(reviews) != 1 {
 		t.Errorf("duplicate review row inserted on same SHA: got %d reviews", len(reviews))
 	}
-	if rev2 == nil || rev2.ID != rev1.ID {
-		t.Errorf("expected Run to return the existing review on same SHA; got rev2=%+v", rev2)
+	// Contract change for #322 Bug 4: SHA-skip now returns (nil, nil), the
+	// same shape the gate-skip path uses, so the caller's defensive
+	// `if rev == nil { return }` filter suppresses the false
+	// EventReviewCompleted / activity_log row / "review done" log. The skip
+	// itself stays visible via the slog.Info inside Run.
+	if rev2 != nil {
+		t.Errorf("expected nil review on SHA-skip (silent skip), got rev2=%+v", rev2)
+	}
+
+	// Regression for #322 Bug 3: the desktop notification must NOT fire on a
+	// SHA-skip. Only the first run (which actually dispatched a review)
+	// should have produced a "PR Review Started" / "PR Review Complete"
+	// pair. The second run skipped, so no extra notify events.
+	if startedCount := countNotify(notify.events, "PR Review Started"); startedCount != 1 {
+		t.Errorf("notify(\"PR Review Started\") fired %d times across 1 real review + 1 SHA-skip; want exactly 1", startedCount)
 	}
 
 	// Third run with a new HEAD SHA — must proceed normally.
@@ -431,7 +459,8 @@ func TestPipeline_Run_Tier3PathSkipsOnSameHeadSHA(t *testing.T) {
 
 	exec := &fakeExecCounter{}
 	gh := &fakeGHCounter{diff: "+line"}
-	p := pipeline.New(s, gh, exec, &fakeNotify{})
+	notify := &fakeNotify{}
+	p := pipeline.New(s, gh, exec, notify)
 
 	prT2 := &github.PullRequest{
 		ID: 900, Number: 900, Title: "t", Repo: "org/repo",
@@ -449,7 +478,8 @@ func TestPipeline_Run_Tier3PathSkipsOnSameHeadSHA(t *testing.T) {
 	// Tier 3 re-entry: same PR, same SHA, bumped updated_at.
 	prT3 := *prT2
 	prT3.UpdatedAt = prT2.UpdatedAt.Add(2 * time.Minute)
-	if _, err := p.Run(&prT3, pipeline.RunOptions{Primary: "claude"}); err != nil {
+	rev3, err := p.Run(&prT3, pipeline.RunOptions{Primary: "claude"})
+	if err != nil {
 		t.Fatalf("tier3 run: %v", err)
 	}
 	if exec.calls != 1 {
@@ -457,5 +487,16 @@ func TestPipeline_Run_Tier3PathSkipsOnSameHeadSHA(t *testing.T) {
 	}
 	if gh.submits != 1 {
 		t.Errorf("Tier 3 re-run submitted review on same SHA: submits=%d", gh.submits)
+	}
+	// #322 Bug 4: Tier 3 SHA-skip must return (nil, nil) so the activity
+	// recorder doesn't insert a fake review row each watch cycle.
+	if rev3 != nil {
+		t.Errorf("Tier 3 SHA-skip should return nil review, got %+v", rev3)
+	}
+	// #322 Bug 3: Tier 3 SHA-skip must not fire a fresh "PR Review Started"
+	// notification — only the first run (which actually dispatched) should
+	// have produced one.
+	if startedCount := countNotify(notify.events, "PR Review Started"); startedCount != 1 {
+		t.Errorf("notify(\"PR Review Started\") fired %d times across 1 real review + 1 Tier 3 SHA-skip; want exactly 1", startedCount)
 	}
 }
