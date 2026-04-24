@@ -170,7 +170,7 @@ func TestRun_LegacyRowWithEmptyHeadSHAIsBackfilledAndSkipped(t *testing.T) {
 	// (returns nil) — same shape as the gate-skip and SHA-skip paths — so
 	// the caller's defensive `if rev == nil { return }` filter suppresses
 	// the false EventReviewCompleted / activity_log row. The backfill side
-	// effect on issue_reviews still happens; assert it via the store below.
+	// effect on the reviews table still happens; assert it via the store below.
 	if rev != nil {
 		t.Errorf("expected nil review on legacy-backfill skip, got %+v", rev)
 	}

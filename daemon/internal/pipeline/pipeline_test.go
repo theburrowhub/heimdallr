@@ -562,9 +562,14 @@ func TestPipeline_Run_RespectsExplicitReReviewOnSameSHA(t *testing.T) {
 	}
 
 	// Operator hits "Re-request review" — timeline records a
-	// review_requested event newer than the existing review.
+	// review_requested event clearly after the existing review's
+	// CreatedAt. The +1 minute offset is deliberate: prevReview.CreatedAt
+	// was sealed during runFirstReview a few microseconds ago, and the
+	// bypass decision uses .After() (strict greater-than). A naked
+	// time.Now() here would race with that sealed timestamp on fast
+	// machines — pinning the offset keeps the test deterministic.
 	tl := &fakeTimeline{events: []github.TimelineEvent{
-		{Event: "review_requested", Actor: "alice", CreatedAt: time.Now()},
+		{Event: "review_requested", Actor: "alice", CreatedAt: time.Now().Add(1 * time.Minute)},
 	}}
 	p.SetTimelineFetcher(tl)
 
