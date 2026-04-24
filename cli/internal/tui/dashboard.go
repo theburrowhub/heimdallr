@@ -235,7 +235,14 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			sort.Slice(d.prs, func(i, j int) bool {
-				return d.prs[i].LatestReview.CreatedAt.After(d.prs[j].LatestReview.CreatedAt)
+				ri, rj := d.prs[i].LatestReview, d.prs[j].LatestReview
+				if ri == nil {
+					return false
+				}
+				if rj == nil {
+					return true
+				}
+				return ri.CreatedAt.After(rj.CreatedAt)
 			})
 			d.issues = nil
 			for _, iss := range msg.issues {
