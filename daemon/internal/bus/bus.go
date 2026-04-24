@@ -47,8 +47,11 @@ func (b *Bus) Start(ctx context.Context) error {
 		DontListen:          true,
 		JetStream:           true,
 		StoreDir:            b.cfg.DataDir,
-		JetStreamMaxMemory:  64 * 1024 * 1024,  // 64 MB — sufficient for <100 concurrent items
-		JetStreamMaxStore:   256 * 1024 * 1024,  // 256 MB — caps disk usage
+		JetStreamMaxMemory:  8 * 1024 * 1024,   // 8 MB — minimal, <100 concurrent items
+		JetStreamMaxStore:   32 * 1024 * 1024,  // 32 MB — minimal disk cap
+		MaxPayload:          64 * 1024,          // 64 KB (default 1 MB)
+		MaxPending:          256 * 1024,         // 256 KB per conn (default 64 MB)
+		NoSublistCache:      true,               // save memory on subscription tracking
 		NoLog:               true,
 		NoSigs:              true,
 	}
