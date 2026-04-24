@@ -1130,7 +1130,7 @@ func (d *Dashboard) buildConfigLines() []string {
 				sort.Strings(keys)
 				for _, k := range keys {
 					vs := fmtVal(ac[k])
-					if vs == "" || vs == "0" || vs == "false" {
+					if vs == "" {
 						continue
 					}
 					lines = append(lines, kvWide(k, vs))
@@ -1159,7 +1159,7 @@ func (d *Dashboard) buildConfigLines() []string {
 				sort.Strings(keys)
 				for _, k := range keys {
 					vs := fmtVal(ro[k])
-					if vs == "" || vs == "0" || vs == "false" {
+					if vs == "" {
 						continue
 					}
 					lines = append(lines, kvWide(k, vs))
