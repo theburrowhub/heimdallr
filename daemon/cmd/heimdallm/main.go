@@ -525,6 +525,14 @@ func main() {
 	// existing review pipeline. This replaces the goroutine-per-PR
 	// pattern that Tier 2 used to use.
 	reviewHandler := func(ctx context.Context, msg bus.PRReviewMsg) {
+		cfgMu.Lock()
+		limiter := pipe.Limiter()
+		cfgMu.Unlock()
+		if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
+			slog.Warn("review-worker: rate limit cancelled", "err", err)
+			return
+		}
+
 		pr, err := ghClient.GetPR(msg.Repo, msg.Number)
 		if err != nil {
 			slog.Error("review-worker: fetch PR from GitHub",
@@ -616,6 +624,13 @@ func main() {
 			Summary:  rev.Summary,
 			Issues:   issues,
 			Severity: rev.Severity,
+		}
+
+		cfgMu.Lock()
+		limiter := pipe.Limiter()
+		cfgMu.Unlock()
+		if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
+			return fmt.Errorf("rate limit cancelled: %w", err)
 		}
 
 		ghID, ghState, err := ghClient.SubmitReview(
@@ -868,6 +883,13 @@ func main() {
 		} else {
 			slog.Warn("state-handler: KV get failed, using zero LastSeen",
 				"key", key, "err", err)
+		}
+
+		cfgMu.Lock()
+		limiter := pipe.Limiter()
+		cfgMu.Unlock()
+		if err := limiter.Acquire(ctx, scheduler.TierWatch); err != nil {
+			return false, fmt.Errorf("rate limit cancelled: %w", err)
 		}
 
 		changed, snap, err := adapter.CheckItem(ctx, item)
