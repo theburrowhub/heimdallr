@@ -577,13 +577,13 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 		}
 		reviewBody = buildMultiSummaryBody(result)
 	} else {
-		reviewBody = buildGitHubBody(result)
+		reviewBody = BuildGitHubBody(result)
 	}
 
 	ghReviewID, ghReviewState, publishErr := p.gh.SubmitReview(
 		pr.Repo, pr.Number,
 		reviewBody,
-		severityToEvent(result.Severity, len(result.Issues)),
+		SeverityToEvent(result.Severity, len(result.Issues)),
 	)
 	if publishErr != nil {
 		// Permanent submit failure (PR locked etc.): mark the freshly
@@ -694,8 +694,8 @@ func (p *Pipeline) PublishPending() {
 		// already posted when the review first ran; we only retry the formal review).
 		ghID, ghState, err := p.gh.SubmitReview(
 			pr.Repo, pr.Number,
-			buildGitHubBody(result),
-			severityToEvent(rev.Severity, len(issues)),
+			BuildGitHubBody(result),
+			SeverityToEvent(rev.Severity, len(issues)),
 		)
 		if err != nil {
 			// Permanent submit failures (currently HTTP 422 "lock
@@ -777,8 +777,8 @@ func buildMultiSummaryBody(r *executor.ReviewResult) string {
 	return sb.String()
 }
 
-// buildGitHubBody formats the AI review as a GitHub-flavored markdown review body.
-func buildGitHubBody(r *executor.ReviewResult) string {
+// BuildGitHubBody formats the AI review as a GitHub-flavored markdown review body.
+func BuildGitHubBody(r *executor.ReviewResult) string {
 	var sb strings.Builder
 	sb.WriteString("## 🤖 Heimdallm AI Review\n\n")
 	sb.WriteString(r.Summary)
@@ -812,10 +812,10 @@ func buildGitHubBody(r *executor.ReviewResult) string {
 	return sb.String()
 }
 
-// severityToEvent maps severity to a GitHub review event type.
+// SeverityToEvent maps severity to a GitHub review event type.
 // Only high-severity issues block a PR — Heimdallm must not be a blocker
 // for medium/low issues. Those are left as informational comments with an APPROVE.
-func severityToEvent(severity string, _ int) string {
+func SeverityToEvent(severity string, _ int) string {
 	if severity == "high" {
 		return "REQUEST_CHANGES"
 	}

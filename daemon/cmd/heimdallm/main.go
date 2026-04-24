@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/heimdallm/daemon/internal/activity"
+	"github.com/heimdallm/daemon/internal/bus"
 	"github.com/heimdallm/daemon/internal/config"
 	"github.com/heimdallm/daemon/internal/discovery"
 	"github.com/heimdallm/daemon/internal/executor"
@@ -32,7 +33,9 @@ import (
 	"github.com/heimdallm/daemon/internal/server"
 	"github.com/heimdallm/daemon/internal/sse"
 	"github.com/heimdallm/daemon/internal/store"
+	"github.com/heimdallm/daemon/internal/worker"
 	"github.com/heimdallm/daemon/launchagent"
+	"github.com/nats-io/nats.go"
 )
 
 func main() {
@@ -136,8 +139,44 @@ func main() {
 		slog.Info("startup: cleared stale issue triage inflight rows", "count", n)
 	}
 
+	// ── NATS event bus (core only, no JetStream) ───────────────────────
+	eventBus := bus.New(bus.Config{
+		MaxConcurrentWorkers: cfg.Server.MaxConcurrentWorkers,
+	})
+	if err := eventBus.Start(context.Background()); err != nil {
+		slog.Error("nats bus failed to start", "err", err)
+		os.Exit(1)
+	}
+	defer eventBus.Stop()
+
+	// ── Watch store (SQLite, replaces JetStream KV) ─────────────────
+	watchStore, err := bus.NewWatchStore(s.DB())
+	if err != nil {
+		slog.Error("watch store failed to initialize", "err", err)
+		os.Exit(1)
+	}
+
 	broker := sse.NewBroker()
 	broker.Start()
+
+	// ── Bridge: SSE broker → NATS events ────────────────────────────────
+	// Re-publishes every broker event to NATS so the SSE handler (which
+	// now reads from NATS) receives events from all existing publishers.
+	// This bridge is interim — Task 12 will have workers publish directly
+	// to NATS events subjects, removing the need for the broker entirely.
+	bridgeCh := broker.Subscribe()
+	if bridgeCh != nil {
+		go func() {
+			for event := range bridgeCh {
+				subj := "heimdallm.events." + event.Type
+				if err := eventBus.Conn().Publish(subj, []byte(event.Data)); err != nil {
+					slog.Warn("sse-bridge: publish to NATS failed", "type", event.Type, "err", err)
+				}
+			}
+		}()
+	} else {
+		slog.Warn("sse-bridge: broker subscriber cap reached, SSE bridge disabled")
+	}
 
 	// ActivityRecorder subscribes to the broker and writes a row into
 	// activity_log for every significant event. Disabled → not constructed.
@@ -230,6 +269,7 @@ func main() {
 	}
 	issueFetcher := issuepipeline.NewFetcher(ghClient, ghClient, s, issuePipe)
 	srv := server.New(s, broker, p, apiToken)
+	srv.SetNATSConn(eventBus.Conn())
 	srv.SetConfigPath(cfgPath)
 
 	// cfgMu protects cfg and the pipeline so reload is safe from any goroutine.
@@ -292,7 +332,7 @@ func main() {
 		}
 	}
 
-	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) {
+	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) *store.Review {
 		// Persistent in-flight claim: survives daemon restart and config reload.
 		// Keyed on (pr_id, head_sha) so a new commit on the same PR is not
 		// gated by a stale in-flight row from a prior HEAD. See
@@ -335,7 +375,7 @@ func main() {
 			} else if !ok {
 				slog.Info("runReview: already in flight (persistent), skipping",
 					"pr", pr.Number, "repo", pr.Repo, "head_sha", pr.Head.SHA)
-				return
+				return nil
 			} else {
 				claimed = true
 				claimPRID = stored.ID
@@ -402,7 +442,7 @@ func main() {
 			})
 			slog.Info("runReview: skipping PR",
 				"repo", pr.Repo, "pr", pr.Number, "reason", string(reason))
-			return
+			return nil
 		}
 
 		// Safety check: log exactly what we're about to review
@@ -429,26 +469,35 @@ func main() {
 						"reason":    cbErr.Reason,
 					}),
 				})
-				return
+				return nil
 			}
 			broker.Publish(sse.Event{Type: sse.EventReviewError, Data: sseData(map[string]any{"pr_number": pr.Number, "repo": pr.Repo, "error": err.Error()})})
-			return
+			return nil
 		}
 		if rev == nil {
 			// Pipeline took a skip path and already emitted
 			// EventReviewSkipped with the correct reason
 			// (sha_unchanged / legacy_backfill / not_open / draft /
 			// self_authored). Nothing else to do.
-			return
+			return nil
 		}
 		slog.Info("pipeline: review done",
 			"repo", pr.Repo, "number", pr.Number, "severity", rev.Severity,
 			"github_review_id", rev.GitHubReviewID)
+		return rev
 	}
 
-	// ── Multi-tier Pipeline ──────────────────────────────────────────────
-	// tier2Adapter bridges main.go's concrete types to the Pipeline's
-	// Tier 2 / Tier 3 interfaces.
+	// ── Standalone pollers (replaced the Pipeline orchestrator) ─────────
+	conn := eventBus.Conn()
+	maxWorkers := eventBus.MaxConcurrentWorkers()
+	publishPub := bus.NewPRPublishPublisher(conn)
+	issuePublisher := bus.NewIssuePublisher(conn)
+	issueFetcher.SetPublisher(issuePublisher)
+
+	// Shared rate limiter (was Pipeline.limiter).
+	limiter := scheduler.NewRateLimiter(4500)
+
+	// tier2Adapter bridges main.go's concrete types to the polling logic.
 	adapter := &tier2Adapter{
 		ghClient:             ghClient,
 		ghToken:              token,
@@ -462,18 +511,51 @@ func main() {
 		loginMu:              &loginMu,
 		login:                &cachedLogin,
 		runReview:            runReview,
+		publishPub:           publishPub,
+		watchStore:           watchStore,
 		lastSkippedUpdatedAt: make(map[int64]time.Time),
 	}
 
-	buildPipeline := func(c *config.Config) *scheduler.Pipeline {
-		return scheduler.NewPipeline(scheduler.PipelineConfig{
-			DiscoveryInterval: parseDiscoveryInterval(c.GitHub.DiscoveryInterval),
-			PollInterval:      parsePollInterval(c.GitHub.PollInterval),
-			WatchInterval:     parseWatchInterval(c.GitHub.WatchInterval),
-			RateLimitPerHour:  4500,
-		}, scheduler.PipelineDeps{
-			Discovery: discoverySvc,
-			Tier1ConfigFn: func() scheduler.Tier1Config {
+	repoPublisher := bus.NewRepoPublisher(conn)
+	prReviewPublisher := bus.NewPRReviewPublisher(conn)
+
+	// reposChan bridges Tier 1 (discovery) → Tier 2 (per-repo polling) via
+	// the NATS discovery stream. Tier 1 publishes to NATS, the bridge
+	// consumes from NATS and forwards repo lists through this channel.
+	reposChan := make(chan []string, 1)
+
+	// startPollers launches all polling goroutines under the given context.
+	// Returns a cancel function and a WaitGroup that completes when all
+	// goroutines have exited.
+	startPollers := func(ctx context.Context, coldStart bool) (context.CancelFunc, *sync.WaitGroup) {
+		ctx, cancel := context.WithCancel(ctx)
+		var wg sync.WaitGroup
+
+		// Rate limiter hourly refill
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(1 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					limiter.Refill()
+					slog.Info("pollers: rate limiter refilled")
+				}
+			}
+		}()
+
+		// Tier 1: Discovery — publishes to NATS
+		cfgMu.Lock()
+		discoveryInterval := parseDiscoveryInterval(cfg.GitHub.DiscoveryInterval)
+		cfgMu.Unlock()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tier1ConfigFn := func() scheduler.Tier1Config {
 				cfgMu.Lock()
 				defer cfgMu.Unlock()
 				orgs := append([]string(nil), cfg.GitHub.DiscoveryOrgs...)
@@ -486,35 +568,482 @@ func main() {
 					DiscoveryTopic: cfg.GitHub.DiscoveryTopic,
 					DiscoveryOrgs:  orgs,
 				}
-			},
-			PRFetcher:      adapter,
-			PRProcessor:    adapter,
-			IssueProcessor: adapter,
-			Promoter:       adapter,
-			Store:          adapter,
-			Tier2ConfigFn: func() []string {
+			}
+
+			// Publish initial repos immediately
+			sendDiscoveryRepos(ctx, discoverySvc, limiter, repoPublisher, tier1ConfigFn)
+
+			ticker := time.NewTicker(discoveryInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := limiter.Acquire(ctx, scheduler.TierDiscovery); err != nil {
+						return
+					}
+					sendDiscoveryRepos(ctx, discoverySvc, limiter, repoPublisher, tier1ConfigFn)
+				}
+			}
+		}()
+
+		// Bridge: NATS discovery subscription → reposChan
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			bridgeDiscovery(ctx, conn, reposChan)
+		}()
+
+		// Tier 2: PR / issue polling
+		cfgMu.Lock()
+		pollInterval := parsePollInterval(cfg.GitHub.PollInterval)
+		cfgMu.Unlock()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tier2ConfigFn := func() []string {
 				cfgMu.Lock()
 				defer cfgMu.Unlock()
 				return discovery.MergeRepos(cfg.GitHub.Repositories, discoverySvc.Discovered(), cfg.GitHub.NonMonitored)
-			},
-			ItemChecker: adapter,
-		})
+			}
+			runTier2(ctx, adapter, limiter, prReviewPublisher, tier2ConfigFn, reposChan, pollInterval, coldStart)
+		}()
+
+		slog.Info("pollers: started",
+			"discovery", discoveryInterval,
+			"poll", pollInterval)
+
+		return cancel, &wg
 	}
 
-	pipe := buildPipeline(cfg)
 	// Initial daemon start → coldStart=true so Tier 2 fires its first tick
 	// immediately; operators see polling activity without waiting an entire
 	// PollInterval. The reload path below passes false.
-	pipe.Start(context.Background(), true)
-	// Use a closure so the defer reads the current pipe variable at shutdown
-	// time, not the initial pointer captured at defer-statement time. After a
-	// reload, pipe points to a new pipeline — the bare defer would stop the
-	// already-halted original pipeline and leak the post-reload one.
+	pollerCancel, pollerWg := startPollers(context.Background(), true)
+
+	// ── NATS PR review worker ───────────────────────────────────────────
+	// Consumes PR review requests published by Tier 2 and runs the
+	// existing review pipeline. This replaces the goroutine-per-PR
+	// pattern that Tier 2 used to use.
+	reviewHandler := func(ctx context.Context, msg bus.PRReviewMsg) {
+		// Acquire returns only ctx.Err() (shutdown). On cancellation the
+		// message is acked without processing — acceptable because the
+		// daemon is shutting down and the PR will be re-detected next startup.
+		if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
+			return
+		}
+
+		pr, err := ghClient.GetPR(msg.Repo, msg.Number)
+		if err != nil {
+			slog.Error("review-worker: fetch PR from GitHub",
+				"repo", msg.Repo, "pr", msg.Number, "err", err)
+			return
+		}
+		// Stale message guard: if HEAD SHA changed since publish, skip.
+		// The next poll cycle will publish a new message with the updated SHA.
+		if msg.HeadSHA != "" && pr.Head.SHA != msg.HeadSHA {
+			slog.Info("review-worker: stale message (HEAD SHA changed), skipping",
+				"repo", msg.Repo, "pr", msg.Number,
+				"msg_sha", msg.HeadSHA, "current_sha", pr.Head.SHA)
+			return
+		}
+
+		cfgMu.Lock()
+		c := *cfg
+		aiCfg := c.AIForRepo(pr.Repo)
+		localDirBase := c.GitHub.LocalDirBase
+		cfgMu.Unlock()
+		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, pr.Repo, localDirBase)
+
+		rev := runReview(pr, aiCfg)
+
+		// If review succeeded but wasn't published to GitHub yet,
+		// enqueue for the publish worker.
+		if rev != nil && rev.GitHubReviewID == 0 {
+			if err := publishPub.PublishPRPublish(ctx, rev.ID); err != nil {
+				slog.Warn("review-worker: failed to enqueue publish",
+					"review_id", rev.ID, "err", err)
+			}
+		}
+
+		// Enroll for state watching via SQLite watch store.
+		if err := watchStore.Enroll(ctx, "pr", pr.Repo, pr.Number, pr.ID); err != nil {
+			slog.Warn("review-worker: failed to enroll watch",
+				"repo", pr.Repo, "pr", pr.Number, "err", err)
+		}
+	}
+
+	reviewWorker := worker.NewReviewWorker(conn, maxWorkers, reviewHandler)
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+	go func() {
+		if err := reviewWorker.Start(workerCtx); err != nil {
+			slog.Error("review worker stopped", "err", err)
+		}
+	}()
+
+	// ── NATS PR publish worker ──────────────────────────────────────────
+	// Consumes publish requests and submits stored reviews to GitHub.
+	// Replaces the manual retry loop in PublishPending with NATS retry
+	// semantics (NakWithDelay for transient GitHub errors).
+	publishHandler := func(ctx context.Context, msg bus.PRPublishMsg) error {
+		rev, err := s.GetReview(msg.ReviewID)
+		if err != nil {
+			slog.Warn("publish-worker: review not found, skipping",
+				"review_id", msg.ReviewID, "err", err)
+			return nil // permanent — ack
+		}
+		if rev.GitHubReviewID != 0 {
+			slog.Info("publish-worker: already published, skipping",
+				"review_id", msg.ReviewID, "github_review_id", rev.GitHubReviewID)
+			return nil // idempotent — ack
+		}
+
+		pr, err := s.GetPR(rev.PRID)
+		if err != nil {
+			slog.Warn("publish-worker: PR not found, marking orphaned",
+				"review_id", msg.ReviewID, "pr_id", rev.PRID, "err", err)
+			_ = s.MarkReviewPublished(rev.ID, -1, "", time.Now().UTC())
+			return nil // permanent — ack
+		}
+		if pr.Repo == "" {
+			slog.Info("publish-worker: PR has no repo, marking orphaned",
+				"review_id", msg.ReviewID)
+			_ = s.MarkReviewPublished(rev.ID, -1, "", time.Now().UTC())
+			return nil // permanent — ack
+		}
+
+		// Rebuild ReviewResult from stored JSON
+		var issues []executor.Issue
+		if err := json.Unmarshal([]byte(rev.Issues), &issues); err != nil {
+			slog.Error("publish-worker: corrupt issues JSON, skipping",
+				"review_id", msg.ReviewID, "err", err)
+			return nil // permanent — ack
+		}
+		result := &executor.ReviewResult{
+			Summary:  rev.Summary,
+			Issues:   issues,
+			Severity: rev.Severity,
+		}
+
+		if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
+			return fmt.Errorf("rate limit cancelled: %w", err)
+		}
+
+		ghID, ghState, err := ghClient.SubmitReview(
+			pr.Repo, pr.Number,
+			pipeline.BuildGitHubBody(result),
+			pipeline.SeverityToEvent(rev.Severity, len(issues)),
+		)
+		if err != nil {
+			errStr := err.Error()
+			// 4xx errors (except 429 rate limit) are permanent — no point retrying.
+			// 5xx and network errors are transient — nak for NATS retry.
+			if strings.Contains(errStr, "status 4") && !strings.Contains(errStr, "status 429") {
+				slog.Error("publish-worker: permanent GitHub error, marking orphaned",
+					"review_id", msg.ReviewID, "err", err)
+				_ = s.MarkReviewPublished(msg.ReviewID, -1, "", time.Now().UTC())
+				return nil // permanent — ack
+			}
+			return fmt.Errorf("submit review to GitHub: %w", err)
+		}
+
+		publishedAt := time.Now().UTC()
+		if err := s.MarkReviewPublished(rev.ID, ghID, ghState, publishedAt); err != nil {
+			slog.Warn("publish-worker: failed to mark published",
+				"review_id", rev.ID, "err", err)
+		}
+		slog.Info("publish-worker: review published",
+			"review_id", rev.ID, "github_review_id", ghID,
+			"github_review_state", ghState)
+		return nil // success — ack
+	}
+
+	publishW := worker.NewPublishWorker(conn, maxWorkers, publishHandler)
+	publishWCtx, publishWCancel := context.WithCancel(context.Background())
+	defer publishWCancel()
+	go func() {
+		if err := publishW.Start(publishWCtx); err != nil {
+			slog.Error("publish worker stopped", "err", err)
+		}
+	}()
+
+	// ── NATS issue triage worker ────────────────────────────────────────
+	// Consumes triage requests published by the Fetcher when it classifies
+	// an issue as review_only. Fetches the issue from GitHub for fresh data,
+	// resolves per-repo config, and runs the issue pipeline.
+	triageHandler := func(ctx context.Context, msg bus.IssueMsg) {
+		ghIssue, err := ghClient.GetIssue(msg.Repo, msg.Number)
+		if err != nil {
+			slog.Error("triage-worker: fetch issue from GitHub",
+				"repo", msg.Repo, "number", msg.Number, "err", err)
+			return
+		}
+		ghIssue.Mode = config.IssueModeReviewOnly
+
+		cfgMu.Lock()
+		c := *cfg
+		aiCfg := c.AIForRepo(msg.Repo)
+		if aiCfg.Primary == "" {
+			aiCfg.Primary = c.AI.Primary
+		}
+		agentCfg := c.AgentConfigFor(aiCfg.Primary)
+		localDirBase := c.GitHub.LocalDirBase
+		globalTimeout := c.AI.ExecutionTimeout
+		cfgMu.Unlock()
+		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, msg.Repo, localDirBase)
+
+		extraFlags := agentCfg.ExtraFlags
+		if extraFlags != "" {
+			if err := executor.ValidateExtraFlags(extraFlags); err != nil {
+				slog.Warn("triage-worker: extra_flags rejected", "err", err)
+				extraFlags = ""
+			}
+		}
+
+		issuePrompt, issueInstructions := resolveIssuePrompt(s, aiCfg.IssuePrompt, agentCfg.PromptID)
+		implPrompt, implInstructions := resolveImplementPrompt(s, aiCfg.ImplementPrompt, agentCfg.PromptID)
+
+		opts := issuepipeline.RunOptions{
+			GitHubToken: token,
+			Primary:     aiCfg.Primary,
+			Fallback:    aiCfg.Fallback,
+			ExecOpts: executor.ExecOptions{
+				Model:                agentCfg.Model,
+				MaxTurns:             agentCfg.MaxTurns,
+				ApprovalMode:         agentCfg.ApprovalMode,
+				ExtraFlags:           extraFlags,
+				WorkDir:              aiCfg.LocalDir,
+				Effort:               agentCfg.Effort,
+				PermissionMode:       agentCfg.PermissionMode,
+				Bare:                 agentCfg.Bare,
+				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
+				NoSessionPersistence: agentCfg.NoSessionPersistence,
+				Timeout:              resolveExecutionTimeout(globalTimeout, agentCfg.ExecutionTimeout),
+			},
+			IssuePromptOverride:     issuePrompt,
+			IssueInstructions:       issueInstructions,
+			ImplementPromptOverride: implPrompt,
+			ImplementInstructions:   implInstructions,
+			PRReviewers:             aiCfg.PRReviewers,
+			PRAssignee:              aiCfg.PRAssignee,
+			PRLabels:                aiCfg.PRLabels,
+			PRDraft:                 aiCfg.PRDraft != nil && *aiCfg.PRDraft,
+			GeneratePRDescription:   aiCfg.GeneratePRDescription != nil && *aiCfg.GeneratePRDescription,
+		}
+
+		if _, err := issuePipe.Run(ctx, ghIssue, opts); err != nil {
+			slog.Error("triage-worker: pipeline run failed",
+				"repo", msg.Repo, "number", msg.Number, "err", err)
+		}
+
+		// Enroll for state watching so closed/resolved issues update in the UI.
+		// Runs even after pipeline failure — state tracking is independent of
+		// pipeline success, and we want the UI to reflect closures regardless.
+		if err := watchStore.Enroll(ctx, "issue", msg.Repo, msg.Number, msg.GithubID); err != nil {
+			slog.Warn("triage-worker: failed to enroll watch",
+				"repo", msg.Repo, "number", msg.Number, "err", err)
+		}
+	}
+
+	triageW := worker.NewTriageWorker(conn, maxWorkers, triageHandler)
+	triageWCtx, triageWCancel := context.WithCancel(context.Background())
+	defer triageWCancel()
+	go func() {
+		if err := triageW.Start(triageWCtx); err != nil {
+			slog.Error("triage worker stopped", "err", err)
+		}
+	}()
+
+	// ── NATS issue implement worker ─────────────────────────────────────
+	// Consumes implement requests published by the Fetcher when it classifies
+	// an issue as develop. Same config resolution as triage, different mode.
+	implementHandler := func(ctx context.Context, msg bus.IssueMsg) {
+		ghIssue, err := ghClient.GetIssue(msg.Repo, msg.Number)
+		if err != nil {
+			slog.Error("implement-worker: fetch issue from GitHub",
+				"repo", msg.Repo, "number", msg.Number, "err", err)
+			return
+		}
+		ghIssue.Mode = config.IssueModeDevelop
+
+		cfgMu.Lock()
+		c := *cfg
+		aiCfg := c.AIForRepo(msg.Repo)
+		if aiCfg.Primary == "" {
+			aiCfg.Primary = c.AI.Primary
+		}
+		agentCfg := c.AgentConfigFor(aiCfg.Primary)
+		localDirBase := c.GitHub.LocalDirBase
+		globalTimeout := c.AI.ExecutionTimeout
+		cfgMu.Unlock()
+		aiCfg.LocalDir = config.ResolveLocalDir(aiCfg.LocalDir, msg.Repo, localDirBase)
+
+		extraFlags := agentCfg.ExtraFlags
+		if extraFlags != "" {
+			if err := executor.ValidateExtraFlags(extraFlags); err != nil {
+				slog.Warn("implement-worker: extra_flags rejected", "err", err)
+				extraFlags = ""
+			}
+		}
+
+		issuePrompt, issueInstructions := resolveIssuePrompt(s, aiCfg.IssuePrompt, agentCfg.PromptID)
+		implPrompt, implInstructions := resolveImplementPrompt(s, aiCfg.ImplementPrompt, agentCfg.PromptID)
+
+		opts := issuepipeline.RunOptions{
+			GitHubToken: token,
+			Primary:     aiCfg.Primary,
+			Fallback:    aiCfg.Fallback,
+			ExecOpts: executor.ExecOptions{
+				Model:                agentCfg.Model,
+				MaxTurns:             agentCfg.MaxTurns,
+				ApprovalMode:         agentCfg.ApprovalMode,
+				ExtraFlags:           extraFlags,
+				WorkDir:              aiCfg.LocalDir,
+				Effort:               agentCfg.Effort,
+				PermissionMode:       agentCfg.PermissionMode,
+				Bare:                 agentCfg.Bare,
+				DangerouslySkipPerms: agentCfg.DangerouslySkipPerms,
+				NoSessionPersistence: agentCfg.NoSessionPersistence,
+				Timeout:              resolveExecutionTimeout(globalTimeout, agentCfg.ExecutionTimeout),
+			},
+			IssuePromptOverride:     issuePrompt,
+			IssueInstructions:       issueInstructions,
+			ImplementPromptOverride: implPrompt,
+			ImplementInstructions:   implInstructions,
+			PRReviewers:             aiCfg.PRReviewers,
+			PRAssignee:              aiCfg.PRAssignee,
+			PRLabels:                aiCfg.PRLabels,
+			PRDraft:                 aiCfg.PRDraft != nil && *aiCfg.PRDraft,
+			GeneratePRDescription:   aiCfg.GeneratePRDescription != nil && *aiCfg.GeneratePRDescription,
+		}
+
+		if _, err := issuePipe.Run(ctx, ghIssue, opts); err != nil {
+			slog.Error("implement-worker: pipeline run failed",
+				"repo", msg.Repo, "number", msg.Number, "err", err)
+		}
+
+		// Enroll for state watching so closed/resolved issues update in the UI.
+		// Runs even after pipeline failure — state tracking is independent of
+		// pipeline success, and we want the UI to reflect closures regardless.
+		if err := watchStore.Enroll(ctx, "issue", msg.Repo, msg.Number, msg.GithubID); err != nil {
+			slog.Warn("implement-worker: failed to enroll watch",
+				"repo", msg.Repo, "number", msg.Number, "err", err)
+		}
+	}
+
+	implementW := worker.NewImplementWorker(conn, maxWorkers, implementHandler)
+	implementWCtx, implementWCancel := context.WithCancel(context.Background())
+	defer implementWCancel()
+	go func() {
+		if err := implementW.Start(implementWCtx); err != nil {
+			slog.Error("implement worker stopped", "err", err)
+		}
+	}()
+
+	// ── State check poller ──────────────────────────────────────────────
+	// Scans the NATS KV watch bucket every 30s and publishes StateCheckMsg
+	// for items due for a state check. Replaces the in-memory WatchQueue.
+	stateCheckPub := bus.NewStateCheckPublisher(conn)
+	statePollerCtx, statePollerCancel := context.WithCancel(context.Background())
+	defer statePollerCancel()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-statePollerCtx.Done():
+				return
+			case <-ticker.C:
+				// Gradually enroll one open item not yet in watch_state per tick.
+				// Backfills items from before the NATS migration without blocking startup.
+				enrollOneOpenItem(s, watchStore)
+
+				if evicted, err := watchStore.EvictStale(statePollerCtx); err != nil {
+					slog.Warn("state-poller: evict failed", "err", err)
+				} else if evicted > 0 {
+					slog.Debug("state-poller: evicted stale items", "count", evicted)
+				}
+
+				ready, err := watchStore.ScanReady(statePollerCtx)
+				if err != nil {
+					slog.Warn("state-poller: scan failed", "err", err)
+					continue
+				}
+				for _, entry := range ready {
+					if err := stateCheckPub.PublishStateCheck(statePollerCtx, entry.Type, entry.Repo, entry.Number, entry.GithubID); err != nil {
+						slog.Warn("state-poller: publish failed",
+							"type", entry.Type, "repo", entry.Repo, "number", entry.Number, "err", err)
+					}
+				}
+			}
+		}
+	}()
+
+	// ── NATS state check worker ─────────────────────────────────────────
+	// Consumes state check requests, calls GitHub API, updates KV backoff.
+	// Reuses the existing CheckItem/HandleChange logic from tier2Adapter.
+	stateHandler := func(ctx context.Context, msg bus.StateCheckMsg) (bool, error) {
+		// Rate limit before any GitHub API call. TierWatch (50ms) matches
+		// the old Tier 3 priority — state checks are lightweight and high-priority.
+		if err := limiter.Acquire(ctx, scheduler.TierWatch); err != nil {
+			return false, fmt.Errorf("rate limit cancelled: %w", err)
+		}
+
+		item := &scheduler.WatchItem{
+			Type:     msg.Type,
+			Repo:     msg.Repo,
+			Number:   msg.Number,
+			GithubID: msg.GithubID,
+		}
+
+		// Read LastSeen from KV for the dedup check inside CheckItem.
+		// Key separator is "." (NATS KV doesn't allow ":").
+		key := fmt.Sprintf("%s.%d", msg.Type, msg.GithubID)
+		entry, err := watchStore.Get(ctx, key)
+		if err == nil {
+			item.LastSeen = entry.LastSeen
+		} else {
+			slog.Warn("state-handler: KV get failed, using zero LastSeen",
+				"key", key, "err", err)
+		}
+
+		changed, snap, err := adapter.CheckItem(ctx, item)
+		if err != nil {
+			return false, err
+		}
+		if !changed {
+			return false, nil
+		}
+		if err := adapter.HandleChange(ctx, item, snap); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+
+	stateW := worker.NewStateWorker(conn, maxWorkers*2, watchStore, stateHandler)
+	stateWCtx, stateWCancel := context.WithCancel(context.Background())
+	defer stateWCancel()
+	go func() {
+		if err := stateW.Start(stateWCtx); err != nil {
+			slog.Error("state worker stopped", "err", err)
+		}
+	}()
+
+	// Use a closure so the defer reads the current cancel/wg at shutdown
+	// time, not the initial values captured at defer-statement time. After a
+	// reload, pollerCancel/pollerWg point to the new goroutines — the bare
+	// defer would stop the already-halted original set and leak the
+	// post-reload ones.
 	defer func() {
 		cfgMu.Lock()
-		p := pipe
+		cancel := pollerCancel
+		wg := pollerWg
 		cfgMu.Unlock()
-		p.Stop()
+		cancel()
+		wg.Wait()
+		slog.Info("pollers: stopped")
 	}()
 
 	// Expose live config for GET /config
@@ -688,8 +1217,8 @@ func main() {
 	// see the same HEIMDALLM_DATA_DIR snapshot.
 	srv.SetReloadFn(func() error {
 		// Serialise reloads: without this, two concurrent /reload calls
-		// could each read the same oldPipe, both stop it, both build a
-		// new pipeline, and leave two pipelines running against the same
+		// could each read the same pollerCancel, both cancel it, both
+		// start new pollers, and leave two sets running against the same
 		// GitHub API budget.
 		reloadMu.Lock()
 		defer reloadMu.Unlock()
@@ -706,30 +1235,35 @@ func main() {
 			return fmt.Errorf("reload: %w", err)
 		}
 
-		// Read the current pipe under cfgMu, then stop it OUTSIDE the lock.
-		// Holding cfgMu across Stop() risks deadlock: if Stop() blocks
+		// Read the current cancel/wg under cfgMu, then stop OUTSIDE the lock.
+		// Holding cfgMu across Wait() risks deadlock: if Wait() blocks
 		// waiting for in-flight goroutines that also acquire cfgMu (e.g.
 		// tier2Adapter callbacks), both sides block forever.
 		cfgMu.Lock()
-		oldPipe := pipe
+		oldCancel := pollerCancel
+		oldWg := pollerWg
 		cfgMu.Unlock()
 
-		oldPipe.Stop()
+		oldCancel()
+		oldWg.Wait()
 
-		newPipe := buildPipeline(newCfg)
-
-		// Swap cfg + pipe atomically under the lock so readers never see
-		// a half-updated state.
+		// Swap cfg + pollers atomically under the lock so readers never
+		// see a half-updated state.
 		cfgMu.Lock()
 		cfg = newCfg
-		pipe = newPipe
 		cfgMu.Unlock()
 
 		// Reload path → coldStart=false so Tier 2 waits one full PollInterval
 		// before its first tick. A UI config PATCH triggers this path; firing
 		// an immediate tick on every PATCH would fan out reviews across the
 		// whole fleet and amplify the cost-runaway loop #243 closed.
-		newPipe.Start(context.Background(), false)
+		newCancel, newWg := startPollers(context.Background(), false)
+
+		cfgMu.Lock()
+		pollerCancel = newCancel
+		pollerWg = newWg
+		cfgMu.Unlock()
+
 		return nil
 	})
 
@@ -1118,19 +1652,6 @@ func parseDiscoveryInterval(s string) time.Duration {
 	return d
 }
 
-func parseWatchInterval(s string) time.Duration {
-	const minWatch = 10 * time.Second
-	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		return 1 * time.Minute
-	}
-	if d < minWatch {
-		slog.Warn("watch_interval too small, clamping to minimum", "configured", d, "minimum", minWatch)
-		return minWatch
-	}
-	return d
-}
-
 // resolveExecutionTimeout returns the effective execution timeout for the CLI
 // process. Per-agent timeout wins over the global timeout; zero means "use
 // executor default (5m)".
@@ -1149,6 +1670,203 @@ func resolveExecutionTimeout(globalTimeout, agentTimeout string) time.Duration {
 	}
 	// Zero = executor uses its default (5m)
 	return 0
+}
+
+// ── Standalone poller functions (replaced Pipeline goroutines) ───────────
+
+// sendDiscoveryRepos merges static + discovered repos and publishes the
+// full list to NATS. Extracted from the old tier1.go sendRepos.
+func sendDiscoveryRepos(
+	ctx context.Context,
+	disc scheduler.Tier1Discovery,
+	limiter *scheduler.RateLimiter,
+	pub scheduler.Tier1Publisher,
+	configFn func() scheduler.Tier1Config,
+) {
+	cfg := configFn()
+	discovered := disc.Discovered()
+
+	// Merge static + discovered, exclude non-monitored
+	nonMon := make(map[string]struct{}, len(cfg.NonMonitored))
+	for _, r := range cfg.NonMonitored {
+		nonMon[r] = struct{}{}
+	}
+	seen := make(map[string]struct{})
+	var repos []string
+	for _, r := range cfg.StaticRepos {
+		if _, skip := nonMon[r]; skip {
+			continue
+		}
+		if _, dup := seen[r]; dup {
+			continue
+		}
+		seen[r] = struct{}{}
+		repos = append(repos, r)
+	}
+	for _, r := range discovered {
+		if _, skip := nonMon[r]; skip {
+			continue
+		}
+		if _, dup := seen[r]; dup {
+			continue
+		}
+		seen[r] = struct{}{}
+		repos = append(repos, r)
+	}
+
+	slog.Info("tier1: discovery complete", "repos", len(repos))
+	if err := pub.PublishRepos(ctx, repos); err != nil {
+		slog.Error("tier1: publish repos failed", "err", err)
+	}
+}
+
+// bridgeDiscovery subscribes to the NATS discovery subject and forwards
+// repo lists to the reposChan that Tier 2 reads. Uses core NATS (no JetStream).
+func bridgeDiscovery(ctx context.Context, conn *nats.Conn, out chan<- []string) {
+	ch := make(chan *nats.Msg, 8)
+	sub, err := conn.ChanSubscribe(bus.SubjDiscoveryRepos, ch)
+	if err != nil {
+		slog.Error("bridge: subscribe to discovery subject failed", "err", err)
+		return
+	}
+	defer sub.Unsubscribe()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-ch:
+			var dm bus.DiscoveryMsg
+			if err := bus.Decode(msg.Data, &dm); err != nil {
+				slog.Error("bridge: decode discovery msg", "err", err)
+				continue
+			}
+			select {
+			case out <- dm.Repos:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+// runTier2 runs the PR/issue polling loop. Replaces the old RunTier2 from
+// the scheduler package.
+func runTier2(
+	ctx context.Context,
+	adapter *tier2Adapter,
+	limiter *scheduler.RateLimiter,
+	prPublisher scheduler.Tier2PRPublisher,
+	configFn func() []string,
+	reposChan <-chan []string,
+	interval time.Duration,
+	coldStart bool,
+) {
+	var (
+		mu    sync.Mutex
+		repos []string
+	)
+
+	// Goroutine to receive repo updates from Tier 1
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-reposChan:
+				mu.Lock()
+				repos = r
+				mu.Unlock()
+				slog.Info("tier2: received repo list", "count", len(r))
+			}
+		}
+	}()
+
+	// Brief delay for Tier 1 to send first batch
+	select {
+	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	processTick := func() {
+		mu.Lock()
+		currentRepos := append([]string(nil), repos...)
+		mu.Unlock()
+
+		if len(currentRepos) == 0 {
+			return
+		}
+
+		// PR processing
+		if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
+			return
+		}
+		prs, err := adapter.FetchPRsToReview()
+		if err != nil {
+			slog.Error("tier2: fetch PRs", "err", err)
+		} else {
+			monitoredSet := make(map[string]struct{}, len(currentRepos))
+			for _, r := range currentRepos {
+				monitoredSet[r] = struct{}{}
+			}
+			for _, pr := range prs {
+				if _, ok := monitoredSet[pr.Repo]; !ok {
+					continue
+				}
+				if adapter.PRAlreadyReviewed(pr.ID, pr.UpdatedAt) {
+					continue
+				}
+				if err := prPublisher.PublishPRReview(ctx, pr.Repo, pr.Number, pr.ID, pr.HeadSHA); err != nil {
+					slog.Error("tier2: publish PR review", "repo", pr.Repo, "pr", pr.Number, "err", err)
+				}
+			}
+		}
+
+		// Issue promotion
+		if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
+			return
+		}
+		if n, err := adapter.PromoteReady(ctx, currentRepos); err != nil {
+			slog.Error("tier2: promotion", "err", err)
+		} else if n > 0 {
+			slog.Info("tier2: promoted issues", "count", n)
+		}
+
+		// Issue processing per repo
+		for _, repo := range currentRepos {
+			if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
+				return
+			}
+			n, err := adapter.ProcessRepo(ctx, repo)
+			if err != nil {
+				slog.Error("tier2: issue processing", "repo", repo, "err", err)
+				continue
+			}
+			if n > 0 {
+				slog.Info("tier2: processed issues", "repo", repo, "count", n)
+			}
+		}
+
+		// Retry pending publishes
+		adapter.PublishPending()
+	}
+
+	if coldStart {
+		processTick()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			processTick()
+		}
+	}
 }
 
 // upsertDiscoveredRepos adds PRs' repos to the monitored (or non-monitored)
@@ -1205,7 +1923,9 @@ type tier2Adapter struct {
 	cfg       **config.Config
 	loginMu   *sync.Mutex
 	login     *string
-	runReview func(pr *gh.PullRequest, aiCfg config.RepoAI)
+	runReview  func(pr *gh.PullRequest, aiCfg config.RepoAI) *store.Review
+	publishPub *bus.PRPublishPublisher
+	watchStore *bus.WatchStore
 
 	// skipMu protects lastSkippedUpdatedAt, which deduplicates review_skipped
 	// SSE events across consecutive poll cycles for the same (PR ID, updated_at)
@@ -1507,13 +2227,31 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 		// allowing two concurrent reviews on the same PR (#243 pattern).
 		Head: gh.Branch{SHA: pr.HeadSHA},
 	}
-	a.runReview(ghPR, aiCfg)
+	rev := a.runReview(ghPR, aiCfg)
+	if rev != nil && rev.GitHubReviewID == 0 && a.publishPub != nil {
+		if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
+			slog.Warn("ProcessPR: failed to enqueue publish", "review_id", rev.ID, "err", err)
+		}
+	}
+	if a.watchStore != nil {
+		if err := a.watchStore.Enroll(ctx, "pr", pr.Repo, pr.Number, pr.ID); err != nil {
+			slog.Warn("ProcessPR: failed to enroll watch", "repo", pr.Repo, "pr", pr.Number, "err", err)
+		}
+	}
 	return nil
 }
 
 // PublishPending implements scheduler.Tier2PRProcessor.
 func (a *tier2Adapter) PublishPending() {
-	a.pipeline.PublishPending()
+	reviews, err := a.store.ListUnpublishedReviews()
+	if err != nil || len(reviews) == 0 {
+		return
+	}
+	for _, rev := range reviews {
+		if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
+			slog.Warn("publish-pending: enqueue failed", "review_id", rev.ID, "err", err)
+		}
+	}
 }
 
 // ProcessRepo implements scheduler.Tier2IssueProcessor.
@@ -1802,7 +2540,17 @@ func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchIt
 			ghPR.HTMLURL = stored.URL
 			ghPR.User = gh.User{Login: snap.Author}
 		}
-		a.runReview(ghPR, aiCfg)
+		rev := a.runReview(ghPR, aiCfg)
+		if rev != nil && rev.GitHubReviewID == 0 && a.publishPub != nil {
+			if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
+				slog.Warn("HandleChange: failed to enqueue publish", "review_id", rev.ID, "err", err)
+			}
+		}
+		if a.watchStore != nil {
+			if err := a.watchStore.Enroll(ctx, "pr", item.Repo, item.Number, item.GithubID); err != nil {
+				slog.Warn("HandleChange: failed to enroll watch", "repo", item.Repo, "pr", item.Number, "err", err)
+			}
+		}
 		return nil
 	}
 	if item.Type == "issue" {
@@ -2010,4 +2758,37 @@ func ptrIntOr(p *int, defaultV int) int {
 		return defaultV
 	}
 	return *p
+}
+
+// enrollOneOpenItem finds one open PR or issue not yet in watch_state and
+// enrolls it. Called once per state-poller tick (every 30s) to gradually
+// backfill items from before the NATS migration without blocking startup.
+// Uses a single query with LEFT JOIN to avoid holding a read lock while writing.
+func enrollOneOpenItem(s *store.Store, ws *bus.WatchStore) {
+	ctx := context.Background()
+	for _, q := range []struct {
+		typ   string
+		query string
+	}{
+		{"pr", `SELECT p.github_id, p.repo, p.number FROM prs p
+			LEFT JOIN watch_state w ON w.key = 'pr.' || p.github_id
+			WHERE p.state='open' AND w.key IS NULL LIMIT 1`},
+		{"issue", `SELECT i.github_id, i.repo, i.number FROM issues i
+			LEFT JOIN watch_state w ON w.key = 'issue.' || i.github_id
+			WHERE i.state='open' AND w.key IS NULL LIMIT 1`},
+	} {
+		var ghID int64
+		var repo string
+		var number int
+		err := s.DB().QueryRow(q.query).Scan(&ghID, &repo, &number)
+		if err != nil {
+			continue // no rows or error — try next type
+		}
+		if err := ws.Enroll(ctx, q.typ, repo, number, ghID); err != nil {
+			slog.Warn("state-poller: backfill enroll failed", "type", q.typ, "repo", repo, "number", number, "err", err)
+			return
+		}
+		slog.Debug("state-poller: backfill enrolled", "type", q.typ, "repo", repo, "number", number)
+		return
+	}
 }

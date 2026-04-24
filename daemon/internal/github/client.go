@@ -501,6 +501,33 @@ func (c *Client) GetPRSnapshot(repo string, number int) (*PRSnapshot, error) {
 	}, nil
 }
 
+// GetPR returns the full PullRequest struct for a single PR via the Pulls API.
+// Used by the NATS review worker to hydrate a PRReviewMsg into a full PR.
+func (c *Client) GetPR(repo string, number int) (*PullRequest, error) {
+	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
+	resp, err := c.do("GET", path, "application/vnd.github+json")
+	if err != nil {
+		return nil, fmt.Errorf("github: get PR: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if resp.StatusCode != http.StatusOK {
+		errBody := safeTruncate(string(body), maxErrBodyLen)
+		return nil, fmt.Errorf("github: get PR (%s #%d): status %d: %s", repo, number, resp.StatusCode, errBody)
+	}
+	var pr PullRequest
+	if err := json.Unmarshal(body, &pr); err != nil {
+		return nil, fmt.Errorf("github: get PR: unmarshal: %w", err)
+	}
+	// Populate the Repo field the same way FetchPRs does.
+	if pr.Head.Repo.FullName != "" {
+		pr.Repo = pr.Head.Repo.FullName
+	} else {
+		pr.Repo = repo
+	}
+	return &pr, nil
+}
+
 // FetchDiff returns the unified diff for a PR.
 func (c *Client) FetchDiff(repo string, number int) (string, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)

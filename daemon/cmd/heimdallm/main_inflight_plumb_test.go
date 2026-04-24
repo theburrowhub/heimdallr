@@ -186,11 +186,12 @@ func TestTier2Adapter_ProcessPR_PlumbsHeadSHAIntoGhPR(t *testing.T) {
 		sawGhPR   *gh.PullRequest
 		callCount int
 	)
-	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) {
+	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) *store.Review {
 		mu.Lock()
 		defer mu.Unlock()
 		sawGhPR = pr
 		callCount++
+		return nil
 	}
 
 	s := newMemStore(t)
@@ -256,11 +257,12 @@ func TestTier2Adapter_HandleChange_PlumbsHeadSHAIntoGhPR(t *testing.T) {
 		sawGhPR   *gh.PullRequest
 		callCount int
 	)
-	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) {
+	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) *store.Review {
 		mu.Lock()
 		defer mu.Unlock()
 		sawGhPR = pr
 		callCount++
+		return nil
 	}
 
 	s := newMemStore(t)
@@ -378,7 +380,7 @@ func TestTier2Adapter_ProcessPR_ConcurrentCallsCollapseToOneReview(t *testing.T)
 	var claimSignaler sync.Once
 
 	var reviewBody int32
-	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) {
+	runReview := func(pr *gh.PullRequest, aiCfg config.RepoAI) *store.Review {
 		// Mirror the production claim logic from runReview in main.go. If
 		// the caller forgot to set Head.SHA (the #264 bug) OR the PR is
 		// not yet upserted, we still return without running — matches the
@@ -387,7 +389,7 @@ func TestTier2Adapter_ProcessPR_ConcurrentCallsCollapseToOneReview(t *testing.T)
 		// that count.
 		storedPR, _ := s.GetPRByGithubID(pr.ID)
 		if storedPR == nil || pr.Head.SHA == "" {
-			return
+			return nil
 		}
 		ok, err := s.ClaimInFlightReview(storedPR.ID, pr.Head.SHA)
 		if err != nil || !ok {
@@ -395,7 +397,7 @@ func TestTier2Adapter_ProcessPR_ConcurrentCallsCollapseToOneReview(t *testing.T)
 			// this is the production "already in flight, skip" branch. Do
 			// NOT touch reviewBody; the whole point of the regression test
 			// is that this path runs exactly once across both goroutines.
-			return
+			return nil
 		}
 		defer func() { _ = s.ReleaseInFlightReview(storedPR.ID, pr.Head.SHA) }()
 
@@ -407,6 +409,7 @@ func TestTier2Adapter_ProcessPR_ConcurrentCallsCollapseToOneReview(t *testing.T)
 		// signal delivered exactly once so the test harness is robust).
 		claimSignaler.Do(func() { close(holdingClaim) })
 		<-release
+		return nil
 	}
 
 	broker := sse.NewBroker()
