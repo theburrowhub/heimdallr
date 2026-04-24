@@ -2226,7 +2226,9 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 		}
 	}
 	if a.watchStore != nil {
-		a.watchStore.Enroll(context.Background(), "pr", pr.Repo, pr.Number, pr.ID)
+		if err := a.watchStore.Enroll(ctx, "pr", pr.Repo, pr.Number, pr.ID); err != nil {
+			slog.Warn("ProcessPR: failed to enroll watch", "repo", pr.Repo, "pr", pr.Number, "err", err)
+		}
 	}
 	return nil
 }
@@ -2537,7 +2539,9 @@ func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchIt
 			}
 		}
 		if a.watchStore != nil {
-			a.watchStore.Enroll(context.Background(), "pr", item.Repo, item.Number, item.GithubID)
+			if err := a.watchStore.Enroll(ctx, "pr", item.Repo, item.Number, item.GithubID); err != nil {
+				slog.Warn("HandleChange: failed to enroll watch", "repo", item.Repo, "pr", item.Number, "err", err)
+			}
 		}
 		return nil
 	}
