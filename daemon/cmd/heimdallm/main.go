@@ -2777,17 +2777,25 @@ func enrollOpenItems(s *store.Store, ws *bus.WatchStore) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("query open prs: %w", err)
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var ghID int64
 		var repo string
 		var number int
 		if err := rows.Scan(&ghID, &repo, &number); err != nil {
+			slog.Warn("startup-enroll: scan PR failed", "err", err)
 			continue
 		}
-		if added, err := ws.EnrollIfAbsent(ctx, "pr", repo, number, ghID); err == nil && added {
+		added, err := ws.EnrollIfAbsent(ctx, "pr", repo, number, ghID)
+		if err != nil {
+			slog.Warn("startup-enroll: enroll PR failed", "repo", repo, "number", number, "err", err)
+			continue
+		}
+		if added {
 			enrolled++
 		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("startup-enroll: PR iteration error", "err", err)
 	}
 	rows.Close()
 
@@ -2796,18 +2804,27 @@ func enrollOpenItems(s *store.Store, ws *bus.WatchStore) (int, error) {
 	if err != nil {
 		return enrolled, fmt.Errorf("query open issues: %w", err)
 	}
-	defer rows2.Close()
 	for rows2.Next() {
 		var ghID int64
 		var repo string
 		var number int
 		if err := rows2.Scan(&ghID, &repo, &number); err != nil {
+			slog.Warn("startup-enroll: scan issue failed", "err", err)
 			continue
 		}
-		if added, err := ws.EnrollIfAbsent(ctx, "issue", repo, number, ghID); err == nil && added {
+		added, err := ws.EnrollIfAbsent(ctx, "issue", repo, number, ghID)
+		if err != nil {
+			slog.Warn("startup-enroll: enroll issue failed", "repo", repo, "number", number, "err", err)
+			continue
+		}
+		if added {
 			enrolled++
 		}
 	}
+	if err := rows2.Err(); err != nil {
+		slog.Warn("startup-enroll: issue iteration error", "err", err)
+	}
+	rows2.Close()
 
 	return enrolled, nil
 }
