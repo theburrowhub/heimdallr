@@ -43,12 +43,14 @@ func New(cfg Config) *Bus {
 // and creates all JetStream streams and consumers.
 func (b *Bus) Start(ctx context.Context) error {
 	opts := &natsserver.Options{
-		ServerName: "heimdallm-bus",
-		DontListen: true,
-		JetStream:  true,
-		StoreDir:   b.cfg.DataDir,
-		NoLog:      true,
-		NoSigs:     true,
+		ServerName:          "heimdallm-bus",
+		DontListen:          true,
+		JetStream:           true,
+		StoreDir:            b.cfg.DataDir,
+		JetStreamMaxMemory:  64 * 1024 * 1024,  // 64 MB — sufficient for <100 concurrent items
+		JetStreamMaxStore:   256 * 1024 * 1024,  // 256 MB — caps disk usage
+		NoLog:               true,
+		NoSigs:              true,
 	}
 
 	srv, err := natsserver.NewServer(opts)
