@@ -156,6 +156,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Enroll any open PRs/issues not yet in watch_state so the state
+	// poller picks them up. Covers items processed before the NATS
+	// migration that were never enrolled.
+	if enrolled, err := enrollOpenItems(s, watchStore); err != nil {
+		slog.Warn("startup: enroll open items failed", "err", err)
+	} else if enrolled > 0 {
+		slog.Info("startup: enrolled open items into watch_state", "count", enrolled)
+	}
+
 	broker := sse.NewBroker()
 	broker.Start()
 
@@ -2754,4 +2763,51 @@ func ptrIntOr(p *int, defaultV int) int {
 		return defaultV
 	}
 	return *p
+}
+
+// enrollOpenItems scans all open PRs and issues in the store and enrolls
+// them in watch_state if not already present. This backfills items that
+// were processed before the NATS migration introduced watch_state.
+func enrollOpenItems(s *store.Store, ws *bus.WatchStore) (int, error) {
+	ctx := context.Background()
+	enrolled := 0
+
+	// Open PRs
+	rows, err := s.DB().Query("SELECT github_id, repo, number FROM prs WHERE state='open'")
+	if err != nil {
+		return 0, fmt.Errorf("query open prs: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ghID int64
+		var repo string
+		var number int
+		if err := rows.Scan(&ghID, &repo, &number); err != nil {
+			continue
+		}
+		if added, err := ws.EnrollIfAbsent(ctx, "pr", repo, number, ghID); err == nil && added {
+			enrolled++
+		}
+	}
+	rows.Close()
+
+	// Open issues
+	rows2, err := s.DB().Query("SELECT github_id, repo, number FROM issues WHERE state='open'")
+	if err != nil {
+		return enrolled, fmt.Errorf("query open issues: %w", err)
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var ghID int64
+		var repo string
+		var number int
+		if err := rows2.Scan(&ghID, &repo, &number); err != nil {
+			continue
+		}
+		if added, err := ws.EnrollIfAbsent(ctx, "issue", repo, number, ghID); err == nil && added {
+			enrolled++
+		}
+	}
+
+	return enrolled, nil
 }
