@@ -35,6 +35,7 @@ import (
 	"github.com/heimdallm/daemon/internal/store"
 	"github.com/heimdallm/daemon/internal/worker"
 	"github.com/heimdallm/daemon/launchagent"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func main() {
@@ -482,14 +483,16 @@ func main() {
 		return rev
 	}
 
-	// ── Multi-tier Pipeline ──────────────────────────────────────────────
+	// ── Standalone pollers (replaced the Pipeline orchestrator) ─────────
 	js := eventBus.JetStream()
 	publishPub := bus.NewPRPublishPublisher(js)
 	issuePublisher := bus.NewIssuePublisher(js)
 	issueFetcher.SetPublisher(issuePublisher)
 
-	// tier2Adapter bridges main.go's concrete types to the Pipeline's
-	// Tier 2 / Tier 3 interfaces.
+	// Shared rate limiter (was Pipeline.limiter).
+	limiter := scheduler.NewRateLimiter(4500)
+
+	// tier2Adapter bridges main.go's concrete types to the polling logic.
 	adapter := &tier2Adapter{
 		ghClient:             ghClient,
 		ghToken:              token,
@@ -507,15 +510,46 @@ func main() {
 		lastSkippedUpdatedAt: make(map[int64]time.Time),
 	}
 
-	buildPipeline := func(c *config.Config) *scheduler.Pipeline {
-		return scheduler.NewPipeline(scheduler.PipelineConfig{
-			DiscoveryInterval: parseDiscoveryInterval(c.GitHub.DiscoveryInterval),
-			PollInterval:      parsePollInterval(c.GitHub.PollInterval),
-			WatchInterval:     parseWatchInterval(c.GitHub.WatchInterval),
-			RateLimitPerHour:  4500,
-		}, scheduler.PipelineDeps{
-			Discovery: discoverySvc,
-			Tier1ConfigFn: func() scheduler.Tier1Config {
+	repoPublisher := bus.NewRepoPublisher(js)
+	prReviewPublisher := bus.NewPRReviewPublisher(js)
+
+	// reposChan bridges Tier 1 (discovery) → Tier 2 (per-repo polling) via
+	// the NATS discovery stream. Tier 1 publishes to NATS, the bridge
+	// consumes from NATS and forwards repo lists through this channel.
+	reposChan := make(chan []string, 1)
+
+	// startPollers launches all polling goroutines under the given context.
+	// Returns a cancel function and a WaitGroup that completes when all
+	// goroutines have exited.
+	startPollers := func(ctx context.Context, coldStart bool) (context.CancelFunc, *sync.WaitGroup) {
+		ctx, cancel := context.WithCancel(ctx)
+		var wg sync.WaitGroup
+
+		// Rate limiter hourly refill
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(1 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					limiter.Refill()
+					slog.Info("pollers: rate limiter refilled")
+				}
+			}
+		}()
+
+		// Tier 1: Discovery — publishes to NATS
+		cfgMu.Lock()
+		discoveryInterval := parseDiscoveryInterval(cfg.GitHub.DiscoveryInterval)
+		cfgMu.Unlock()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tier1ConfigFn := func() scheduler.Tier1Config {
 				cfgMu.Lock()
 				defer cfgMu.Unlock()
 				orgs := append([]string(nil), cfg.GitHub.DiscoveryOrgs...)
@@ -528,38 +562,65 @@ func main() {
 					DiscoveryTopic: cfg.GitHub.DiscoveryTopic,
 					DiscoveryOrgs:  orgs,
 				}
-			},
-			Publisher:      bus.NewRepoPublisher(js),
-			JS:             js,
-			PRFetcher:      adapter,
-			PRProcessor:    adapter,
-			PRPublisher:    bus.NewPRReviewPublisher(eventBus.JetStream()),
-			IssueProcessor: adapter,
-			Promoter:       adapter,
-			Store:          adapter,
-			Tier2ConfigFn: func() []string {
+			}
+
+			// Publish initial repos immediately
+			sendDiscoveryRepos(ctx, discoverySvc, limiter, repoPublisher, tier1ConfigFn)
+
+			ticker := time.NewTicker(discoveryInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := limiter.Acquire(ctx, scheduler.TierDiscovery); err != nil {
+						return
+					}
+					sendDiscoveryRepos(ctx, discoverySvc, limiter, repoPublisher, tier1ConfigFn)
+				}
+			}
+		}()
+
+		// Bridge: NATS discovery-consumer → reposChan
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			bridgeDiscovery(ctx, js, reposChan)
+		}()
+
+		// Tier 2: PR / issue polling
+		cfgMu.Lock()
+		pollInterval := parsePollInterval(cfg.GitHub.PollInterval)
+		cfgMu.Unlock()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tier2ConfigFn := func() []string {
 				cfgMu.Lock()
 				defer cfgMu.Unlock()
 				return discovery.MergeRepos(cfg.GitHub.Repositories, discoverySvc.Discovered(), cfg.GitHub.NonMonitored)
-			},
-			ItemChecker: adapter,
-		})
+			}
+			runTier2(ctx, adapter, limiter, prReviewPublisher, tier2ConfigFn, reposChan, pollInterval, coldStart)
+		}()
+
+		slog.Info("pollers: started",
+			"discovery", discoveryInterval,
+			"poll", pollInterval)
+
+		return cancel, &wg
 	}
 
-	pipe := buildPipeline(cfg)
 	// Initial daemon start → coldStart=true so Tier 2 fires its first tick
 	// immediately; operators see polling activity without waiting an entire
 	// PollInterval. The reload path below passes false.
-	pipe.Start(context.Background(), true)
+	pollerCancel, pollerWg := startPollers(context.Background(), true)
 
 	// ── NATS PR review worker ───────────────────────────────────────────
 	// Consumes PR review requests published by Tier 2 and runs the
 	// existing review pipeline. This replaces the goroutine-per-PR
 	// pattern that Tier 2 used to use.
 	reviewHandler := func(ctx context.Context, msg bus.PRReviewMsg) {
-		cfgMu.Lock()
-		limiter := pipe.Limiter()
-		cfgMu.Unlock()
 		// Acquire returns only ctx.Err() (shutdown). On cancellation the
 		// message is acked without processing — acceptable because the
 		// daemon is shutting down and the PR will be re-detected next startup.
@@ -660,9 +721,6 @@ func main() {
 			Severity: rev.Severity,
 		}
 
-		cfgMu.Lock()
-		limiter := pipe.Limiter()
-		cfgMu.Unlock()
 		if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
 			return fmt.Errorf("rate limit cancelled: %w", err)
 		}
@@ -903,9 +961,6 @@ func main() {
 	stateHandler := func(ctx context.Context, msg bus.StateCheckMsg) (bool, error) {
 		// Rate limit before any GitHub API call. TierWatch (50ms) matches
 		// the old Tier 3 priority — state checks are lightweight and high-priority.
-		cfgMu.Lock()
-		limiter := pipe.Limiter()
-		cfgMu.Unlock()
 		if err := limiter.Acquire(ctx, scheduler.TierWatch); err != nil {
 			return false, fmt.Errorf("rate limit cancelled: %w", err)
 		}
@@ -950,15 +1005,19 @@ func main() {
 		}
 	}()
 
-	// Use a closure so the defer reads the current pipe variable at shutdown
-	// time, not the initial pointer captured at defer-statement time. After a
-	// reload, pipe points to a new pipeline — the bare defer would stop the
-	// already-halted original pipeline and leak the post-reload one.
+	// Use a closure so the defer reads the current cancel/wg at shutdown
+	// time, not the initial values captured at defer-statement time. After a
+	// reload, pollerCancel/pollerWg point to the new goroutines — the bare
+	// defer would stop the already-halted original set and leak the
+	// post-reload ones.
 	defer func() {
 		cfgMu.Lock()
-		p := pipe
+		cancel := pollerCancel
+		wg := pollerWg
 		cfgMu.Unlock()
-		p.Stop()
+		cancel()
+		wg.Wait()
+		slog.Info("pollers: stopped")
 	}()
 
 	// Expose live config for GET /config
@@ -1132,8 +1191,8 @@ func main() {
 	// see the same HEIMDALLM_DATA_DIR snapshot.
 	srv.SetReloadFn(func() error {
 		// Serialise reloads: without this, two concurrent /reload calls
-		// could each read the same oldPipe, both stop it, both build a
-		// new pipeline, and leave two pipelines running against the same
+		// could each read the same pollerCancel, both cancel it, both
+		// start new pollers, and leave two sets running against the same
 		// GitHub API budget.
 		reloadMu.Lock()
 		defer reloadMu.Unlock()
@@ -1150,30 +1209,35 @@ func main() {
 			return fmt.Errorf("reload: %w", err)
 		}
 
-		// Read the current pipe under cfgMu, then stop it OUTSIDE the lock.
-		// Holding cfgMu across Stop() risks deadlock: if Stop() blocks
+		// Read the current cancel/wg under cfgMu, then stop OUTSIDE the lock.
+		// Holding cfgMu across Wait() risks deadlock: if Wait() blocks
 		// waiting for in-flight goroutines that also acquire cfgMu (e.g.
 		// tier2Adapter callbacks), both sides block forever.
 		cfgMu.Lock()
-		oldPipe := pipe
+		oldCancel := pollerCancel
+		oldWg := pollerWg
 		cfgMu.Unlock()
 
-		oldPipe.Stop()
+		oldCancel()
+		oldWg.Wait()
 
-		newPipe := buildPipeline(newCfg)
-
-		// Swap cfg + pipe atomically under the lock so readers never see
-		// a half-updated state.
+		// Swap cfg + pollers atomically under the lock so readers never
+		// see a half-updated state.
 		cfgMu.Lock()
 		cfg = newCfg
-		pipe = newPipe
 		cfgMu.Unlock()
 
 		// Reload path → coldStart=false so Tier 2 waits one full PollInterval
 		// before its first tick. A UI config PATCH triggers this path; firing
 		// an immediate tick on every PATCH would fan out reviews across the
 		// whole fleet and amplify the cost-runaway loop #243 closed.
-		newPipe.Start(context.Background(), false)
+		newCancel, newWg := startPollers(context.Background(), false)
+
+		cfgMu.Lock()
+		pollerCancel = newCancel
+		pollerWg = newWg
+		cfgMu.Unlock()
+
 		return nil
 	})
 
@@ -1562,19 +1626,6 @@ func parseDiscoveryInterval(s string) time.Duration {
 	return d
 }
 
-func parseWatchInterval(s string) time.Duration {
-	const minWatch = 10 * time.Second
-	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		return 1 * time.Minute
-	}
-	if d < minWatch {
-		slog.Warn("watch_interval too small, clamping to minimum", "configured", d, "minimum", minWatch)
-		return minWatch
-	}
-	return d
-}
-
 // resolveExecutionTimeout returns the effective execution timeout for the CLI
 // process. Per-agent timeout wins over the global timeout; zero means "use
 // executor default (5m)".
@@ -1593,6 +1644,241 @@ func resolveExecutionTimeout(globalTimeout, agentTimeout string) time.Duration {
 	}
 	// Zero = executor uses its default (5m)
 	return 0
+}
+
+// ── Standalone poller functions (replaced Pipeline goroutines) ───────────
+
+// sendDiscoveryRepos merges static + discovered repos and publishes the
+// full list to NATS. Extracted from the old tier1.go sendRepos.
+func sendDiscoveryRepos(
+	ctx context.Context,
+	disc scheduler.Tier1Discovery,
+	limiter *scheduler.RateLimiter,
+	pub scheduler.Tier1Publisher,
+	configFn func() scheduler.Tier1Config,
+) {
+	cfg := configFn()
+	discovered := disc.Discovered()
+
+	// Merge static + discovered, exclude non-monitored
+	nonMon := make(map[string]struct{}, len(cfg.NonMonitored))
+	for _, r := range cfg.NonMonitored {
+		nonMon[r] = struct{}{}
+	}
+	seen := make(map[string]struct{})
+	var repos []string
+	for _, r := range cfg.StaticRepos {
+		if _, skip := nonMon[r]; skip {
+			continue
+		}
+		if _, dup := seen[r]; dup {
+			continue
+		}
+		seen[r] = struct{}{}
+		repos = append(repos, r)
+	}
+	for _, r := range discovered {
+		if _, skip := nonMon[r]; skip {
+			continue
+		}
+		if _, dup := seen[r]; dup {
+			continue
+		}
+		seen[r] = struct{}{}
+		repos = append(repos, r)
+	}
+
+	slog.Info("tier1: discovery complete", "repos", len(repos))
+	if err := pub.PublishRepos(ctx, repos); err != nil {
+		slog.Error("tier1: publish repos failed", "err", err)
+	}
+}
+
+// bridgeDiscovery consumes from the NATS discovery-consumer and forwards
+// repo lists to the reposChan that Tier 2 reads. Retries with exponential
+// backoff on consumer errors.
+func bridgeDiscovery(ctx context.Context, js jetstream.JetStream, out chan<- []string) {
+	backoff := 1 * time.Second
+	maxBackoff := 30 * time.Second
+
+	for {
+		if err := runBridgeConsumer(ctx, js, out); err != nil {
+			slog.Error("bridge: consumer failed, retrying", "err", err, "backoff", backoff)
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+}
+
+func runBridgeConsumer(ctx context.Context, js jetstream.JetStream, out chan<- []string) error {
+	cons, err := js.Consumer(ctx, bus.StreamDiscovery, bus.ConsumerDiscovery)
+	if err != nil {
+		return fmt.Errorf("get discovery consumer: %w", err)
+	}
+	iter, err := cons.Messages(jetstream.PullMaxMessages(1))
+	if err != nil {
+		return fmt.Errorf("start message iterator: %w", err)
+	}
+	defer iter.Stop()
+
+	// Stop the iterator when context is cancelled so iter.Next() unblocks.
+	go func() {
+		<-ctx.Done()
+		iter.Stop()
+	}()
+
+	for {
+		msg, err := iter.Next()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil // clean shutdown
+			}
+			return fmt.Errorf("iter.Next: %w", err)
+		}
+
+		var dm bus.DiscoveryMsg
+		if err := bus.Decode(msg.Data(), &dm); err != nil {
+			slog.Error("bridge: decode discovery msg", "err", err)
+			msg.Ack()
+			continue
+		}
+
+		select {
+		case out <- dm.Repos:
+		case <-ctx.Done():
+			return nil
+		}
+		msg.Ack()
+	}
+}
+
+// runTier2 runs the PR/issue polling loop. Replaces the old RunTier2 from
+// the scheduler package.
+func runTier2(
+	ctx context.Context,
+	adapter *tier2Adapter,
+	limiter *scheduler.RateLimiter,
+	prPublisher scheduler.Tier2PRPublisher,
+	configFn func() []string,
+	reposChan <-chan []string,
+	interval time.Duration,
+	coldStart bool,
+) {
+	var (
+		mu    sync.Mutex
+		repos []string
+	)
+
+	// Goroutine to receive repo updates from Tier 1
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-reposChan:
+				mu.Lock()
+				repos = r
+				mu.Unlock()
+				slog.Info("tier2: received repo list", "count", len(r))
+			}
+		}
+	}()
+
+	// Brief delay for Tier 1 to send first batch
+	select {
+	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	processTick := func() {
+		mu.Lock()
+		currentRepos := append([]string(nil), repos...)
+		mu.Unlock()
+
+		if len(currentRepos) == 0 {
+			return
+		}
+
+		// PR processing
+		if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
+			return
+		}
+		prs, err := adapter.FetchPRsToReview()
+		if err != nil {
+			slog.Error("tier2: fetch PRs", "err", err)
+		} else {
+			monitoredSet := make(map[string]struct{}, len(currentRepos))
+			for _, r := range currentRepos {
+				monitoredSet[r] = struct{}{}
+			}
+			for _, pr := range prs {
+				if _, ok := monitoredSet[pr.Repo]; !ok {
+					continue
+				}
+				if adapter.PRAlreadyReviewed(pr.ID, pr.UpdatedAt) {
+					continue
+				}
+				if err := prPublisher.PublishPRReview(ctx, pr.Repo, pr.Number, pr.ID, pr.HeadSHA); err != nil {
+					slog.Error("tier2: publish PR review", "repo", pr.Repo, "pr", pr.Number, "err", err)
+				}
+			}
+		}
+
+		// Issue promotion
+		if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
+			return
+		}
+		if n, err := adapter.PromoteReady(ctx, currentRepos); err != nil {
+			slog.Error("tier2: promotion", "err", err)
+		} else if n > 0 {
+			slog.Info("tier2: promoted issues", "count", n)
+		}
+
+		// Issue processing per repo
+		for _, repo := range currentRepos {
+			if err := limiter.Acquire(ctx, scheduler.TierRepo); err != nil {
+				return
+			}
+			n, err := adapter.ProcessRepo(ctx, repo)
+			if err != nil {
+				slog.Error("tier2: issue processing", "repo", repo, "err", err)
+				continue
+			}
+			if n > 0 {
+				slog.Info("tier2: processed issues", "repo", repo, "count", n)
+			}
+		}
+
+		// Retry pending publishes
+		adapter.PublishPending()
+	}
+
+	if coldStart {
+		processTick()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			processTick()
+		}
+	}
 }
 
 // upsertDiscoveredRepos adds PRs' repos to the monitored (or non-monitored)
