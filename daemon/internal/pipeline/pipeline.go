@@ -68,6 +68,18 @@ type CommentFetcher interface {
 	FetchComments(repo string, number int) ([]github.Comment, error)
 }
 
+// TimelineFetcher returns the review_requested / review_dismissed events
+// targeting a specific reviewer login on a PR. Used by the SHA-skip
+// path to detect explicit re-request review actions that the user
+// performed via the GitHub UI even though the HEAD SHA is unchanged.
+// See theburrowhub/heimdallm#322 Bug 5.
+//
+// Optional dependency: when not set (nil), the pipeline falls back to
+// the previous behaviour (skip on SHA match regardless of timeline).
+type TimelineFetcher interface {
+	GetPRTimelineEventsForReviewer(repo string, number int, login string) ([]github.TimelineEvent, error)
+}
+
 // Pipeline orchestrates the full PR review flow.
 type Pipeline struct {
 	store *store.Store
@@ -84,6 +96,10 @@ type Pipeline struct {
 	// all caps (the pre-issue-243 behaviour). Populated at daemon startup via
 	// SetCircuitBreakerLimits.
 	breaker *store.CircuitBreakerLimits
+	// timeline is the optional event-history fetcher used to bypass the
+	// SHA-skip path on explicit re-request review actions. Nil keeps the
+	// pre-#322 behaviour (skip on SHA match regardless of user intent).
+	timeline TimelineFetcher
 }
 
 // New creates a new Pipeline with the provided dependencies.
@@ -106,6 +122,52 @@ func (p *Pipeline) SetBotLogin(login string) { p.botLogin = login }
 // and the follow-up ticket for re-plumbing via a getter.
 func (p *Pipeline) SetCircuitBreakerLimits(limits *store.CircuitBreakerLimits) {
 	p.breaker = limits
+}
+
+// SetTimelineFetcher enables the explicit-re-request-review bypass for
+// the SHA-skip path. Nil keeps the pre-#322 behaviour (skip on SHA
+// match regardless of user intent). Production wires the *github.Client
+// here at daemon startup.
+func (p *Pipeline) SetTimelineFetcher(t TimelineFetcher) {
+	p.timeline = t
+}
+
+// shouldBypassSHASkipForReReview returns true iff the operator
+// explicitly re-requested a review on this PR after the previous
+// review's CreatedAt and that re-request is still in effect (not
+// superseded by a later dismissal). All preconditions fail closed:
+// missing dependencies (nil timeline / empty bot login / nil
+// prevReview) or a timeline API error keep the SHA skip in place so a
+// transient outage cannot widen the cost surface. See
+// theburrowhub/heimdallm#322 Bug 5.
+func (p *Pipeline) shouldBypassSHASkipForReReview(pr *github.PullRequest, prevReview *store.Review) bool {
+	if p.timeline == nil || p.botLogin == "" || prevReview == nil {
+		return false
+	}
+	events, err := p.timeline.GetPRTimelineEventsForReviewer(pr.Repo, pr.Number, p.botLogin)
+	if err != nil {
+		slog.Warn("pipeline: re-request timeline lookup failed, keeping SHA skip (fail-closed)",
+			"repo", pr.Repo, "pr", pr.Number, "err", err)
+		return false
+	}
+	// events is sorted ascending by CreatedAt. Walk it to find the most
+	// recent event whose timestamp is strictly newer than prevReview.CreatedAt.
+	// If that event is a review_requested → bypass; if it's a
+	// review_dismissed (or none qualify) → keep the skip. We only honour
+	// events that came AFTER the existing review because earlier
+	// requests are by definition already satisfied.
+	var latestRelevant *github.TimelineEvent
+	for i := range events {
+		ev := &events[i]
+		if !ev.CreatedAt.After(prevReview.CreatedAt) {
+			continue
+		}
+		latestRelevant = ev
+	}
+	if latestRelevant == nil {
+		return false
+	}
+	return latestRelevant.Event == "review_requested"
 }
 
 // applyPrompt resolves a prompt with priority: repoPromptID > agentPromptID > global default.
@@ -279,9 +341,29 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 		return nil, nil
 	}
 	if prevReview != nil && pr.Head.SHA != "" && prevReview.HeadSHA == pr.Head.SHA {
-		slog.Info("pipeline: skipping re-review, HEAD SHA unchanged",
-			"repo", pr.Repo, "pr", pr.Number, "head_sha", pr.Head.SHA)
-		return nil, nil
+		// Before honouring the SHA-skip, check whether the operator
+		// explicitly re-requested a review via the GitHub UI on this same
+		// commit. The fail-closed SHA dedup (#245) was designed to ignore
+		// updated_at bumps from CI bots and cross-references, but it
+		// should NOT swallow a deliberate human action. See
+		// theburrowhub/heimdallm#322 Bug 5.
+		//
+		// Decision rule: bypass the skip iff the most recent
+		// review_requested or review_dismissed event for the bot login is
+		// a review_requested newer than prevReview.CreatedAt. A later
+		// review_dismissed (or any other state) cancels the bypass —
+		// dismiss-then-no-new-request means the operator no longer wants
+		// our review. Same fail-closed posture as #245: a timeline API
+		// error keeps the original skip in place rather than widening
+		// the cost surface on a transient outage.
+		if p.shouldBypassSHASkipForReReview(pr, prevReview) {
+			slog.Info("pipeline: SHA unchanged but explicit re-request detected — proceeding with review",
+				"repo", pr.Repo, "pr", pr.Number, "head_sha", pr.Head.SHA)
+		} else {
+			slog.Info("pipeline: skipping re-review, HEAD SHA unchanged",
+				"repo", pr.Repo, "pr", pr.Number, "head_sha", pr.Head.SHA)
+			return nil, nil
+		}
 	}
 
 	// All early-exit paths above are exhausted: from this point we are

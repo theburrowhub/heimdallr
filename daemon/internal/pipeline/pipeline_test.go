@@ -2,6 +2,7 @@ package pipeline_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -81,6 +82,23 @@ func countNotify(events []string, title string) int {
 		}
 	}
 	return n
+}
+
+// fakeTimeline is a TimelineFetcher stub that returns a canned event
+// slice (or an error) so SHA-skip-bypass tests can drive the
+// re-request decision deterministically. Used by tests for #322 Bug 5.
+type fakeTimeline struct {
+	events []github.TimelineEvent
+	err    error
+	calls  int
+}
+
+func (f *fakeTimeline) GetPRTimelineEventsForReviewer(_ string, _ int, _ string) ([]github.TimelineEvent, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.events, nil
 }
 
 func TestPipeline_Run(t *testing.T) {
@@ -498,5 +516,189 @@ func TestPipeline_Run_Tier3PathSkipsOnSameHeadSHA(t *testing.T) {
 	// have produced one.
 	if startedCount := countNotify(notify.events, "PR Review Started"); startedCount != 1 {
 		t.Errorf("notify(\"PR Review Started\") fired %d times across 1 real review + 1 Tier 3 SHA-skip; want exactly 1", startedCount)
+	}
+}
+
+// ── #322 Bug 5: explicit re-request review bypasses the SHA skip ──────
+
+// runFirstReview is a small helper used by the Bug 5 tests below to seed
+// a previous review on the store via the real pipeline, so the second
+// Run hits the SHA-skip branch with a realistic prevReview row.
+func runFirstReview(t *testing.T, p *pipeline.Pipeline, pr *github.PullRequest) {
+	t.Helper()
+	if _, err := p.Run(pr, pipeline.RunOptions{Primary: "claude"}); err != nil {
+		t.Fatalf("seed first review: %v", err)
+	}
+}
+
+// TestPipeline_Run_RespectsExplicitReReviewOnSameSHA covers the
+// happy-path bypass: operator presses "Re-request review" in the
+// GitHub UI, the timeline records a review_requested newer than the
+// previous review, the pipeline must re-run the review on the same
+// HEAD SHA. Defends against the silent-skip behaviour observed on PR
+// freepik-company/ai-api-specs#557 on 2026-04-24.
+func TestPipeline_Run_RespectsExplicitReReviewOnSameSHA(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	exec := &fakeExecCounter{}
+	gh := &fakeGHCounter{diff: "+line"}
+	p := pipeline.New(s, gh, exec, &fakeNotify{})
+	p.SetBotLogin("heimdallm-bot")
+
+	pr := &github.PullRequest{
+		ID: 557, Number: 557, Title: "feat: x", Repo: "org/repo",
+		User: github.User{Login: "alice"}, State: "open",
+		UpdatedAt: time.Now().Add(-1 * time.Hour),
+		HTMLURL:   "https://github.com/org/repo/pull/557",
+		Head:      github.Branch{SHA: "c527a2e4"},
+	}
+	runFirstReview(t, p, pr)
+	if exec.calls != 1 {
+		t.Fatalf("seed: expected exec.calls=1, got %d", exec.calls)
+	}
+
+	// Operator hits "Re-request review" — timeline records a
+	// review_requested event newer than the existing review.
+	tl := &fakeTimeline{events: []github.TimelineEvent{
+		{Event: "review_requested", Actor: "alice", CreatedAt: time.Now()},
+	}}
+	p.SetTimelineFetcher(tl)
+
+	pr.UpdatedAt = time.Now()
+	if _, err := p.Run(pr, pipeline.RunOptions{Primary: "claude"}); err != nil {
+		t.Fatalf("re-request run: %v", err)
+	}
+	if exec.calls != 2 {
+		t.Errorf("re-request: expected exec.calls=2, got %d", exec.calls)
+	}
+	if gh.submits != 2 {
+		t.Errorf("re-request: expected gh.submits=2, got %d", gh.submits)
+	}
+	if tl.calls == 0 {
+		t.Errorf("timeline was not consulted on SHA-skip path")
+	}
+}
+
+// TestPipeline_Run_IgnoresStaleReviewRequest covers the negative case:
+// a review_requested whose timestamp predates the existing review is
+// already-satisfied and must NOT bypass the SHA skip. Otherwise every
+// PR that ever asked for the bot would re-review forever.
+func TestPipeline_Run_IgnoresStaleReviewRequest(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	exec := &fakeExecCounter{}
+	gh := &fakeGHCounter{diff: "+line"}
+	p := pipeline.New(s, gh, exec, &fakeNotify{})
+	p.SetBotLogin("heimdallm-bot")
+
+	pr := &github.PullRequest{
+		ID: 1, Number: 1, Title: "t", Repo: "org/repo",
+		User: github.User{Login: "alice"}, State: "open",
+		UpdatedAt: time.Now().Add(-1 * time.Hour),
+		HTMLURL:   "https://github.com/org/repo/pull/1",
+		Head:      github.Branch{SHA: "abc"},
+	}
+	runFirstReview(t, p, pr)
+
+	// Stale request: predates the review we just performed.
+	tl := &fakeTimeline{events: []github.TimelineEvent{
+		{Event: "review_requested", Actor: "alice", CreatedAt: time.Now().Add(-2 * time.Hour)},
+	}}
+	p.SetTimelineFetcher(tl)
+
+	pr.UpdatedAt = time.Now()
+	if _, err := p.Run(pr, pipeline.RunOptions{Primary: "claude"}); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if exec.calls != 1 {
+		t.Errorf("stale request must NOT trigger re-review, got exec.calls=%d", exec.calls)
+	}
+}
+
+// TestPipeline_Run_DismissAfterReRequestKeepsSkip covers the layered
+// case: re-request was followed by a dismiss, so the operator no
+// longer wants our review on this SHA. Newest event wins; skip stays.
+func TestPipeline_Run_DismissAfterReRequestKeepsSkip(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	exec := &fakeExecCounter{}
+	gh := &fakeGHCounter{diff: "+line"}
+	p := pipeline.New(s, gh, exec, &fakeNotify{})
+	p.SetBotLogin("heimdallm-bot")
+
+	pr := &github.PullRequest{
+		ID: 2, Number: 2, Title: "t", Repo: "org/repo",
+		User: github.User{Login: "alice"}, State: "open",
+		UpdatedAt: time.Now().Add(-1 * time.Hour),
+		HTMLURL:   "https://github.com/org/repo/pull/2",
+		Head:      github.Branch{SHA: "def"},
+	}
+	runFirstReview(t, p, pr)
+
+	now := time.Now()
+	tl := &fakeTimeline{events: []github.TimelineEvent{
+		{Event: "review_requested", Actor: "alice", CreatedAt: now.Add(-10 * time.Minute)},
+		{Event: "review_dismissed", Actor: "alice", CreatedAt: now.Add(-5 * time.Minute)},
+	}}
+	p.SetTimelineFetcher(tl)
+
+	pr.UpdatedAt = now
+	if _, err := p.Run(pr, pipeline.RunOptions{Primary: "claude"}); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if exec.calls != 1 {
+		t.Errorf("dismiss after re-request must keep the skip, got exec.calls=%d", exec.calls)
+	}
+}
+
+// TestPipeline_Run_TimelineErrorKeepsSkip enforces the fail-closed
+// posture: a transient timeline API error must NOT widen the cost
+// surface by suddenly bypassing the SHA skip. Same rule as the
+// HEAD-SHA resolver fail-closed in #245.
+func TestPipeline_Run_TimelineErrorKeepsSkip(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	exec := &fakeExecCounter{}
+	gh := &fakeGHCounter{diff: "+line"}
+	p := pipeline.New(s, gh, exec, &fakeNotify{})
+	p.SetBotLogin("heimdallm-bot")
+
+	pr := &github.PullRequest{
+		ID: 3, Number: 3, Title: "t", Repo: "org/repo",
+		User: github.User{Login: "alice"}, State: "open",
+		UpdatedAt: time.Now().Add(-1 * time.Hour),
+		HTMLURL:   "https://github.com/org/repo/pull/3",
+		Head:      github.Branch{SHA: "ghi"},
+	}
+	runFirstReview(t, p, pr)
+
+	tl := &fakeTimeline{err: errors.New("github: 503 service unavailable")}
+	p.SetTimelineFetcher(tl)
+
+	pr.UpdatedAt = time.Now()
+	if _, err := p.Run(pr, pipeline.RunOptions{Primary: "claude"}); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if exec.calls != 1 {
+		t.Errorf("timeline error must keep the skip (fail-closed), got exec.calls=%d", exec.calls)
+	}
+	if tl.calls == 0 {
+		t.Errorf("timeline was not consulted")
 	}
 }

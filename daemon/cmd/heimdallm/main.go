@@ -191,6 +191,13 @@ func main() {
 	}
 	p.SetCircuitBreakerLimits(&cbLimits)
 
+	// Wire the GitHub client as the timeline fetcher so the SHA-skip
+	// path can detect explicit re-request review actions and bypass the
+	// dedup. See theburrowhub/heimdallm#322 Bug 5. Requires the bot
+	// login resolved below; the pipeline no-ops the bypass if either
+	// p.timeline or p.botLogin is unset.
+	p.SetTimelineFetcher(ghClient)
+
 	// Issue-side circuit-breaker caps (theburrowhub/heimdallm#292) — mirrors
 	// the PR-side defenses against runaway triage loops.
 	issueCBLimits := store.IssueCircuitBreakerLimits{
