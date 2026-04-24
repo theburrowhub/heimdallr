@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -59,6 +61,8 @@ type Dashboard struct {
 	showDetail   bool
 	detailScroll int
 	detailLines  []string
+
+	repoFilter string
 }
 
 type activityLine struct {
@@ -230,6 +234,9 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					d.prs = append(d.prs, pr)
 				}
 			}
+			sort.Slice(d.prs, func(i, j int) bool {
+				return d.prs[i].LatestReview.CreatedAt.After(d.prs[j].LatestReview.CreatedAt)
+			})
 			d.issues = nil
 			for _, iss := range msg.issues {
 				if iss.LatestReview != nil {
@@ -375,10 +382,29 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "enter":
-		if d.activeTab == tabPRs && d.cursor < len(d.prs) {
+		if d.activeTab == tabPRs && d.cursor < len(d.visiblePRs()) {
 			d.openDetail()
 		} else if d.activeTab == tabIssues && d.cursor < len(d.issues) {
 			d.openDetail()
+		}
+	case "o":
+		if d.activeTab == tabPRs {
+			prs := d.visiblePRs()
+			if d.cursor < len(prs) && prs[d.cursor].URL != "" {
+				return d, openURLCmd(prs[d.cursor].URL)
+			}
+		}
+	case "f":
+		if d.activeTab == tabPRs {
+			if d.repoFilter != "" {
+				d.repoFilter = ""
+			} else {
+				prs := d.visiblePRs()
+				if d.cursor < len(prs) {
+					d.repoFilter = prs[d.cursor].Repo
+				}
+			}
+			d.cursor = 0
 		}
 	case "r":
 		d.refreshing = true
@@ -442,7 +468,7 @@ func (d *Dashboard) openDetail() {
 	d.detailScroll = 0
 	switch d.activeTab {
 	case tabPRs:
-		d.detailLines = buildPRDetailLines(d.prs[d.cursor], d.width)
+		d.detailLines = buildPRDetailLines(d.visiblePRs()[d.cursor], d.width)
 	case tabIssues:
 		d.detailLines = buildIssueDetailLines(d.issues[d.cursor], d.width)
 	}
@@ -500,6 +526,35 @@ func (d *Dashboard) clampCursor() {
 	}
 	if d.cursor < 0 {
 		d.cursor = 0
+	}
+}
+
+func (d *Dashboard) visiblePRs() []api.PR {
+	if d.repoFilter == "" {
+		return d.prs
+	}
+	var filtered []api.PR
+	for _, pr := range d.prs {
+		if pr.Repo == d.repoFilter {
+			filtered = append(filtered, pr)
+		}
+	}
+	return filtered
+}
+
+func openURLCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "darwin":
+			cmd = exec.Command("open", url)
+		case "windows":
+			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		default:
+			cmd = exec.Command("xdg-open", url)
+		}
+		_ = cmd.Start()
+		return nil
 	}
 }
 
@@ -652,43 +707,63 @@ func (d *Dashboard) renderActivity(height int) string {
 }
 
 func (d *Dashboard) renderPRs(height int) string {
-	if len(d.prs) == 0 {
+	prs := d.visiblePRs()
+	if len(prs) == 0 {
+		if d.repoFilter != "" {
+			return lipgloss.NewStyle().Foreground(colorMuted).Render(
+				fmt.Sprintf("  No PRs matching filter: %s  [f to clear]", d.repoFilter))
+		}
 		return lipgloss.NewStyle().Foreground(colorMuted).Render("  No PRs found.")
 	}
 
 	var b strings.Builder
-	header := fmt.Sprintf("  %-6s %-25s %-35s %-8s %-8s", "ID", "REPO", "TITLE", "SEVERITY", "STATE")
+	header := fmt.Sprintf("  %-7s %-18s %-24s %-12s %-8s %-10s %s", "PR", "REPO", "TITLE", "AUTHOR", "SEVERITY", "REVIEWED", "STATE")
+	if d.repoFilter != "" {
+		header += "  " + lipgloss.NewStyle().Foreground(colorWarning).Render(fmt.Sprintf("[filter: %s]", d.repoFilter))
+	}
 	b.WriteString(headerStyle.Render(header))
 	b.WriteString("\n")
-	b.WriteString("  " + strings.Repeat("─", 86))
+	b.WriteString("  " + strings.Repeat("─", 90))
 	b.WriteString("\n")
 
 	maxVisible := height - 2
 	if maxVisible < 1 {
 		maxVisible = 1
 	}
-	start, end := visibleRange(d.cursor, len(d.prs), maxVisible)
+	start, end := visibleRange(d.cursor, len(prs), maxVisible)
 
 	for i := start; i < end; i++ {
-		pr := d.prs[i]
+		pr := prs[i]
 		sev := "---"
+		reviewed := "---"
 		if pr.LatestReview != nil {
 			sev = pr.LatestReview.Severity
+			reviewed = pr.LatestReview.CreatedAt.Format("Jan 02")
 		}
-		title := truncateRunes(pr.Title, 33)
-		repo := truncateRunes(pr.Repo, 23)
+		title := truncateRunes(pr.Title, 22)
+		repo := truncateRunes(pr.Repo, 16)
+		author := truncateRunes(pr.Author, 10)
+		prNum := fmt.Sprintf("#%d", pr.Number)
 		sevRendered := severityStyle(sev).Render(fmt.Sprintf("%-8s", sev))
-		line := fmt.Sprintf("  %-6d %-25s %-35s %s %-8s", pr.ID, repo, title, sevRendered, pr.State)
+
+		state := pr.State
+		if pr.Dismissed {
+			state += " ⊘"
+		}
+
+		line := fmt.Sprintf("  %-7s %-18s %-24s %-12s %s %-10s %s", prNum, repo, title, author, sevRendered, reviewed, state)
 
 		if i == d.cursor {
 			b.WriteString(selectedRowStyle.Render(line))
+		} else if pr.Dismissed {
+			b.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render(line))
 		} else {
 			b.WriteString(line)
 		}
 		b.WriteString("\n")
 	}
 
-	if ind := scrollIndicator(start, end, len(d.prs)); ind != "" {
+	if ind := scrollIndicator(start, end, len(prs)); ind != "" {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render(ind))
 	}
 	return b.String()
@@ -880,7 +955,11 @@ func (d *Dashboard) renderHelp() string {
 	if d.showDetail {
 		return helpStyle.Render("[esc]close  [j/k]scroll  [pgup/pgdn]page  [q]uit")
 	}
-	if d.activeTab == tabPRs || d.activeTab == tabIssues {
+	if d.activeTab == tabPRs {
+		help := "[q]uit  [r]efresh  [enter]detail  [o]pen in browser  [f]ilter repo  [tab]switch  [j/k]scroll  [1-6]jump"
+		return helpStyle.Render(help)
+	}
+	if d.activeTab == tabIssues {
 		return helpStyle.Render("[q]uit  [r]efresh  [enter]detail  [tab]switch  [j/k]scroll  [pgup/pgdn]page  [1-6]jump")
 	}
 	return helpStyle.Render("[q]uit  [r]efresh  [tab]switch  [j/k]scroll  [pgup/pgdn]page  [1-6]jump  [G]follow")
@@ -899,7 +978,7 @@ func (d *Dashboard) tabItemCount() int {
 	case tabActivity:
 		return len(d.activity)
 	case tabPRs:
-		return len(d.prs)
+		return len(d.visiblePRs())
 	case tabIssues:
 		return len(d.issues)
 	case tabConfig:
