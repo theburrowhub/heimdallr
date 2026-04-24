@@ -733,8 +733,9 @@ func main() {
 			// 4xx errors (except 429 rate limit) are permanent — no point retrying.
 			// 5xx and network errors are transient — nak for NATS retry.
 			if strings.Contains(errStr, "status 4") && !strings.Contains(errStr, "status 429") {
-				slog.Error("publish-worker: permanent GitHub error, skipping",
+				slog.Error("publish-worker: permanent GitHub error, marking orphaned",
 					"review_id", msg.ReviewID, "err", err)
+				_ = s.MarkReviewPublished(msg.ReviewID, -1, "", time.Now().UTC())
 				return nil // permanent — ack
 			}
 			return fmt.Errorf("submit review to GitHub: %w", err)
