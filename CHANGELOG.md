@@ -2,6 +2,40 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.6.7](https://github.com/theburrowhub/heimdallm/compare/v0.6.6...v0.6.7) (2026-04-23)
+
+
+### Bug Fixes
+
+* skip GoReleaser validate for Linux packages ([4a89f74](https://github.com/theburrowhub/heimdallm/commit/4a89f74399700f0e9cc11a1ed622d9af71620b8d)), closes [#293](https://github.com/theburrowhub/heimdallm/issues/293)
+
+## [0.6.6](https://github.com/theburrowhub/heimdallm/compare/v0.6.5...v0.6.6) (2026-04-23)
+
+
+### Bug Fixes
+
+* reset entire worktree before GoReleaser, not just pubspec.lock ([#297](https://github.com/theburrowhub/heimdallm/issues/297)) ([2280d16](https://github.com/theburrowhub/heimdallm/commit/2280d165b544a8fbc19a4434454c5777c9840c48)), closes [#293](https://github.com/theburrowhub/heimdallm/issues/293)
+
+## [0.6.5](https://github.com/theburrowhub/heimdallm/compare/v0.6.4...v0.6.5) (2026-04-23)
+
+
+### Features
+
+* implement [#293](https://github.com/theburrowhub/heimdallm/issues/293) — bug: Linux packages build fails — GoReleaser rejects dirty tree from pubspec.lock ([#294](https://github.com/theburrowhub/heimdallm/issues/294)) ([cabce44](https://github.com/theburrowhub/heimdallm/commit/cabce4409f3de8f563b54b25c81f79d8b1aa5f35))
+
+## [0.6.4](https://github.com/theburrowhub/heimdallm/compare/v0.6.3...v0.6.4) (2026-04-23)
+
+
+### Features
+
+* implement [#288](https://github.com/theburrowhub/heimdallm/issues/288) — bug: GoReleaser nfpms fails — Flutter GUI artifacts missing at build time ([#290](https://github.com/theburrowhub/heimdallm/issues/290)) ([8721434](https://github.com/theburrowhub/heimdallm/commit/87214342daaa2dd8ac3e37a66dd04881191e444b))
+* implement [#289](https://github.com/theburrowhub/heimdallm/issues/289) — bug: Homebrew formula not updated by GoReleaser — manual formula blocks auto-generation ([#291](https://github.com/theburrowhub/heimdallm/issues/291)) ([e14e36f](https://github.com/theburrowhub/heimdallm/commit/e14e36f1f58010003dfe3227fbf3e1b87e7085ea))
+
+
+### Bug Fixes
+
+* **daemon:** plumb HEAD SHA through scheduler so in-flight claim fires (closes [#264](https://github.com/theburrowhub/heimdallm/issues/264)) ([#283](https://github.com/theburrowhub/heimdallm/issues/283)) ([c599905](https://github.com/theburrowhub/heimdallm/commit/c599905e342e7a2879c95966f8fd2a4d8e37742a))
+
 ## [0.6.3](https://github.com/theburrowhub/heimdallm/compare/v0.6.2...v0.6.3) (2026-04-23)
 
 
