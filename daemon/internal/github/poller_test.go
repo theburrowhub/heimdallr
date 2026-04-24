@@ -2,6 +2,7 @@ package github_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -279,4 +280,83 @@ func mustTime(s string) time.Time {
 		panic(err)
 	}
 	return t
+}
+
+// TestSubmitReview_LockedPRReturnsPermanentSubmitError locks in the
+// fix from theburrowhub/heimdallm#325: when GitHub returns 422 with a
+// "lock prevents review" body, the daemon must surface a typed
+// *PermanentSubmitError so PublishPending can mark the row orphan
+// instead of retrying every poll cycle forever.
+func TestSubmitReview_LockedPRReturnsPermanentSubmitError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/org/repo/pulls/1/reviews" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(`{"message":"Validation Failed","errors":[{"resource":"PullRequest","code":"unprocessable","message":"lock prevents review"}]}`))
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	_, _, err := client.SubmitReview("org/repo", 1, "body", "COMMENT")
+	if err == nil {
+		t.Fatal("expected PermanentSubmitError, got nil")
+	}
+	var permErr *gh.PermanentSubmitError
+	if !errors.As(err, &permErr) {
+		t.Fatalf("expected *PermanentSubmitError, got %T: %v", err, err)
+	}
+	if permErr.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("StatusCode = %d, want 422", permErr.StatusCode)
+	}
+	if permErr.Reason != "pr_locked" {
+		t.Errorf("Reason = %q, want pr_locked", permErr.Reason)
+	}
+	if permErr.Body == "" {
+		t.Errorf("Body should carry the truncated response for diagnostics, got empty")
+	}
+}
+
+// TestSubmitReview_TransientErrorIsNotPermanent guards against
+// over-classification: a 5xx (or any non-422 status) MUST keep the
+// generic-error path so the retry loop still runs. Otherwise a
+// transient outage would wipe legitimate reviews.
+func TestSubmitReview_TransientErrorIsNotPermanent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"upstream"}`, http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	_, _, err := client.SubmitReview("org/repo", 1, "body", "COMMENT")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var permErr *gh.PermanentSubmitError
+	if errors.As(err, &permErr) {
+		t.Errorf("503 must NOT classify as PermanentSubmitError, got %+v", permErr)
+	}
+}
+
+// TestSubmitReview_422WithoutLockIsNotPermanent ensures we don't
+// classify every 422 as permanent — only the specific lock-related
+// substrings. A 422 from a malformed body or wrong event value should
+// still surface as a generic error so callers can iterate.
+func TestSubmitReview_422WithoutLockIsNotPermanent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(`{"message":"Validation Failed","errors":[{"code":"invalid","field":"event"}]}`))
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	_, _, err := client.SubmitReview("org/repo", 1, "body", "BAD_EVENT")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var permErr *gh.PermanentSubmitError
+	if errors.As(err, &permErr) {
+		t.Errorf("422 without lock body must NOT classify as PermanentSubmitError, got %+v", permErr)
+	}
 }

@@ -586,9 +586,26 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 		severityToEvent(result.Severity, len(result.Issues)),
 	)
 	if publishErr != nil {
-		// Review saved locally; will retry on next poll (GitHubReviewID == 0 check)
-		slog.Warn("pipeline: failed to publish to GitHub, will retry",
-			"pr", pr.Number, "err", publishErr)
+		// Permanent submit failure (PR locked etc.): mark the freshly
+		// stored row as orphaned right now so it never enters the
+		// PublishPending retry loop — the row would otherwise burn
+		// one GitHub API call per poll cycle indefinitely. Same
+		// (-1, "") sentinel as the no-repo path in PublishPending.
+		// See theburrowhub/heimdallm#325.
+		var permErr *github.PermanentSubmitError
+		if errors.As(publishErr, &permErr) {
+			if mErr := p.store.MarkReviewPublished(rev.ID, -1, "", time.Now().UTC()); mErr != nil {
+				slog.Warn("pipeline: failed to mark orphaned review on initial publish, will fall through to PublishPending",
+					"review_id", rev.ID, "reason", permErr.Reason, "err", mErr)
+			} else {
+				slog.Info("pipeline: review marked orphan on initial publish (permanent submit failure)",
+					"review_id", rev.ID, "reason", permErr.Reason, "status", permErr.StatusCode)
+			}
+		} else {
+			// Transient — review saved locally; will retry on next poll (GitHubReviewID == 0 check)
+			slog.Warn("pipeline: failed to publish to GitHub, will retry",
+				"pr", pr.Number, "err", publishErr)
+		}
 	} else {
 		// Stamp PublishedAt immediately after the API returned success — this
 		// is the anchor the dedup window uses. Anchoring on CreatedAt (set
@@ -661,6 +678,25 @@ func (p *Pipeline) PublishPending() {
 			severityToEvent(rev.Severity, len(issues)),
 		)
 		if err != nil {
+			// Permanent submit failures (currently HTTP 422 with a
+			// "lock prevents review" body) cannot be recovered by
+			// retrying — the PR's conversation has been locked or
+			// otherwise put in a state requiring operator
+			// intervention. Mark the row as orphaned via the same
+			// (-1, "") sentinel we use for PRs with no repo so the
+			// retry loop stops burning one GitHub API call per poll
+			// cycle. See theburrowhub/heimdallm#325.
+			var permErr *github.PermanentSubmitError
+			if errors.As(err, &permErr) {
+				if mErr := p.store.MarkReviewPublished(rev.ID, -1, "", time.Now().UTC()); mErr != nil {
+					slog.Warn("pipeline: failed to mark orphaned review, will retry next tick",
+						"review_id", rev.ID, "reason", permErr.Reason, "err", mErr)
+					continue
+				}
+				slog.Info("pipeline: review marked orphan (permanent submit failure, will not retry)",
+					"review_id", rev.ID, "reason", permErr.Reason, "status", permErr.StatusCode)
+				continue
+			}
 			slog.Warn("pipeline: retry publish failed", "review_id", rev.ID, "err", err)
 			continue
 		}
