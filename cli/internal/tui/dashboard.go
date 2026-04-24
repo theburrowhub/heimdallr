@@ -241,7 +241,14 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			sort.Slice(d.issues, func(i, j int) bool {
-				return d.issues[i].LatestReview.CreatedAt.After(d.issues[j].LatestReview.CreatedAt)
+				ri, rj := d.issues[i].LatestReview, d.issues[j].LatestReview
+				if ri == nil {
+					return false
+				}
+				if rj == nil {
+					return true
+				}
+				return ri.CreatedAt.After(rj.CreatedAt)
 			})
 			d.config = msg.config
 			d.stats = msg.stats
