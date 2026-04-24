@@ -988,7 +988,9 @@ func main() {
 		// Auto-dismiss legacy items with missing data — they can never be checked.
 		if msg.Repo == "" {
 			key := fmt.Sprintf("%s.%d", msg.Type, msg.GithubID)
-			watchStore.Delete(ctx, key)
+			if err := watchStore.Delete(ctx, key); err != nil {
+				slog.Warn("state-handler: failed to delete legacy item", "key", key, "err", err)
+			}
 			slog.Info("state-handler: auto-dismissed legacy item with empty repo",
 				"type", msg.Type, "number", msg.Number, "github_id", msg.GithubID)
 			return false, nil
@@ -1022,7 +1024,9 @@ func main() {
 			// 404 means the repo/PR was deleted or we don't have access.
 			// Remove from watch to stop retrying.
 			if strings.Contains(err.Error(), "status 404") {
-				watchStore.Delete(ctx, key)
+				if delErr := watchStore.Delete(ctx, key); delErr != nil {
+					slog.Warn("state-handler: failed to delete unreachable item", "key", key, "err", delErr)
+				}
 				slog.Info("state-handler: removed unreachable item from watch",
 					"type", msg.Type, "repo", msg.Repo, "number", msg.Number)
 				return false, nil
@@ -2806,9 +2810,13 @@ func enrollOpenItems(s *store.Store, ws *bus.WatchStore) {
 		for rows.Next() {
 			var it item
 			if err := rows.Scan(&it.ghID, &it.repo, &it.number); err != nil {
+				slog.Warn("state-poller: backfill scan failed", "type", q.typ, "err", err)
 				continue
 			}
 			batch = append(batch, it)
+		}
+		if err := rows.Err(); err != nil {
+			slog.Warn("state-poller: backfill iteration error", "type", q.typ, "err", err)
 		}
 		rows.Close() // close before writing to avoid SQLite lock contention
 
