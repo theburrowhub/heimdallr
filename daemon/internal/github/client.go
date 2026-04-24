@@ -275,10 +275,14 @@ func (c *Client) SubmitReview(repo string, number int, body, event string) (int6
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != 200 {
 		errBody := safeTruncate(string(respBody), maxErrBodyLen)
 		if reason, ok := classifyPermanentSubmit422(resp.StatusCode, respBody); ok {
+			// Body carries the FULL response (not safe-truncated) so an
+			// operator inspecting *PermanentSubmitError can see the full
+			// GitHub error payload — the reason substring may live past
+			// the maxErrBodyLen cutoff that the generic-error path uses.
 			return 0, "", &PermanentSubmitError{
 				StatusCode: resp.StatusCode,
 				Reason:     reason,
-				Body:       errBody,
+				Body:       string(respBody),
 			}
 		}
 		return 0, "", fmt.Errorf("github: submit review: status %d: %s", resp.StatusCode, errBody)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -358,5 +359,33 @@ func TestSubmitReview_422WithoutLockIsNotPermanent(t *testing.T) {
 	var permErr *gh.PermanentSubmitError
 	if errors.As(err, &permErr) {
 		t.Errorf("422 without lock body must NOT classify as PermanentSubmitError, got %+v", permErr)
+	}
+}
+
+// TestSubmitReview_LockedPRBodyIsNotTruncated covers the
+// post-review-feedback fix to #325: when SubmitReview returns a
+// *PermanentSubmitError, the Body field must carry the FULL response
+// body (not safe-truncated) so an operator inspecting the error can
+// see the complete GitHub payload — the lock substring may live past
+// the maxErrBodyLen cutoff used by the generic-error path.
+func TestSubmitReview_LockedPRBodyIsNotTruncated(t *testing.T) {
+	// Build a body where the lock substring sits well past 200 bytes
+	// (maxErrBodyLen) so a truncation regression would lose it.
+	padding := strings.Repeat("x", 500)
+	bigBody := `{"message":"Validation Failed","padding":"` + padding + `","errors":[{"message":"lock prevents review"}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(bigBody))
+	}))
+	defer srv.Close()
+
+	client := gh.NewClient("fake-token", gh.WithBaseURL(srv.URL))
+	_, _, err := client.SubmitReview("org/repo", 1, "body", "COMMENT")
+	var permErr *gh.PermanentSubmitError
+	if !errors.As(err, &permErr) {
+		t.Fatalf("expected PermanentSubmitError on big locked body, got %v", err)
+	}
+	if !strings.Contains(permErr.Body, "lock prevents review") {
+		t.Errorf("permErr.Body lost the lock substring (truncated at boundary?); body=%q", permErr.Body)
 	}
 }
