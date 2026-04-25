@@ -2,6 +2,13 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.6.9](https://github.com/theburrowhub/heimdallm/compare/v0.6.8...v0.6.9) (2026-04-25)
+
+
+### Bug Fixes
+
+* **issues:** bot-comment check must allow mode transitions ([#364](https://github.com/theburrowhub/heimdallm/issues/364)) ([9e50b10](https://github.com/theburrowhub/heimdallm/commit/9e50b10a93ea67f20bcaf24e7ef487e4e5a4445d)), closes [#362](https://github.com/theburrowhub/heimdallm/issues/362)
+
 ## [0.6.8](https://github.com/theburrowhub/heimdallm/compare/v0.6.7...v0.6.8) (2026-04-25)
 
 
