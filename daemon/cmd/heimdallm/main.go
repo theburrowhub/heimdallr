@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -338,10 +337,9 @@ func main() {
 		// gated by a stale in-flight row from a prior HEAD. See
 		// theburrowhub/heimdallm#243.
 		//
-		// For early-stage PRs that have not yet been upserted, OR for PRs
-		// where the HEAD SHA is not yet known, skip the claim — the
-		// downstream SHA dedup in pipeline.Run (already fail-closed per
-		// Task 1) handles those paths.
+		// For PRs where the HEAD SHA is not yet known, skip the claim —
+		// the downstream SHA dedup in pipeline.Run (already fail-closed per
+		// Task 1) handles that path.
 		//
 		// On Claim error (transient SQLite blip, disk pressure), we log and
 		// proceed fail-open. This is safe because the downstream defenses
@@ -357,19 +355,17 @@ func main() {
 		// Fail-closed here would block legitimate reviews on a transient DB
 		// error; the layered defenses make fail-open the right trade.
 		//
-		// sql.ErrNoRows is expected for PRs not yet upserted (early-stage);
-		// any other error is a real problem worth surfacing in logs.
-		stored, err := s.GetPRByGithubID(pr.ID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			slog.Warn("runReview: GetPRByGithubID failed, proceeding without persistent claim",
-				"pr_id", pr.ID, "repo", pr.Repo, "err", err)
-		}
-		// stored may be nil either way — downstream Claim guard handles that.
+		// Always use the GitHub-assigned ID for the in-flight claim key.
+		// This avoids mixing two ID namespaces (internal SQLite autoincrement
+		// vs GitHub global ID) in the same reviews_in_flight.pr_id column,
+		// which would let a cold-start claim and a post-upsert retry both
+		// succeed for the same (PR, SHA) pair (#359).
+		claimPRID := pr.ID
+
 		var claimed bool
-		var claimPRID int64
 		var claimSHA string
-		if stored != nil && pr.Head.SHA != "" {
-			ok, err := s.ClaimInFlightReview(stored.ID, pr.Head.SHA)
+		if pr.Head.SHA != "" {
+			ok, err := s.ClaimInFlightReview(claimPRID, pr.Head.SHA)
 			if err != nil {
 				slog.Warn("runReview: claim inflight failed, proceeding", "err", err)
 			} else if !ok {
@@ -378,35 +374,11 @@ func main() {
 				return nil
 			} else {
 				claimed = true
-				claimPRID = stored.ID
 				claimSHA = pr.Head.SHA
 			}
 		} else {
-			// Defensive log: the claim guard was short-circuited. Surfaces
-			// the wiring regression theburrowhub/heimdallm#264 (empty SHA)
-			// and the early-stage "PR not yet upserted" path; downstream
-			// defenses (fail-closed SHA in pipeline.Run, circuit breaker,
-			// PublishedAt grace) still cap cost in both cases.
-			//
-			// The reason string is computed from the actual predicates
-			// rather than an else-branch nil check, so a future edit to
-			// the outer guard doesn't silently mislead operators — the
-			// log stays truthful no matter what combination of conditions
-			// steered us into this branch.
-			var reason string
-			switch {
-			case stored == nil:
-				reason = "stored PR not found"
-			case pr.Head.SHA == "":
-				reason = "empty Head.SHA from caller"
-			default:
-				// Unreachable under today's guard (stored != nil && SHA != "")
-				// but kept so a future added clause still yields a
-				// non-misleading message.
-				reason = "claim precondition failed"
-			}
 			slog.Info("runReview: in-flight claim skipped (defenses still apply)",
-				"pr", pr.Number, "repo", pr.Repo, "reason", reason)
+				"pr", pr.Number, "repo", pr.Repo, "reason", "empty Head.SHA from caller")
 		}
 		defer func() {
 			if claimed {
