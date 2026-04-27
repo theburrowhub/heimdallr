@@ -113,7 +113,8 @@ class DashboardScreen extends ConsumerWidget {
   }
 }
 
-final daemonStartingProvider = StateProvider<bool>((ref) => false);
+const _daemonStartHealthMaxAttempts = 80;
+const _daemonStartHealthInterval = Duration(milliseconds: 100);
 
 Future<void> _confirmShutdown(BuildContext context, WidgetRef ref) async {
   final confirmed = await showDialog<bool>(
@@ -162,14 +163,13 @@ Future<void> _startDaemon(BuildContext context, WidgetRef ref) async {
     await platform.spawnDaemon(binaryPath);
     final api = ref.read(apiClientProvider);
     var healthy = false;
-    for (var i = 0; i < 80; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      if (!context.mounted) return;
+    for (var i = 0; i < _daemonStartHealthMaxAttempts; i++) {
+      await Future<void>.delayed(_daemonStartHealthInterval);
       healthy = await api.checkHealth();
       if (healthy) break;
     }
-    if (!context.mounted) return;
     _invalidateDashboardData(ref);
+    if (!context.mounted) return;
     if (healthy) {
       showToast(context, 'Server started');
     } else {
@@ -182,9 +182,7 @@ Future<void> _startDaemon(BuildContext context, WidgetRef ref) async {
   } catch (e) {
     if (context.mounted) showToast(context, 'Error: $e', isError: true);
   } finally {
-    if (context.mounted) {
-      ref.read(daemonStartingProvider.notifier).state = false;
-    }
+    ref.read(daemonStartingProvider.notifier).state = false;
   }
 }
 
