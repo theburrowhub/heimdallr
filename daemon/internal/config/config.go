@@ -62,7 +62,8 @@ type GitHubConfig struct {
 	DiscoveryOrgs []string `toml:"discovery_orgs"`
 	// DiscoveryInterval controls how often the discovery query is refreshed.
 	// When empty, discovery follows PollInterval; set this when discovery
-	// should run on its own cadence. Accepts any Go time.ParseDuration value.
+	// should run on its own cadence, for example to preserve Search API budget
+	// across many discovery_orgs. Accepts any Go time.ParseDuration value.
 	DiscoveryInterval string `toml:"discovery_interval"`
 
 	// AutoEnablePROnDiscovery controls the initial prEnabled value for repos
