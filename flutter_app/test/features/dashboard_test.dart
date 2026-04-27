@@ -3,10 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:heimdallm/core/api/api_client.dart';
 import 'package:heimdallm/core/models/pr.dart';
 import 'package:heimdallm/core/models/review.dart';
+import 'package:heimdallm/core/platform/platform_services_provider.dart';
+import 'package:heimdallm/features/config/config_providers.dart';
 import 'package:heimdallm/features/dashboard/dashboard_providers.dart';
 import 'package:heimdallm/features/dashboard/dashboard_screen.dart';
+import 'package:heimdallm/features/issues/issues_providers.dart';
+import '../core/platform/fake_platform_services.dart';
+
+class MockApiClient extends Mock implements ApiClient {}
 
 PR _pr({
   int id = 1,
@@ -123,5 +131,42 @@ void main() {
     );
     await tester.pump();
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  });
+
+  testWidgets('offline dashboard can start daemon', (tester) async {
+    final platform = FakePlatformServices(daemonBinaryPath: '/tmp/heimdallm');
+    final api = MockApiClient();
+    when(() => api.checkHealth()).thenAnswer((_) async => true);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiClientProvider.overrideWithValue(api),
+          platformServicesProvider.overrideWithValue(platform),
+          daemonHealthProvider.overrideWith((ref) => Future.value(false)),
+          prsProvider.overrideWith((ref) => Future.error(Exception('offline'))),
+          issuesProvider.overrideWith(
+            (ref) => Future.error(Exception('offline')),
+          ),
+          sseStreamProvider.overrideWith((ref) => const Stream.empty()),
+        ],
+        child: MaterialApp.router(
+          routerConfig: GoRouter(
+            routes: [
+              GoRoute(path: '/', builder: (_, __) => const DashboardScreen()),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Start Server'), findsOneWidget);
+    await tester.tap(find.text('Start Server'));
+    await tester.pump(const Duration(milliseconds: 150));
+    await tester.pumpAndSettle();
+
+    expect(platform.spawnedDaemons, equals(['/tmp/heimdallm']));
+    verify(() => api.checkHealth()).called(1);
   });
 }
