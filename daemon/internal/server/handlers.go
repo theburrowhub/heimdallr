@@ -696,7 +696,11 @@ func (srv *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"shutdown not available"}`, http.StatusServiceUnavailable)
 		return
 	}
+	slog.Info("shutdown requested via API")
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "shutdown queued"})
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 	go srv.shutdownFn()
 }
 

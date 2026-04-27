@@ -125,18 +125,41 @@ Future<void> _confirmShutdown(BuildContext context, WidgetRef ref) async {
     showToast(context, 'Shutdown requested');
     ref.invalidate(sseStreamProvider);
     ref.invalidate(daemonHealthProvider);
-    Future<void>.delayed(const Duration(milliseconds: 500), () {
-      if (!context.mounted) return;
-      ref.invalidate(daemonHealthProvider);
-      ref.invalidate(prsProvider);
-      ref.invalidate(issuesProvider);
-      ref.invalidate(statsProvider);
-      ref.invalidate(activityEntriesProvider);
-      ref.invalidate(activityOptionsProvider);
-    });
+    await _refreshWhenDaemonStops(context, ref);
   } catch (e) {
     if (context.mounted) showToast(context, 'Error: $e', isError: true);
   }
+}
+
+Future<void> _refreshWhenDaemonStops(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final api = ref.read(apiClientProvider);
+  const delays = [
+    Duration(milliseconds: 200),
+    Duration(milliseconds: 300),
+    Duration(milliseconds: 500),
+    Duration(milliseconds: 800),
+    Duration(milliseconds: 1200),
+    Duration(seconds: 2),
+  ];
+
+  for (final delay in delays) {
+    await Future<void>.delayed(delay);
+    if (!context.mounted) return;
+    final healthy = await api.checkHealth();
+    if (!context.mounted) return;
+    ref.invalidate(daemonHealthProvider);
+    if (!healthy) break;
+  }
+
+  if (!context.mounted) return;
+  ref.invalidate(prsProvider);
+  ref.invalidate(issuesProvider);
+  ref.invalidate(statsProvider);
+  ref.invalidate(activityEntriesProvider);
+  ref.invalidate(activityOptionsProvider);
 }
 
 // ── Reviews tab ──────────────────────────────────────────────────────────────
