@@ -1,9 +1,18 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:heimdallm/core/api/api_client.dart';
 import 'package:heimdallm/core/models/activity.dart';
 import 'package:heimdallm/features/activity/activity_providers.dart';
+import 'package:heimdallm/features/dashboard/dashboard_providers.dart';
+import 'package:mocktail/mocktail.dart';
+
+class MockApiClient extends Mock implements ApiClient {}
 
 void main() {
+  setUpAll(() {
+    registerFallbackValue(const ActivityQuery());
+  });
+
   group('ActivityQueryNotifier', () {
     test('default query is today', () {
       final c = ProviderContainer();
@@ -143,6 +152,25 @@ void main() {
       expect(q.itemTypes, isEmpty);
       expect(q.actions, isEmpty);
       expect(q.outcomes, isEmpty);
+    });
+  });
+
+  group('activityOptionsProvider', () {
+    test('uses a daemon-compatible limit for option discovery', () async {
+      final api = MockApiClient();
+      ActivityQuery? captured;
+      when(() => api.fetchActivity(any())).thenAnswer((invocation) async {
+        captured = invocation.positionalArguments.single as ActivityQuery;
+        return const ActivityPage(entries: [], truncated: false, count: 0);
+      });
+      final c = ProviderContainer(
+        overrides: [apiClientProvider.overrideWithValue(api)],
+      );
+      addTearDown(c.dispose);
+
+      await c.read(activityOptionsProvider.future);
+
+      expect(captured?.limit, 5000);
     });
   });
 }

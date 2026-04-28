@@ -144,7 +144,8 @@ final activityEntriesProvider = FutureProvider<ActivityPage>((ref) async {
 /// Oversized so the distinct org/repo lists reflect the full window even when
 /// the main entries view is truncated. A dedicated facets endpoint would be
 /// the proper long-term fix.
-const int _activityOptionsLimit = 10000;
+// Must stay in sync with the daemon's /activity limit cap.
+const int _activityOptionsLimit = 5000;
 
 final activityOptionsProvider = FutureProvider<ActivityPage>((ref) async {
   final date = ref.watch(activityQueryProvider.select((q) => q.date));
