@@ -38,11 +38,6 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// reviewPublishRetryMinAge only gates retry paths. The pipeline still submits
-// immediately after InsertReview; after this window, PublishPending will
-// re-enqueue rows that remain unpublished.
-const reviewPublishRetryMinAge = 2 * time.Minute
-
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -685,11 +680,6 @@ func main() {
 				"review_id", msg.ReviewID, "github_review_id", rev.GitHubReviewID)
 			return nil // idempotent — ack
 		}
-		if !reviewReadyForPublishRetry(rev, time.Now().UTC()) {
-			slog.Debug("publish-worker: review still in initial publish window, skipping",
-				"review_id", msg.ReviewID, "created_at", rev.CreatedAt)
-			return nil // Ack early messages; PublishPending re-enqueues aged unpublished rows.
-		}
 
 		pr, err := s.GetPR(rev.PRID)
 		if err != nil {
@@ -703,6 +693,15 @@ func main() {
 				"review_id", msg.ReviewID)
 			_ = s.MarkReviewPublished(rev.ID, -1, "", time.Now().UTC())
 			return nil // permanent — ack
+		}
+		inFlight, err := s.ReviewInFlight(pr.GithubID, rev.HeadSHA)
+		if err != nil {
+			return fmt.Errorf("check in-flight review: %w", err)
+		}
+		if inFlight {
+			slog.Debug("publish-worker: initial publish still in flight, skipping retry",
+				"review_id", msg.ReviewID, "github_id", pr.GithubID, "head_sha", rev.HeadSHA)
+			return nil // PublishPending re-enqueues if the row remains unpublished after release.
 		}
 
 		// Rebuild ReviewResult from stored JSON
@@ -2254,16 +2253,21 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 
 // PublishPending implements scheduler.Tier2PRProcessor.
 func (a *tier2Adapter) PublishPending() {
-	a.publishPending(time.Now().UTC())
+	a.publishPending()
 }
 
-func (a *tier2Adapter) publishPending(now time.Time) {
+func (a *tier2Adapter) publishPending() {
 	reviews, err := a.store.ListUnpublishedReviews()
 	if err != nil || len(reviews) == 0 {
 		return
 	}
 	for _, rev := range reviews {
-		if !reviewReadyForPublishRetry(rev, now) {
+		ready, err := a.reviewReadyForPublishRetry(rev)
+		if err != nil {
+			slog.Warn("publish-pending: in-flight check failed", "review_id", rev.ID, "err", err)
+			continue
+		}
+		if !ready {
 			continue
 		}
 		if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
@@ -2272,14 +2276,19 @@ func (a *tier2Adapter) publishPending(now time.Time) {
 	}
 }
 
-func reviewReadyForPublishRetry(rev *store.Review, now time.Time) bool {
+func (a *tier2Adapter) reviewReadyForPublishRetry(rev *store.Review) (bool, error) {
 	if rev == nil || rev.GitHubReviewID != 0 {
-		return false
+		return false, nil
 	}
-	if rev.CreatedAt.IsZero() {
-		return true
+	pr, err := a.store.GetPR(rev.PRID)
+	if err != nil {
+		return false, err
 	}
-	return !now.Before(rev.CreatedAt.Add(reviewPublishRetryMinAge))
+	inFlight, err := a.store.ReviewInFlight(pr.GithubID, rev.HeadSHA)
+	if err != nil {
+		return false, err
+	}
+	return !inFlight, nil
 }
 
 // ProcessRepo implements scheduler.Tier2IssueProcessor.
