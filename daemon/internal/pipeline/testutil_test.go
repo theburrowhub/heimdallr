@@ -23,11 +23,11 @@ func NewTestAdapter(s *store.Store) *testAdapter {
 	return &testAdapter{store: s}
 }
 
-// PRAlreadyReviewed mirrors tier2Adapter.PRAlreadyReviewed in
-// cmd/heimdallm/main.go. Keep the two in sync — the external reloop tests
-// exercise this copy, but production traffic flows through the main.go
-// version. See theburrowhub/heimdallm#243.
-func (a *testAdapter) PRAlreadyReviewed(githubID int64, repo string, number int, updatedAt time.Time) bool {
+// PRAlreadyReviewed mirrors the persisted freshness part of
+// tier2Adapter.PRAlreadyReviewed in cmd/heimdallm/main.go. It intentionally
+// omits cmd-layer circuit-breaker/SSE behavior, which depends on daemon config
+// and broker plumbing outside this package. See theburrowhub/heimdallm#243.
+func (a *testAdapter) PRAlreadyReviewed(githubID int64, repo string, number int, updatedAt time.Time, _ string) bool {
 	existing, _ := a.store.GetPRByGithubID(githubID)
 	if existing == nil && repo != "" && number > 0 {
 		existing, _ = a.store.GetPRByRepoNumber(repo, number)

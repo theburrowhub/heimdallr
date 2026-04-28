@@ -191,6 +191,7 @@ func Open(dsn string) (*Store, error) {
 	// Covering index for the circuit-breaker counters (see issue #243).
 	// CREATE INDEX IF NOT EXISTS is idempotent; safe on every startup.
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_reviews_pr_created ON reviews(pr_id, created_at)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_reviews_pr_head_created ON reviews(pr_id, head_sha, created_at)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_reviews_created ON reviews(created_at)")
 	// Hot path for CountReviewsForRepo (see issue #243). Without this the
 	// JOIN drives from prs.repo with no index and table-scans on every

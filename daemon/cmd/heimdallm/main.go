@@ -491,6 +491,7 @@ func main() {
 		publishPub:           publishPub,
 		watchStore:           watchStore,
 		lastSkippedUpdatedAt: make(map[int64]time.Time),
+		lastBreakerTrips:     make(map[breakerTripKey]breakerTripDedup),
 	}
 
 	repoPublisher := bus.NewRepoPublisher(conn)
@@ -1827,7 +1828,7 @@ func runTier2(
 				if _, ok := monitoredSet[pr.Repo]; !ok {
 					continue
 				}
-				if adapter.PRAlreadyReviewed(pr.ID, pr.Repo, pr.Number, pr.UpdatedAt) {
+				if adapter.PRAlreadyReviewed(pr.ID, pr.Repo, pr.Number, pr.UpdatedAt, pr.HeadSHA) {
 					continue
 				}
 				if err := prPublisher.PublishPRReview(ctx, pr.Repo, pr.Number, pr.ID, pr.HeadSHA); err != nil {
@@ -1937,12 +1938,24 @@ type tier2Adapter struct {
 	publishPub *bus.PRPublishPublisher
 	watchStore *bus.WatchStore
 
-	// skipMu protects lastSkippedUpdatedAt, which deduplicates review_skipped
-	// SSE events across consecutive poll cycles for the same (PR ID, updated_at)
-	// pair. Entries are pruned at the end of each FetchPRsToReview cycle so the
-	// map stays bounded to the current set of review-requested PRs.
+	// skipMu protects the lightweight SSE dedup caches below.
 	skipMu               sync.Mutex
 	lastSkippedUpdatedAt map[int64]time.Time
+	lastBreakerTrips     map[breakerTripKey]breakerTripDedup
+}
+
+const breakerTripDedupTTL = 24 * time.Hour
+
+type breakerTripKey struct {
+	Repo    string
+	Number  int
+	HeadSHA string
+	Reason  string
+}
+
+type breakerTripDedup struct {
+	UpdatedAt time.Time
+	EmittedAt time.Time
 }
 
 // discoveryStore is the subset of *store.Store that processDiscoveredRepos
@@ -2204,6 +2217,7 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 		}
 	}
 	a.skipMu.Unlock()
+	a.pruneBreakerTripDedup(time.Now())
 
 	return out, nil
 }
@@ -2401,7 +2415,7 @@ func (a *tier2Adapter) PromoteReady(ctx context.Context, repos []string) (int, e
 }
 
 // PRAlreadyReviewed implements scheduler.Tier2Store.
-func (a *tier2Adapter) PRAlreadyReviewed(githubID int64, repo string, number int, updatedAt time.Time) bool {
+func (a *tier2Adapter) PRAlreadyReviewed(githubID int64, repo string, number int, updatedAt time.Time, headSHA string) bool {
 	existing, _ := a.store.GetPRByGithubID(githubID)
 	if existing == nil && repo != "" && number > 0 {
 		existing, _ = a.store.GetPRByRepoNumber(repo, number)
@@ -2418,18 +2432,116 @@ func (a *tier2Adapter) PRAlreadyReviewed(githubID int64, repo string, number int
 		return true
 	}
 	rev, err := a.store.LatestReviewForPR(existing.ID)
-	if err != nil || rev == nil {
+	if err == nil && rev != nil {
+		// Prefer PublishedAt (stamped when SubmitReview returned); fall back to
+		// CreatedAt for legacy rows. CreatedAt is stamped BEFORE the Claude call,
+		// so a 30s grace on CreatedAt was useless for reviews taking >30s — the
+		// 2026-04-22 cost-runaway regression. See theburrowhub/heimdallm#243.
+		anchor := rev.PublishedAt
+		if anchor.IsZero() {
+			anchor = rev.CreatedAt
+		}
+		if pipeline.ReviewFreshEnough(anchor, updatedAt, pipeline.GraceDefault) {
+			return true
+		}
+	}
+	// The circuit breaker is the emergency brake for cross-bot review loops. If
+	// it is already tripped, treat the PR as handled for this poll cycle; otherwise
+	// GitHub's persistent review-requested result keeps re-enqueueing it and the
+	// operator gets a breaker banner every minute.
+	if a.circuitBreakerBlocksPR(existing, updatedAt, headSHA) {
+		return true
+	}
+	return false
+}
+
+func (a *tier2Adapter) circuitBreakerBlocksPR(pr *store.PR, updatedAt time.Time, headSHA string) bool {
+	if a == nil || a.store == nil || pr == nil {
 		return false
 	}
-	// Prefer PublishedAt (stamped when SubmitReview returned); fall back to
-	// CreatedAt for legacy rows. CreatedAt is stamped BEFORE the Claude call,
-	// so a 30s grace on CreatedAt was useless for reviews taking >30s — the
-	// 2026-04-22 cost-runaway regression. See theburrowhub/heimdallm#243.
-	anchor := rev.PublishedAt
-	if anchor.IsZero() {
-		anchor = rev.CreatedAt
+	if a.cfgMu == nil || a.cfg == nil || *a.cfg == nil {
+		return false
 	}
-	return pipeline.ReviewFreshEnough(anchor, updatedAt, pipeline.GraceDefault)
+	a.cfgMu.Lock()
+	c := *a.cfg
+	limits := store.CircuitBreakerLimits{
+		PerPR24h:  c.CircuitBreaker.PerPR24h,
+		PerRepoHr: c.CircuitBreaker.PerRepoHr,
+	}
+	a.cfgMu.Unlock()
+	if limits.PerPR24h == 0 && limits.PerRepoHr == 0 {
+		return false
+	}
+	tripped, reason, err := a.store.CheckCircuitBreaker(pr.ID, pr.Repo, headSHA, limits)
+	if err != nil {
+		slog.Warn("pr dedup: circuit breaker check failed, proceeding", "repo", pr.Repo, "pr", pr.Number, "err", err)
+		return false
+	}
+	if !tripped {
+		a.clearCircuitBreakerDedup(pr.Repo, pr.Number)
+		return false
+	}
+	a.publishCircuitBreakerTrippedOnce(pr, updatedAt, headSHA, reason)
+	return true
+}
+
+func (a *tier2Adapter) clearCircuitBreakerDedup(repo string, number int) {
+	if a == nil {
+		return
+	}
+	a.skipMu.Lock()
+	for key := range a.lastBreakerTrips {
+		if key.Repo == repo && key.Number == number {
+			delete(a.lastBreakerTrips, key)
+		}
+	}
+	a.skipMu.Unlock()
+}
+
+func (a *tier2Adapter) publishCircuitBreakerTrippedOnce(pr *store.PR, updatedAt time.Time, headSHA, reason string) {
+	if a == nil || a.broker == nil || pr == nil {
+		return
+	}
+	key := breakerTripKey{Repo: pr.Repo, Number: pr.Number, HeadSHA: headSHA, Reason: reason}
+	a.skipMu.Lock()
+	if a.lastBreakerTrips == nil {
+		a.lastBreakerTrips = make(map[breakerTripKey]breakerTripDedup)
+	}
+	prev, seen := a.lastBreakerTrips[key]
+	// Treat non-monotonic updated_at as already emitted for this exact
+	// breaker key. GitHub updated_at should be monotonic, but suppressing a
+	// duplicate banner is safer than paging the operator for clock skew.
+	alreadyEmitted := seen && !updatedAt.After(prev.UpdatedAt)
+	if !alreadyEmitted {
+		a.lastBreakerTrips[key] = breakerTripDedup{UpdatedAt: updatedAt, EmittedAt: time.Now()}
+	}
+	a.skipMu.Unlock()
+	if alreadyEmitted {
+		return
+	}
+	a.broker.Publish(sse.Event{
+		Type: sse.EventCircuitBreakerTripped,
+		Data: sseData(map[string]any{
+			"pr_number": pr.Number,
+			"repo":      pr.Repo,
+			"reason":    reason,
+		}),
+	})
+	slog.Info("pr dedup: circuit breaker tripped, suppressing review enqueue",
+		"repo", pr.Repo, "pr", pr.Number, "reason", reason)
+}
+
+func (a *tier2Adapter) pruneBreakerTripDedup(now time.Time) {
+	if a == nil {
+		return
+	}
+	a.skipMu.Lock()
+	defer a.skipMu.Unlock()
+	for key, trip := range a.lastBreakerTrips {
+		if trip.EmittedAt.IsZero() || now.Sub(trip.EmittedAt) > breakerTripDedupTTL {
+			delete(a.lastBreakerTrips, key)
+		}
+	}
 }
 
 // CheckItem implements scheduler.Tier3ItemChecker.
@@ -2559,7 +2671,7 @@ func (a *tier2Adapter) HandleChange(ctx context.Context, item *scheduler.WatchIt
 		// LastSeen has already been overwritten by ResetBackoff on earlier
 		// ticks and is no longer a faithful representation of the PR's
 		// current updated_at.
-		if a.PRAlreadyReviewed(item.GithubID, item.Repo, item.Number, snap.UpdatedAt) {
+		if a.PRAlreadyReviewed(item.GithubID, item.Repo, item.Number, snap.UpdatedAt, snap.HeadSHA) {
 			slog.Debug("tier3: PR already reviewed, skipping", "pr", item.Number, "repo", item.Repo)
 			return nil
 		}

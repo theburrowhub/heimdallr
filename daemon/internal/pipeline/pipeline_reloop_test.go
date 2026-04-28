@@ -199,7 +199,7 @@ func TestRun_LegacyRowWithEmptyHeadSHAIsBackfilledAndSkipped(t *testing.T) {
 // PRAlreadyReviewed for the test. Mirrors the real adapter in main.go but
 // without the Flutter/scheduler/config deps we don't need here.
 func newTestAdapter(s *store.Store) interface {
-	PRAlreadyReviewed(githubID int64, repo string, number int, updatedAt time.Time) bool
+	PRAlreadyReviewed(githubID int64, repo string, number int, updatedAt time.Time, headSHA string) bool
 } {
 	return pipeline.NewTestAdapter(s)
 }
@@ -233,7 +233,7 @@ func TestPRAlreadyReviewed_SlowReviewDoesNotReloop(t *testing.T) {
 	// the 2-minute grace. Should be treated as "already reviewed".
 	updatedAt := publishedAt.Add(15 * time.Second)
 	adapter := newTestAdapter(s)
-	if !adapter.PRAlreadyReviewed(99, "org/r", 99, updatedAt) {
+	if !adapter.PRAlreadyReviewed(99, "org/r", 99, updatedAt, "abc") {
 		t.Errorf("slow review (3 min) must not re-loop when updated_at is within 2m grace of PublishedAt")
 	}
 }
@@ -261,7 +261,7 @@ func TestPRAlreadyReviewed_FallsBackToCreatedAtWhenPublishedAtZero(t *testing.T)
 
 	updatedAt := createdAt.Add(10 * time.Second)
 	adapter := newTestAdapter(s)
-	if !adapter.PRAlreadyReviewed(100, "org/r", 100, updatedAt) {
+	if !adapter.PRAlreadyReviewed(100, "org/r", 100, updatedAt, "abc") {
 		t.Errorf("legacy row (PublishedAt zero) must fall back to CreatedAt and still dedup")
 	}
 }
@@ -304,7 +304,7 @@ func TestPRAlreadyReviewed_FallsBackToRepoNumberWhenGithubIDDiffers(t *testing.T
 
 	updatedAt := publishedAt.Add(15 * time.Second)
 	adapter := newTestAdapter(s)
-	if !adapter.PRAlreadyReviewed(searchAPIID, "org/r", 337, updatedAt) {
+	if !adapter.PRAlreadyReviewed(searchAPIID, "org/r", 337, updatedAt, "abc") {
 		t.Errorf("Search API github_id miss must dedup via repo/number fallback")
 	}
 }
@@ -349,7 +349,7 @@ func TestRun_TwoInstancesSharingStoreDoNotDoubleReview(t *testing.T) {
 
 	// B is a fresh adapter instance on the same store.
 	adapterB := pipeline.NewTestAdapter(s)
-	if !adapterB.PRAlreadyReviewed(1234, "org/r", 1234, updatedAt) {
+	if !adapterB.PRAlreadyReviewed(1234, "org/r", 1234, updatedAt, "abc") {
 		t.Errorf("Instance B must dedup against Instance A's PublishedAt in the shared store")
 	}
 }
@@ -376,7 +376,7 @@ func TestPRAlreadyReviewed_AllowsReviewAfterGraceWindow(t *testing.T) {
 
 	updatedAt := time.Now()
 	adapter := newTestAdapter(s)
-	if adapter.PRAlreadyReviewed(101, "org/r", 101, updatedAt) {
+	if adapter.PRAlreadyReviewed(101, "org/r", 101, updatedAt, "abc") {
 		t.Errorf("activity 5 min after publish must be treated as new change (grace only 2m)")
 	}
 }
