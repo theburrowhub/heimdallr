@@ -1106,7 +1106,9 @@ func (srv *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 //	from=YYYY-MM-DD & to=YYYY-MM-DD  — inclusive range in daemon local TZ
 //	org=... (repeatable)             — org filter
 //	repo=... (repeatable)            — repo filter (full slug "org/name")
-//	action=review|triage|implement|promote|error (repeatable)
+//	item_type=pr|issue (repeatable)  — item type filter
+//	action=review|review_skipped|triage|implement|promote|error (repeatable)
+//	outcome=... (repeatable)         — exact outcome filter
 //	limit=N (default 500, max 5000)
 //
 // Default when neither date nor from/to is supplied: today in daemon local TZ.
@@ -1186,13 +1188,36 @@ func (srv *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 
+	orgs, ok := activityFilterValues(w, q, "org", nil)
+	if !ok {
+		return
+	}
+	repos, ok := activityFilterValues(w, q, "repo", nil)
+	if !ok {
+		return
+	}
+	itemTypes, ok := activityFilterValues(w, q, "item_type", validActivityItemTypes)
+	if !ok {
+		return
+	}
+	actions, ok := activityFilterValues(w, q, "action", validActivityActions)
+	if !ok {
+		return
+	}
+	outcomes, ok := activityFilterValues(w, q, "outcome", nil)
+	if !ok {
+		return
+	}
+
 	entries, truncated, err := srv.store.ListActivity(store.ActivityQuery{
-		From:    start,
-		To:      end,
-		Orgs:    q["org"],
-		Repos:   q["repo"],
-		Actions: q["action"],
-		Limit:   limit,
+		From:      start,
+		To:        end,
+		Orgs:      orgs,
+		Repos:     repos,
+		ItemTypes: itemTypes,
+		Actions:   actions,
+		Outcomes:  outcomes,
+		Limit:     limit,
 	})
 	if err != nil {
 		slog.Error("activity: list failed", "err", err)
@@ -1239,6 +1264,46 @@ func (srv *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 		"count":     len(out),
 		"truncated": truncated,
 	})
+}
+
+const maxActivityFilterValues = 50
+const maxActivityFilterValueLen = 512
+
+var validActivityItemTypes = map[string]bool{
+	"pr":    true,
+	"issue": true,
+}
+
+var validActivityActions = map[string]bool{
+	"review":         true,
+	"review_skipped": true,
+	"triage":         true,
+	"implement":      true,
+	"promote":        true,
+	"error":          true,
+}
+
+func activityFilterValues(w http.ResponseWriter, q url.Values, name string, allowed map[string]bool) ([]string, bool) {
+	values := q[name]
+	if len(values) > maxActivityFilterValues {
+		httpJSONErr(w, http.StatusBadRequest, name+" has too many values")
+		return nil, false
+	}
+	for _, v := range values {
+		if v == "" {
+			httpJSONErr(w, http.StatusBadRequest, name+" cannot be empty")
+			return nil, false
+		}
+		if len(v) > maxActivityFilterValueLen {
+			httpJSONErr(w, http.StatusBadRequest, name+" value is too long")
+			return nil, false
+		}
+		if allowed != nil && !allowed[v] {
+			httpJSONErr(w, http.StatusBadRequest, name+" has an invalid value")
+			return nil, false
+		}
+	}
+	return values, true
 }
 
 // httpJSONErr writes a JSON {"error": msg} body with the given HTTP status.
