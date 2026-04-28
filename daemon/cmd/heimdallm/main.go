@@ -38,6 +38,9 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// Let the initial pipeline publish finish before retry workers consider the row.
+const reviewPublishRetryMinAge = 2 * time.Minute
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -679,6 +682,11 @@ func main() {
 			slog.Info("publish-worker: already published, skipping",
 				"review_id", msg.ReviewID, "github_review_id", rev.GitHubReviewID)
 			return nil // idempotent — ack
+		}
+		if !reviewReadyForPublishRetry(rev, time.Now().UTC()) {
+			slog.Info("publish-worker: review still in initial publish window, skipping",
+				"review_id", msg.ReviewID, "created_at", rev.CreatedAt)
+			return nil // PublishPending will re-enqueue if it remains unpublished.
 		}
 
 		pr, err := s.GetPR(rev.PRID)
@@ -2244,15 +2252,35 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 
 // PublishPending implements scheduler.Tier2PRProcessor.
 func (a *tier2Adapter) PublishPending() {
+	a.publishPending(time.Now().UTC())
+}
+
+func (a *tier2Adapter) publishPending(now time.Time) {
+	if a.publishPub == nil {
+		return
+	}
 	reviews, err := a.store.ListUnpublishedReviews()
 	if err != nil || len(reviews) == 0 {
 		return
 	}
 	for _, rev := range reviews {
+		if !reviewReadyForPublishRetry(rev, now) {
+			continue
+		}
 		if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
 			slog.Warn("publish-pending: enqueue failed", "review_id", rev.ID, "err", err)
 		}
 	}
+}
+
+func reviewReadyForPublishRetry(rev *store.Review, now time.Time) bool {
+	if rev == nil || rev.GitHubReviewID != 0 {
+		return false
+	}
+	if rev.CreatedAt.IsZero() {
+		return true
+	}
+	return !now.Before(rev.CreatedAt.Add(reviewPublishRetryMinAge))
 }
 
 // ProcessRepo implements scheduler.Tier2IssueProcessor.

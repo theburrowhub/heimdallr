@@ -5,8 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/heimdallm/daemon/internal/bus"
 	"github.com/heimdallm/daemon/internal/store"
+	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 )
 
 // newMemStore returns an in-memory SQLite store with a short cleanup hook.
@@ -27,6 +31,134 @@ func seedAgent(t *testing.T, s *store.Store, a store.Agent) {
 	t.Helper()
 	if err := s.UpsertAgent(&a); err != nil {
 		t.Fatalf("upsert agent %q: %v", a.ID, err)
+	}
+}
+
+func newInProcessNATS(t *testing.T) *nats.Conn {
+	t.Helper()
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		ServerName: t.Name(),
+		DontListen: true,
+		NoLog:      true,
+		NoSigs:     true,
+	})
+	if err != nil {
+		t.Fatalf("new nats server: %v", err)
+	}
+	srv.Start()
+	if !srv.ReadyForConnections(5 * time.Second) {
+		t.Fatal("nats server not ready")
+	}
+	conn, err := nats.Connect("", nats.InProcessServer(srv), nats.Name(t.Name()))
+	if err != nil {
+		t.Fatalf("connect nats: %v", err)
+	}
+	t.Cleanup(func() {
+		conn.Close()
+		srv.Shutdown()
+		srv.WaitForShutdown()
+	})
+	return conn
+}
+
+func seedPRWithReview(t *testing.T, s *store.Store, githubID int64, createdAt time.Time) int64 {
+	t.Helper()
+	prID, err := s.UpsertPR(&store.PR{
+		GithubID:  githubID,
+		Repo:      "org/repo",
+		Number:    int(githubID),
+		Title:     "test pr",
+		Author:    "alice",
+		URL:       "https://github.test/org/repo/pull/1",
+		State:     "open",
+		UpdatedAt: createdAt,
+		FetchedAt: createdAt,
+	})
+	if err != nil {
+		t.Fatalf("upsert pr: %v", err)
+	}
+	revID, err := s.InsertReview(&store.Review{
+		PRID:           prID,
+		CLIUsed:        "codex",
+		Summary:        "summary",
+		Issues:         "[]",
+		Suggestions:    "[]",
+		Severity:       "low",
+		CreatedAt:      createdAt,
+		GitHubReviewID: 0,
+		HeadSHA:        "abc123",
+	})
+	if err != nil {
+		t.Fatalf("insert review: %v", err)
+	}
+	return revID
+}
+
+func TestReviewReadyForPublishRetry(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+
+	if reviewReadyForPublishRetry(&store.Review{GitHubReviewID: 123, CreatedAt: now.Add(-time.Hour)}, now) {
+		t.Fatal("published review should not be ready for retry")
+	}
+	if reviewReadyForPublishRetry(&store.Review{CreatedAt: now.Add(-reviewPublishRetryMinAge + time.Second)}, now) {
+		t.Fatal("fresh unpublished review should stay in the initial publish window")
+	}
+	if !reviewReadyForPublishRetry(&store.Review{CreatedAt: now.Add(-reviewPublishRetryMinAge)}, now) {
+		t.Fatal("unpublished review at the retry boundary should be ready")
+	}
+	if !reviewReadyForPublishRetry(&store.Review{}, now) {
+		t.Fatal("legacy review with missing created_at should be retryable")
+	}
+}
+
+func TestTier2AdapterPublishPendingDefersFreshReviews(t *testing.T) {
+	s := newMemStore(t)
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	oldReviewID := seedPRWithReview(t, s, 101, now.Add(-reviewPublishRetryMinAge-time.Second))
+	freshReviewID := seedPRWithReview(t, s, 102, now.Add(-reviewPublishRetryMinAge+time.Second))
+
+	conn := newInProcessNATS(t)
+	ch := make(chan *nats.Msg, 2)
+	sub, err := conn.ChanSubscribe(bus.SubjPRPublish, ch)
+	if err != nil {
+		t.Fatalf("subscribe publish subject: %v", err)
+	}
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("flush subscribe: %v", err)
+	}
+
+	a := &tier2Adapter{
+		store:      s,
+		publishPub: bus.NewPRPublishPublisher(conn),
+	}
+	a.publishPending(now)
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("flush publish: %v", err)
+	}
+
+	select {
+	case msg := <-ch:
+		var got bus.PRPublishMsg
+		if err := bus.Decode(msg.Data, &got); err != nil {
+			t.Fatalf("decode publish msg: %v", err)
+		}
+		if got.ReviewID != oldReviewID {
+			t.Fatalf("published review ID = %d, want old review %d", got.ReviewID, oldReviewID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("old pending review was not enqueued")
+	}
+
+	select {
+	case msg := <-ch:
+		var got bus.PRPublishMsg
+		_ = bus.Decode(msg.Data, &got)
+		if got.ReviewID == freshReviewID {
+			t.Fatalf("fresh review %d was enqueued during initial publish window", freshReviewID)
+		}
+		t.Fatalf("unexpected extra publish message: %+v", got)
+	case <-time.After(150 * time.Millisecond):
 	}
 }
 
@@ -86,10 +218,10 @@ func TestResolveImplementPrompt_AgentFallbackWhenNoRepoMatch(t *testing.T) {
 func TestResolveImplementPrompt_DefaultFallbackWhenAgentMissing(t *testing.T) {
 	s := newMemStore(t)
 	seedAgent(t, s, store.Agent{
-		ID:                    "default-agent",
-		Name:                  "default",
-		IsDefaultDev:          true,
-		ImplementPrompt:       "DEFAULT TEMPLATE",
+		ID:              "default-agent",
+		Name:            "default",
+		IsDefaultDev:    true,
+		ImplementPrompt: "DEFAULT TEMPLATE",
 	})
 
 	// Neither the repo nor the agent ID exists → use global default's ImplementPrompt.
