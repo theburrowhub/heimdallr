@@ -38,7 +38,9 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// Let the initial pipeline publish finish before retry workers consider the row.
+// reviewPublishRetryMinAge only gates retry paths. The pipeline still submits
+// immediately after InsertReview; after this window, PublishPending will
+// re-enqueue rows that remain unpublished.
 const reviewPublishRetryMinAge = 2 * time.Minute
 
 func main() {
@@ -684,9 +686,9 @@ func main() {
 			return nil // idempotent — ack
 		}
 		if !reviewReadyForPublishRetry(rev, time.Now().UTC()) {
-			slog.Info("publish-worker: review still in initial publish window, skipping",
+			slog.Debug("publish-worker: review still in initial publish window, skipping",
 				"review_id", msg.ReviewID, "created_at", rev.CreatedAt)
-			return nil // PublishPending will re-enqueue if it remains unpublished.
+			return nil // Ack early messages; PublishPending re-enqueues aged unpublished rows.
 		}
 
 		pr, err := s.GetPR(rev.PRID)
@@ -2256,9 +2258,6 @@ func (a *tier2Adapter) PublishPending() {
 }
 
 func (a *tier2Adapter) publishPending(now time.Time) {
-	if a.publishPub == nil {
-		return
-	}
 	reviews, err := a.store.ListUnpublishedReviews()
 	if err != nil || len(reviews) == 0 {
 		return

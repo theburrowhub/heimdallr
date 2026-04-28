@@ -115,7 +115,7 @@ func TestTier2AdapterPublishPendingDefersFreshReviews(t *testing.T) {
 	s := newMemStore(t)
 	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
 	oldReviewID := seedPRWithReview(t, s, 101, now.Add(-reviewPublishRetryMinAge-time.Second))
-	freshReviewID := seedPRWithReview(t, s, 102, now.Add(-reviewPublishRetryMinAge+time.Second))
+	seedPRWithReview(t, s, 102, now.Add(-reviewPublishRetryMinAge+time.Second))
 
 	conn := newInProcessNATS(t)
 	ch := make(chan *nats.Msg, 2)
@@ -150,13 +150,12 @@ func TestTier2AdapterPublishPendingDefersFreshReviews(t *testing.T) {
 		t.Fatal("old pending review was not enqueued")
 	}
 
+	// publishPending publishes synchronously; the short wait catches stray
+	// buffered messages without making this negative assertion expensive.
 	select {
 	case msg := <-ch:
 		var got bus.PRPublishMsg
 		_ = bus.Decode(msg.Data, &got)
-		if got.ReviewID == freshReviewID {
-			t.Fatalf("fresh review %d was enqueued during initial publish window", freshReviewID)
-		}
 		t.Fatalf("unexpected extra publish message: %+v", got)
 	case <-time.After(150 * time.Millisecond):
 	}
