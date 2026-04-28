@@ -24,19 +24,15 @@ class ActivityScreen extends ConsumerWidget {
     final async = ref.watch(activityEntriesProvider);
     final optionsAsync = ref.watch(activityOptionsProvider);
 
-    final orgs =
-        optionsAsync.valueOrNull?.entries.map((e) => e.org).toSet().toList() ??
-        const <String>[];
-    final repos =
-        optionsAsync.valueOrNull?.entries.map((e) => e.repo).toSet().toList() ??
-        const <String>[];
-    final outcomes =
-        optionsAsync.valueOrNull?.entries
-            .map((e) => e.outcome)
-            .where((o) => o.isNotEmpty)
-            .toSet()
-            .toList() ??
-        const <String>[];
+    final optionEntries =
+        optionsAsync.valueOrNull?.entries ??
+        async.valueOrNull?.entries ??
+        const <ActivityEntry>[];
+    final usingFallbackOptions =
+        optionsAsync.valueOrNull == null && async.valueOrNull != null;
+    final orgs = _sortedDistinct(optionEntries.map((e) => e.org));
+    final repos = _sortedDistinct(optionEntries.map((e) => e.repo));
+    final outcomes = _sortedDistinct(optionEntries.map((e) => e.outcome));
 
     return Column(
       children: [
@@ -47,6 +43,7 @@ class ActivityScreen extends ConsumerWidget {
             availableOrgs: orgs,
             availableRepos: repos,
             availableOutcomes: outcomes,
+            optionsLimited: usingFallbackOptions,
           ),
         ),
         const Divider(height: 1),
@@ -60,6 +57,12 @@ class ActivityScreen extends ConsumerWidget {
       ],
     );
   }
+}
+
+List<String> _sortedDistinct(Iterable<String> values) {
+  final list = values.where((v) => v.isNotEmpty).toSet().toList();
+  list.sort();
+  return list;
 }
 
 class _ErrorView extends StatelessWidget {

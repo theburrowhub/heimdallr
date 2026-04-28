@@ -10,12 +10,14 @@ class ActivityFilterChips extends ConsumerWidget {
   final List<String> availableOrgs;
   final List<String> availableRepos;
   final List<String> availableOutcomes;
+  final bool optionsLimited;
 
   const ActivityFilterChips({
     super.key,
     required this.availableOrgs,
     required this.availableRepos,
     this.availableOutcomes = const [],
+    this.optionsLimited = false,
   });
 
   @override
@@ -81,6 +83,7 @@ class ActivityFilterChips extends ConsumerWidget {
           onTap: () => _pickStrings(
             context,
             options: availableOrgs,
+            optionsLimited: optionsLimited,
             select: (q) => q.orgs,
             toggle: (v) =>
                 ref.read(activityQueryProvider.notifier).toggleOrg(v),
@@ -93,6 +96,7 @@ class ActivityFilterChips extends ConsumerWidget {
           onTap: () => _pickStrings(
             context,
             options: availableRepos,
+            optionsLimited: optionsLimited,
             select: (q) => q.repos,
             toggle: (v) =>
                 ref.read(activityQueryProvider.notifier).toggleRepo(v),
@@ -129,6 +133,7 @@ class ActivityFilterChips extends ConsumerWidget {
             onTap: () => _pickStrings(
               context,
               options: availableOutcomes,
+              optionsLimited: optionsLimited,
               select: (q) => q.outcomes,
               toggle: (v) =>
                   ref.read(activityQueryProvider.notifier).toggleOutcome(v),
@@ -170,6 +175,7 @@ class ActivityFilterChips extends ConsumerWidget {
   Future<void> _pickStrings(
     BuildContext context, {
     required List<String> options,
+    bool optionsLimited = false,
     required Set<String> Function(ActivityQuery q) select,
     required void Function(String) toggle,
     String Function(String)? labelFor,
@@ -179,16 +185,34 @@ class ActivityFilterChips extends ConsumerWidget {
       builder: (_) => Consumer(
         builder: (ctx, ref, _) {
           final selected = select(ref.watch(activityQueryProvider));
+          if (options.isEmpty) {
+            return const SafeArea(
+              child: SizedBox(
+                height: 160,
+                child: Center(child: Text('No options available')),
+              ),
+            );
+          }
           return ListView(
-            children: options
-                .map(
-                  (o) => CheckboxListTile(
-                    value: selected.contains(o),
-                    title: Text(labelFor?.call(o) ?? o),
-                    onChanged: (_) => toggle(o),
+            children: [
+              if (optionsLimited)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Text(
+                    'Options limited to visible activity',
+                    style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    ),
                   ),
-                )
-                .toList(),
+                ),
+              ...options.map(
+                (o) => CheckboxListTile(
+                  value: selected.contains(o),
+                  title: Text(labelFor?.call(o) ?? o),
+                  onChanged: (_) => toggle(o),
+                ),
+              ),
+            ],
           );
         },
       ),

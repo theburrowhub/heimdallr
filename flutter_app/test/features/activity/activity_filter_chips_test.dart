@@ -66,6 +66,18 @@ void main() {
     expect(tester.widget<CheckboxListTile>(reviewTile).value, isTrue);
   });
 
+  testWidgets('string picker shows an empty state instead of a blank sheet', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_host(orgs: const []));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Organization'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('No options available'), findsOneWidget);
+  });
+
   testWidgets('quick chips update type, action, and outcome filters', (
     tester,
   ) async {
