@@ -694,6 +694,15 @@ func main() {
 			_ = s.MarkReviewPublished(rev.ID, -1, "", time.Now().UTC())
 			return nil // permanent — ack
 		}
+		inFlight, err := s.ReviewInFlight(pr.GithubID, rev.HeadSHA)
+		if err != nil {
+			return fmt.Errorf("check in-flight review: %w", err)
+		}
+		if inFlight {
+			slog.Debug("publish-worker: initial publish still in flight, skipping retry",
+				"review_id", msg.ReviewID, "github_id", pr.GithubID, "head_sha", rev.HeadSHA)
+			return nil // PublishPending re-enqueues if the row remains unpublished after release.
+		}
 
 		// Rebuild ReviewResult from stored JSON
 		var issues []executor.Issue
@@ -2244,15 +2253,42 @@ func (a *tier2Adapter) ProcessPR(ctx context.Context, pr scheduler.Tier2PR) erro
 
 // PublishPending implements scheduler.Tier2PRProcessor.
 func (a *tier2Adapter) PublishPending() {
+	a.publishPending()
+}
+
+func (a *tier2Adapter) publishPending() {
 	reviews, err := a.store.ListUnpublishedReviews()
 	if err != nil || len(reviews) == 0 {
 		return
 	}
 	for _, rev := range reviews {
+		ready, err := a.reviewReadyForPublishRetry(rev)
+		if err != nil {
+			slog.Warn("publish-pending: in-flight check failed", "review_id", rev.ID, "err", err)
+			continue
+		}
+		if !ready {
+			continue
+		}
 		if err := a.publishPub.PublishPRPublish(context.Background(), rev.ID); err != nil {
 			slog.Warn("publish-pending: enqueue failed", "review_id", rev.ID, "err", err)
 		}
 	}
+}
+
+func (a *tier2Adapter) reviewReadyForPublishRetry(rev *store.Review) (bool, error) {
+	if rev == nil || rev.GitHubReviewID != 0 {
+		return false, nil
+	}
+	pr, err := a.store.GetPR(rev.PRID)
+	if err != nil {
+		return false, err
+	}
+	inFlight, err := a.store.ReviewInFlight(pr.GithubID, rev.HeadSHA)
+	if err != nil {
+		return false, err
+	}
+	return !inFlight, nil
 }
 
 // ProcessRepo implements scheduler.Tier2IssueProcessor.
