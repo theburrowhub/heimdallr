@@ -11,11 +11,11 @@ void main() {
 
       final q = c.read(activityQueryProvider);
       final today = DateTime.now();
-      expect(q.date?.year,  today.year);
+      expect(q.date?.year, today.year);
       expect(q.date?.month, today.month);
-      expect(q.date?.day,   today.day);
+      expect(q.date?.day, today.day);
       expect(q.from, isNull);
-      expect(q.to,   isNull);
+      expect(q.to, isNull);
     });
 
     test('setDate clears range and keeps filters', () {
@@ -27,10 +27,10 @@ void main() {
       n.setDate(DateTime(2026, 4, 18));
 
       final q = c.read(activityQueryProvider);
-      expect(q.date,  DateTime(2026, 4, 18));
-      expect(q.from,  isNull);
-      expect(q.to,    isNull);
-      expect(q.orgs,  {'acme'});
+      expect(q.date, DateTime(2026, 4, 18));
+      expect(q.from, isNull);
+      expect(q.to, isNull);
+      expect(q.orgs, {'acme'});
     });
 
     test('setRange clears date and keeps filters', () {
@@ -42,9 +42,9 @@ void main() {
       n.setRange(DateTime(2026, 4, 18), DateTime(2026, 4, 20));
 
       final q = c.read(activityQueryProvider);
-      expect(q.date,  isNull);
-      expect(q.from,  DateTime(2026, 4, 18));
-      expect(q.to,    DateTime(2026, 4, 20));
+      expect(q.date, isNull);
+      expect(q.from, DateTime(2026, 4, 18));
+      expect(q.to, DateTime(2026, 4, 20));
       expect(q.repos, {'acme/api'});
     });
 
@@ -62,11 +62,53 @@ void main() {
 
       n.toggleAction(ActivityAction.review);
       n.toggleAction(ActivityAction.triage);
-      expect(c.read(activityQueryProvider).actions,
-          {ActivityAction.review, ActivityAction.triage});
+      expect(c.read(activityQueryProvider).actions, {
+        ActivityAction.review,
+        ActivityAction.triage,
+      });
 
       n.toggleAction(ActivityAction.review);
       expect(c.read(activityQueryProvider).actions, {ActivityAction.triage});
+
+      n.toggleItemType('pr');
+      n.toggleOutcome('draft');
+      expect(c.read(activityQueryProvider).itemTypes, {'pr'});
+      expect(c.read(activityQueryProvider).outcomes, {'draft'});
+
+      n.toggleItemType('pr');
+      n.toggleOutcome('draft');
+      expect(c.read(activityQueryProvider).itemTypes, isEmpty);
+      expect(c.read(activityQueryProvider).outcomes, isEmpty);
+    });
+
+    test('setQuickFilter updates requested filter dimensions', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(activityQueryProvider.notifier);
+
+      n.setQuickFilter(
+        action: ActivityAction.reviewSkipped,
+        itemType: 'pr',
+        outcome: 'draft',
+        enabled: true,
+      );
+
+      var q = c.read(activityQueryProvider);
+      expect(q.actions, {ActivityAction.reviewSkipped});
+      expect(q.itemTypes, {'pr'});
+      expect(q.outcomes, {'draft'});
+
+      n.setQuickFilter(
+        action: ActivityAction.reviewSkipped,
+        itemType: 'pr',
+        outcome: 'draft',
+        enabled: false,
+      );
+
+      q = c.read(activityQueryProvider);
+      expect(q.actions, isEmpty);
+      expect(q.itemTypes, isEmpty);
+      expect(q.outcomes, isEmpty);
     });
 
     test('setRange swaps from/to when inverted', () {
@@ -78,7 +120,7 @@ void main() {
 
       final q = c.read(activityQueryProvider);
       expect(q.from, DateTime(2026, 4, 18));
-      expect(q.to,   DateTime(2026, 4, 20));
+      expect(q.to, DateTime(2026, 4, 20));
     });
 
     test('clearFilters resets only filter sets', () {
@@ -89,14 +131,18 @@ void main() {
       n.setDate(DateTime(2026, 4, 18));
       n.toggleOrg('a');
       n.toggleRepo('a/b');
+      n.toggleItemType('pr');
       n.toggleAction(ActivityAction.review);
+      n.toggleOutcome('draft');
       n.clearFilters();
 
       final q = c.read(activityQueryProvider);
-      expect(q.date,    DateTime(2026, 4, 18));   // date preserved
-      expect(q.orgs,    isEmpty);
-      expect(q.repos,   isEmpty);
+      expect(q.date, DateTime(2026, 4, 18)); // date preserved
+      expect(q.orgs, isEmpty);
+      expect(q.repos, isEmpty);
+      expect(q.itemTypes, isEmpty);
       expect(q.actions, isEmpty);
+      expect(q.outcomes, isEmpty);
     });
   });
 }

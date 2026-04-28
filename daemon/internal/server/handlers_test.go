@@ -1020,6 +1020,91 @@ func TestHandleActivity_FilterByRepoAndAction(t *testing.T) {
 	}
 }
 
+func TestHandleActivity_FilterByItemTypeAndOutcome(t *testing.T) {
+	srv, s := setupServer(t)
+	now := time.Now()
+	_, _ = s.InsertActivity(now, "acme", "acme/api", "pr", 1, "t", "review_skipped", "draft", nil)
+	_, _ = s.InsertActivity(now, "acme", "acme/api", "pr", 2, "t", "review_skipped", "not_open", nil)
+	_, _ = s.InsertActivity(now, "acme", "acme/api", "issue", 3, "t", "triage", "draft", nil)
+
+	req := httptest.NewRequest("GET", "/activity?item_type=pr&action=review_skipped&outcome=draft", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Entries []struct {
+			ItemType   string `json:"item_type"`
+			ItemNumber int    `json:"item_number"`
+			Action     string `json:"action"`
+			Outcome    string `json:"outcome"`
+		} `json:"entries"`
+		Count int `json:"count"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Count != 1 {
+		t.Fatalf("count = %d, want 1", resp.Count)
+	}
+	if resp.Entries[0].ItemType != "pr" ||
+		resp.Entries[0].ItemNumber != 1 ||
+		resp.Entries[0].Action != "review_skipped" ||
+		resp.Entries[0].Outcome != "draft" {
+		t.Errorf("wrong entry: %+v", resp.Entries[0])
+	}
+}
+
+func TestHandleActivity_RejectsInvalidFilterValues(t *testing.T) {
+	cases := []struct {
+		name  string
+		query url.Values
+	}{
+		{
+			name:  "invalid item_type",
+			query: url.Values{"item_type": {"repo"}},
+		},
+		{
+			name:  "invalid action",
+			query: url.Values{"action": {"reviewSkipped"}},
+		},
+		{
+			name:  "empty repo",
+			query: url.Values{"repo": {""}},
+		},
+		{
+			name:  "too long outcome",
+			query: url.Values{"outcome": {strings.Repeat("x", 513)}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := setupServer(t)
+			req := httptest.NewRequest("GET", "/activity?"+tc.query.Encode(), nil)
+			w := httptest.NewRecorder()
+			srv.Router().ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body = %s)", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleActivity_RejectsTooManyFilterValues(t *testing.T) {
+	srv, _ := setupServer(t)
+	q := url.Values{}
+	for i := 0; i < 51; i++ {
+		q.Add("repo", fmt.Sprintf("acme/api-%d", i))
+	}
+
+	req := httptest.NewRequest("GET", "/activity?"+q.Encode(), nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body = %s)", w.Code, w.Body.String())
+	}
+}
+
 func TestHandlerPutConfigValueValidation(t *testing.T) {
 	srv := setupServerWithToken(t, "secret-token")
 
