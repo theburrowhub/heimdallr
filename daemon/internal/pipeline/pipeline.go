@@ -15,14 +15,14 @@ import (
 )
 
 // ErrCircuitBreakerTripped is returned by Run when a review was skipped
-// because the per-PR or per-repo cap was exceeded. Callers detect it via
+// because the per-PR HEAD or per-repo cap was exceeded. Callers detect it via
 // errors.As on a *CircuitBreakerError value to extract the human-readable
 // reason for telemetry/UI, or via errors.Is(err, ErrCircuitBreakerTripped)
 // when the reason is not needed.
 var ErrCircuitBreakerTripped = errors.New("pipeline: circuit breaker tripped")
 
 // CircuitBreakerError wraps ErrCircuitBreakerTripped with the specific
-// reason the breaker returned ("per-PR cap reached: ...", etc). Use
+// reason the breaker returned ("per-PR HEAD cap reached: ...", etc). Use
 // errors.As on this type to read Reason without parsing the error string.
 type CircuitBreakerError struct {
 	Reason string
@@ -480,12 +480,12 @@ func (p *Pipeline) Run(pr *github.PullRequest, opts RunOptions) (*store.Review, 
 	}
 	slog.Info("pipeline: using CLI", "cli", cli)
 
-	// 4b. Circuit breaker: hard cap on review count per PR / per repo. Runs
-	// AFTER all dedup layers so it only fires when the dedup failed but the
-	// caller is about to spend Claude credits anyway. See
+	// 4b. Circuit breaker: hard cap on review count per PR HEAD / per repo.
+	// Runs AFTER all dedup layers so it only fires when the dedup failed but
+	// the caller is about to spend Claude credits anyway. See
 	// theburrowhub/heimdallm#243.
 	if p.breaker != nil {
-		tripped, reason, err := p.store.CheckCircuitBreaker(prID, pr.Repo, *p.breaker)
+		tripped, reason, err := p.store.CheckCircuitBreaker(prID, pr.Repo, pr.Head.SHA, *p.breaker)
 		if err != nil {
 			slog.Warn("pipeline: circuit breaker check failed, proceeding", "err", err)
 		} else if tripped {

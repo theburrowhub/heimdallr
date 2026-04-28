@@ -1,13 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/heimdallm/daemon/internal/bus"
+	"github.com/heimdallm/daemon/internal/config"
+	"github.com/heimdallm/daemon/internal/sse"
 	"github.com/heimdallm/daemon/internal/store"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -198,6 +202,169 @@ func TestTier2AdapterPublishPendingDefersInFlightReviews(t *testing.T) {
 		_ = bus.Decode(msg.Data, &got)
 		t.Fatalf("unexpected extra publish message: %+v", got)
 	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestPRAlreadyReviewedCircuitBreakerSuppressesRepeatedEnqueue(t *testing.T) {
+	s := newMemStore(t)
+	now := time.Date(2026, 4, 28, 14, 30, 0, 0, time.UTC)
+	prID, err := s.UpsertPR(&store.PR{
+		GithubID:  1001,
+		Repo:      "org/repo",
+		Number:    7,
+		Title:     "cost loop",
+		Author:    "alice",
+		URL:       "https://github.test/org/repo/pull/7",
+		State:     "open",
+		UpdatedAt: now,
+		FetchedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("upsert pr: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := s.InsertReview(&store.Review{
+			PRID:              prID,
+			CLIUsed:           "codex",
+			Summary:           "summary",
+			Issues:            "[]",
+			Suggestions:       "[]",
+			Severity:          "low",
+			CreatedAt:         now.Add(-time.Duration(i) * time.Minute),
+			PublishedAt:       now.Add(-time.Duration(i) * time.Minute),
+			GitHubReviewID:    int64(9000 + i),
+			GitHubReviewState: "APPROVED",
+			HeadSHA:           "abc123",
+		}); err != nil {
+			t.Fatalf("insert review %d: %v", i, err)
+		}
+	}
+
+	broker := sse.NewBroker()
+	broker.Start()
+	defer broker.Stop()
+	events := broker.Subscribe()
+	defer broker.Unsubscribe(events)
+
+	cfg := &config.Config{}
+	cfg.CircuitBreaker.PerPR24h = 3
+	cfg.CircuitBreaker.PerRepoHr = 999
+	var cfgMu sync.Mutex
+	a := &tier2Adapter{
+		store:            s,
+		broker:           broker,
+		cfgMu:            &cfgMu,
+		cfg:              &cfg,
+		lastBreakerTrips: make(map[breakerTripKey]breakerTripDedup),
+	}
+
+	updatedAt := now.Add(10 * time.Minute)
+	if !a.PRAlreadyReviewed(1001, "org/repo", 7, updatedAt, "abc123") {
+		t.Fatal("circuit breaker trip should suppress enqueue")
+	}
+	if !a.PRAlreadyReviewed(1001, "org/repo", 7, updatedAt, "abc123") {
+		t.Fatal("same circuit breaker trip should keep suppressing enqueue")
+	}
+
+	count := 0
+	var reason string
+drain:
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type != sse.EventCircuitBreakerTripped {
+				continue
+			}
+			count++
+			var payload struct {
+				Reason string `json:"reason"`
+			}
+			if err := json.Unmarshal([]byte(ev.Data), &payload); err != nil {
+				t.Fatalf("decode circuit breaker event: %v", err)
+			}
+			reason = payload.Reason
+		case <-time.After(100 * time.Millisecond):
+			break drain
+		}
+	}
+	if count != 1 {
+		t.Fatalf("circuit breaker events = %d, want 1", count)
+	}
+	if reason != "per-PR HEAD cap reached: 3 reviews on this commit in last 24h (cap 3)" {
+		t.Fatalf("reason = %q", reason)
+	}
+}
+
+func TestBreakerTripDedupPrunesByTTL(t *testing.T) {
+	now := time.Date(2026, 4, 28, 15, 0, 0, 0, time.UTC)
+	freshKey := breakerTripKey{Repo: "org/repo", Number: 7, HeadSHA: "abc", Reason: "cap"}
+	oldKey := breakerTripKey{Repo: "org/repo", Number: 8, HeadSHA: "def", Reason: "cap"}
+	a := &tier2Adapter{
+		lastBreakerTrips: map[breakerTripKey]breakerTripDedup{
+			freshKey: {UpdatedAt: now, EmittedAt: now.Add(-breakerTripDedupTTL + time.Second)},
+			oldKey:   {UpdatedAt: now, EmittedAt: now.Add(-breakerTripDedupTTL - time.Second)},
+		},
+	}
+
+	a.pruneBreakerTripDedup(now)
+
+	if _, ok := a.lastBreakerTrips[freshKey]; !ok {
+		t.Fatal("fresh breaker dedup entry should survive pruning")
+	}
+	if _, ok := a.lastBreakerTrips[oldKey]; ok {
+		t.Fatal("old breaker dedup entry should be pruned")
+	}
+}
+
+func TestPRAlreadyReviewedCircuitBreakerAllowsNewHeadSHA(t *testing.T) {
+	s := newMemStore(t)
+	now := time.Date(2026, 4, 28, 14, 30, 0, 0, time.UTC)
+	prID, err := s.UpsertPR(&store.PR{
+		GithubID:  1002,
+		Repo:      "org/repo",
+		Number:    8,
+		Title:     "follow-up changes",
+		Author:    "alice",
+		URL:       "https://github.test/org/repo/pull/8",
+		State:     "open",
+		UpdatedAt: now,
+		FetchedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("upsert pr: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := s.InsertReview(&store.Review{
+			PRID:              prID,
+			CLIUsed:           "codex",
+			Summary:           "summary",
+			Issues:            "[]",
+			Suggestions:       "[]",
+			Severity:          "low",
+			CreatedAt:         now.Add(-time.Duration(i) * time.Minute),
+			PublishedAt:       now.Add(-time.Duration(i) * time.Minute),
+			GitHubReviewID:    int64(9100 + i),
+			GitHubReviewState: "APPROVED",
+			HeadSHA:           "old-sha",
+		}); err != nil {
+			t.Fatalf("insert review %d: %v", i, err)
+		}
+	}
+
+	cfg := &config.Config{}
+	cfg.CircuitBreaker.PerPR24h = 3
+	cfg.CircuitBreaker.PerRepoHr = 999
+	var cfgMu sync.Mutex
+	a := &tier2Adapter{
+		store:  s,
+		cfgMu:  &cfgMu,
+		cfg:    &cfg,
+		broker: sse.NewBroker(),
+	}
+
+	updatedAt := now.Add(10 * time.Minute)
+	if a.PRAlreadyReviewed(1002, "org/repo", 8, updatedAt, "new-sha") {
+		t.Fatal("new head SHA should not be suppressed by the per-PR circuit breaker")
 	}
 }
 
