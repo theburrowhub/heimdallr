@@ -2,6 +2,13 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.6.11](https://github.com/theburrowhub/heimdallm/compare/v0.6.10...v0.6.11) (2026-04-30)
+
+
+### Features
+
+* gate PR reviews on requested_reviewers check, remove 2-min grace ([#385](https://github.com/theburrowhub/heimdallm/issues/385)) ([7dad9a6](https://github.com/theburrowhub/heimdallm/commit/7dad9a69564395157cbc99dcbd6807601aae863f))
+
 ## [0.6.10](https://github.com/theburrowhub/heimdallm/compare/v0.6.9...v0.6.10) (2026-04-30)
 
 
