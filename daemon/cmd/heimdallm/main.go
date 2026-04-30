@@ -1900,6 +1900,15 @@ func upsertDiscoveredRepos(c *config.Config, prs []*gh.PullRequest) []string {
 		known[r] = struct{}{}
 	}
 
+	// Build an org allowlist from DiscoveryOrgs. When set, repos whose org
+	// prefix is not in the list are silently skipped — prevents the PR
+	// review-requested search (which spans all of GitHub) from auto-adopting
+	// repos outside the operator's intended organisations.
+	allowedOrgs := make(map[string]struct{}, len(c.GitHub.DiscoveryOrgs))
+	for _, o := range c.GitHub.DiscoveryOrgs {
+		allowedOrgs[strings.ToLower(o)] = struct{}{}
+	}
+
 	enable := c.GitHub.AutoEnablePRForDiscovery()
 	added := []string{}
 	for _, pr := range prs {
@@ -1908,6 +1917,18 @@ func upsertDiscoveredRepos(c *config.Config, prs []*gh.PullRequest) []string {
 		}
 		if _, alreadyKnown := known[pr.Repo]; alreadyKnown {
 			continue
+		}
+		// Filter by allowed orgs when configured.
+		if len(allowedOrgs) > 0 {
+			org := ""
+			if i := strings.IndexByte(pr.Repo, '/'); i > 0 {
+				org = pr.Repo[:i]
+			}
+			if _, ok := allowedOrgs[strings.ToLower(org)]; !ok {
+				slog.Debug("upsertDiscoveredRepos: skipping repo outside allowed orgs",
+					"repo", pr.Repo, "org", org, "allowed", c.GitHub.DiscoveryOrgs)
+				continue
+			}
 		}
 		if enable {
 			c.GitHub.Repositories = append(c.GitHub.Repositories, pr.Repo)
@@ -2130,10 +2151,27 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 	// seenIDs tracks every PR GitHub ID encountered this cycle so we can prune
 	// the skip-dedup map to only live PRs after the loop.
 	seenIDs := make(map[int64]struct{}, len(prs))
+
+	// Build org allowlist for PR filtering — mirrors the upsert filter.
+	prAllowedOrgs := make(map[string]struct{}, len(cfg.GitHub.DiscoveryOrgs))
+	for _, o := range cfg.GitHub.DiscoveryOrgs {
+		prAllowedOrgs[strings.ToLower(o)] = struct{}{}
+	}
+
 	for _, pr := range prs {
 		if pr.Repo == "" {
 			slog.Warn("adapter: skipping PR with empty repo", "pr_number", pr.Number)
 			continue
+		}
+		// Skip PRs from orgs outside discovery_orgs when configured.
+		if len(prAllowedOrgs) > 0 {
+			org := ""
+			if i := strings.IndexByte(pr.Repo, '/'); i > 0 {
+				org = pr.Repo[:i]
+			}
+			if _, ok := prAllowedOrgs[strings.ToLower(org)]; !ok {
+				continue
+			}
 		}
 		seenIDs[pr.ID] = struct{}{}
 		reason := pipeline.Evaluate(pipeline.PRGate{
