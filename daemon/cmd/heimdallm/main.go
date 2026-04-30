@@ -2212,25 +2212,37 @@ func (a *tier2Adapter) FetchPRsToReview() ([]scheduler.Tier2PR, error) {
 		delete(a.lastSkippedUpdatedAt, pr.ID)
 		a.skipMu.Unlock()
 
-		// Resolve the HEAD SHA so the persistent in-flight claim (#258) can
-		// key on (pr_id, head_sha) downstream. The Search Issues API does
-		// NOT populate head.sha, so this is an extra /pulls/N call per PR
-		// that cleared the review guards — bounded by the small number of
-		// review-requested PRs per cycle. See theburrowhub/heimdallm#264
-		// for the bug this closes: before this lookup the SHA was empty,
-		// and runReview silently skipped the claim guard on every tick.
+		// Resolve the HEAD SHA and confirm the bot is still a pending
+		// reviewer via the Pulls API (same call, zero extra cost). The
+		// Search Issues API does NOT populate head.sha, and its index
+		// can lag behind the actual requested_reviewers list — a PR may
+		// still appear in review-requested:<bot> results for up to ~2 min
+		// after the bot submits a review. Checking requested_reviewers
+		// here eliminates those "ghost" enqueues at the source, replacing
+		// the former 2-minute PublishedAt grace in PRAlreadyReviewed.
+		//
+		// See theburrowhub/heimdallm#264 for the SHA plumbing bug this
+		// closes, and theburrowhub/heimdallm#243 for the cost-runaway
+		// that the grace window originally mitigated.
 		//
 		// Fail-open on resolver error: empty HeadSHA makes runReview fall
 		// back to the other layered defenses (fail-closed SHA in
-		// pipeline.Run, circuit breaker, PublishedAt grace). Blocking a
-		// review on a transient SHA-lookup blip would be worse than
-		// leaning on those defenses for one cycle.
-		headSHA, shaErr := a.ghClient.GetPRHeadSHA(pr.Repo, pr.Number)
+		// pipeline.Run, circuit breaker). Blocking a review on a
+		// transient lookup blip would be worse than leaning on those
+		// defenses for one cycle.
+		info, shaErr := a.ghClient.GetPRHeadInfo(pr.Repo, pr.Number)
 		if shaErr != nil {
-			slog.Warn("tier2: HEAD SHA lookup failed, in-flight claim will be skipped for this tick",
+			slog.Warn("tier2: HEAD info lookup failed, in-flight claim will be skipped for this tick",
 				"repo", pr.Repo, "pr", pr.Number, "err", shaErr)
-			headSHA = ""
+		} else if botLogin != "" && !info.ReviewRequestedFor(botLogin) {
+			// The bot is no longer in requested_reviewers — this is a
+			// ghost result from the Search API's replication lag. Skip
+			// silently; the PR will drop out of search results soon.
+			slog.Debug("tier2: bot not in requested_reviewers, skipping search-index ghost",
+				"repo", pr.Repo, "pr", pr.Number, "bot", botLogin)
+			continue
 		}
+		headSHA := info.HeadSHA
 
 		out = append(out, scheduler.Tier2PR{
 			ID:        pr.ID,
@@ -2469,24 +2481,18 @@ func (a *tier2Adapter) PRAlreadyReviewed(githubID int64, repo string, number int
 	if existing.Dismissed {
 		return true
 	}
-	rev, err := a.store.LatestReviewForPR(existing.ID)
-	if err == nil && rev != nil {
-		// Prefer PublishedAt (stamped when SubmitReview returned); fall back to
-		// CreatedAt for legacy rows. CreatedAt is stamped BEFORE the Claude call,
-		// so a 30s grace on CreatedAt was useless for reviews taking >30s — the
-		// 2026-04-22 cost-runaway regression. See theburrowhub/heimdallm#243.
-		anchor := rev.PublishedAt
-		if anchor.IsZero() {
-			anchor = rev.CreatedAt
-		}
-		if pipeline.ReviewFreshEnough(anchor, updatedAt, pipeline.GraceDefault) {
-			return true
-		}
-	}
-	// The circuit breaker is the emergency brake for cross-bot review loops. If
-	// it is already tripped, treat the PR as handled for this poll cycle; otherwise
-	// GitHub's persistent review-requested result keeps re-enqueueing it and the
-	// operator gets a breaker banner every minute.
+	// NOTE: The former 2-minute PublishedAt grace window (GraceDefault) has
+	// been removed. The tier-2 FetchPRsToReview loop now confirms the bot is
+	// still in requested_reviewers via the Pulls API before a PR reaches this
+	// point. That check eliminates "ghost" enqueues from the Search API's
+	// replication lag — the only scenario the grace protected against. Without
+	// the grace, a push + re-request-review within 2 minutes of the last
+	// review is picked up immediately instead of being suppressed until the
+	// grace expired. See theburrowhub/heimdallm#243 for the original incident
+	// and the commit that added GetPRHeadInfo for the replacement check.
+	//
+	// The circuit breaker remains as the emergency brake for cross-bot review
+	// loops and per-PR/per-repo rate caps.
 	if a.circuitBreakerBlocksPR(existing, updatedAt, headSHA) {
 		return true
 	}

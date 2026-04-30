@@ -446,27 +446,76 @@ func (c *Client) fetchReposForOrg(topic, org string) ([]string, error) {
 	return repos, nil
 }
 
-// GetPRHeadSHA returns the PR's current HEAD commit SHA via the Pulls API.
-// The Search Issues API used by FetchPRsToReview does not populate head.sha,
-// so the pipeline needs this lookup to deduplicate reviews by commit rather
-// than by the PR's updated_at (which any peer reviewer bumps on every review).
-func (c *Client) GetPRHeadSHA(repo string, number int) (string, error) {
+// PRHeadInfo bundles the HEAD SHA and the pending-reviewer logins returned by
+// the Pulls API. Tier 2 uses ReviewRequestedFor to confirm the bot is still a
+// pending reviewer (the Search API index can lag behind the actual
+// requested_reviewers list).
+type PRHeadInfo struct {
+	HeadSHA            string
+	RequestedReviewers []string // lowercased logins
+}
+
+// ReviewRequestedFor reports whether login (case-insensitive) is still in the
+// PR's requested_reviewers list. Returns false when the list is empty (which
+// happens after the bot submits a review).
+func (info PRHeadInfo) ReviewRequestedFor(login string) bool {
+	lower := strings.ToLower(login)
+	for _, r := range info.RequestedReviewers {
+		if r == lower {
+			return true
+		}
+	}
+	return false
+}
+
+// getPR fetches a single PR via the Pulls API and returns the unmarshalled
+// struct. Shared by GetPRHeadSHA (pipeline interface — returns only the SHA)
+// and GetPRHeadInfo (tier 2 — returns SHA + requested_reviewers).
+func (c *Client) getPR(repo string, number int) (*PullRequest, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
 	resp, err := c.do("GET", path, "application/vnd.github+json")
 	if err != nil {
-		return "", fmt.Errorf("github: get PR head sha: %w", err)
+		return nil, fmt.Errorf("github: get PR: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if resp.StatusCode != http.StatusOK {
 		errBody := safeTruncate(string(body), maxErrBodyLen)
-		return "", fmt.Errorf("github: get PR head sha (%s #%d): status %d: %s", repo, number, resp.StatusCode, errBody)
+		return nil, fmt.Errorf("github: get PR (%s #%d): status %d: %s", repo, number, resp.StatusCode, errBody)
 	}
 	var pr PullRequest
 	if err := json.Unmarshal(body, &pr); err != nil {
-		return "", fmt.Errorf("github: get PR head sha: unmarshal: %w", err)
+		return nil, fmt.Errorf("github: get PR: unmarshal: %w", err)
+	}
+	return &pr, nil
+}
+
+// GetPRHeadSHA returns the PR's current HEAD commit SHA via the Pulls API.
+// The Search Issues API used by FetchPRsToReview does not populate head.sha,
+// so the pipeline needs this lookup to deduplicate reviews by commit rather
+// than by the PR's updated_at (which any peer reviewer bumps on every review).
+func (c *Client) GetPRHeadSHA(repo string, number int) (string, error) {
+	pr, err := c.getPR(repo, number)
+	if err != nil {
+		return "", err
 	}
 	return pr.Head.SHA, nil
+}
+
+// GetPRHeadInfo returns the HEAD SHA and pending reviewer logins for a PR.
+// Used by the tier-2 adapter to (a) resolve the HEAD SHA and (b) confirm the
+// bot is still in requested_reviewers before enqueuing a review — without an
+// extra API call, since both fields come from the same GET /pulls/{n} response.
+func (c *Client) GetPRHeadInfo(repo string, number int) (PRHeadInfo, error) {
+	pr, err := c.getPR(repo, number)
+	if err != nil {
+		return PRHeadInfo{}, err
+	}
+	logins := make([]string, len(pr.RequestedReviewers))
+	for i, u := range pr.RequestedReviewers {
+		logins[i] = strings.ToLower(u.Login)
+	}
+	return PRHeadInfo{HeadSHA: pr.Head.SHA, RequestedReviewers: logins}, nil
 }
 
 // PRSnapshot is the subset of PR fields Tier 3's guard evaluator needs.
