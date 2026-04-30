@@ -61,7 +61,8 @@ func TestTier2Adapter_FetchPRsToReview_PopulatesHeadSHA(t *testing.T) {
 			atomic.AddInt32(&pullsHits, 1)
 			_ = json.NewEncoder(w).Encode(gh.PullRequest{
 				ID: 4242, Number: 7, State: "open",
-				Head: gh.Branch{SHA: wantSHA},
+				Head:               gh.Branch{SHA: wantSHA},
+				RequestedReviewers: []gh.User{{Login: "heimdallm-bot"}},
 			})
 		default:
 			http.NotFound(w, r)

@@ -24,9 +24,12 @@ func NewTestAdapter(s *store.Store) *testAdapter {
 }
 
 // PRAlreadyReviewed mirrors the persisted freshness part of
-// tier2Adapter.PRAlreadyReviewed in cmd/heimdallm/main.go. It intentionally
-// omits cmd-layer circuit-breaker/SSE behavior, which depends on daemon config
-// and broker plumbing outside this package. See theburrowhub/heimdallm#243.
+// tier2Adapter.PRAlreadyReviewed in cmd/heimdallm/main.go. The former
+// 2-minute PublishedAt grace window has been removed — the tier-2
+// FetchPRsToReview loop now confirms the bot is still in
+// requested_reviewers via the Pulls API before a PR reaches this point.
+// PRAlreadyReviewed now only checks dismissed state and circuit breaker
+// (circuit breaker omitted here since it requires daemon config plumbing).
 func (a *testAdapter) PRAlreadyReviewed(githubID int64, repo string, number int, updatedAt time.Time, _ string) bool {
 	existing, _ := a.store.GetPRByGithubID(githubID)
 	if existing == nil && repo != "" && number > 0 {
@@ -38,13 +41,5 @@ func (a *testAdapter) PRAlreadyReviewed(githubID int64, repo string, number int,
 	if existing.Dismissed {
 		return true
 	}
-	rev, err := a.store.LatestReviewForPR(existing.ID)
-	if err != nil || rev == nil {
-		return false
-	}
-	anchor := rev.PublishedAt
-	if anchor.IsZero() {
-		anchor = rev.CreatedAt
-	}
-	return ReviewFreshEnough(anchor, updatedAt, GraceDefault)
+	return false
 }
