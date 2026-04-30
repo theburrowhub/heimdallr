@@ -207,7 +207,7 @@ func TestTier2AdapterPublishPendingDefersInFlightReviews(t *testing.T) {
 
 func TestPRAlreadyReviewedCircuitBreakerSuppressesRepeatedEnqueue(t *testing.T) {
 	s := newMemStore(t)
-	now := time.Date(2026, 4, 28, 14, 30, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	prID, err := s.UpsertPR(&store.PR{
 		GithubID:  1001,
 		Repo:      "org/repo",
@@ -318,7 +318,7 @@ func TestBreakerTripDedupPrunesByTTL(t *testing.T) {
 
 func TestPRAlreadyReviewedCircuitBreakerAllowsNewHeadSHA(t *testing.T) {
 	s := newMemStore(t)
-	now := time.Date(2026, 4, 28, 14, 30, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	prID, err := s.UpsertPR(&store.PR{
 		GithubID:  1002,
 		Repo:      "org/repo",
