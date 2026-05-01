@@ -2,6 +2,13 @@
 
 > **Note:** Versions 0.1.0–0.1.3 were originally published under [`theburrowhub/heimdallr-docker`](https://github.com/theburrowhub/heimdallr-docker) (now archived). The project was unified into this repository and renamed to Heimdallm in v0.1.1.
 
+## [0.6.12](https://github.com/theburrowhub/heimdallm/compare/v0.6.11...v0.6.12) (2026-05-01)
+
+
+### Bug Fixes
+
+* **cli:** make j/k/arrows scroll Stats and Config tabs directly ([#387](https://github.com/theburrowhub/heimdallm/issues/387)) ([adc9aaa](https://github.com/theburrowhub/heimdallm/commit/adc9aaa7fbcc4ad729b1eea6784507cdfa15862f)), closes [#388](https://github.com/theburrowhub/heimdallm/issues/388)
+
 ## [0.6.11](https://github.com/theburrowhub/heimdallm/compare/v0.6.10...v0.6.11) (2026-04-30)
 
 
