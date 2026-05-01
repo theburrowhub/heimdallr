@@ -544,10 +544,37 @@ func (d *Dashboard) scrollDetailUp() {
 	}
 }
 
+// isScrollOffsetTab reports whether the active tab uses the cursor as a
+// scroll offset (first visible line) rather than a selected-row index.
+// Read-only informational tabs (Stats, Config) have no selectable rows,
+// so j/k/arrows scroll the viewport directly instead of moving a highlight.
+func (d *Dashboard) isScrollOffsetTab() bool {
+	return d.activeTab == tabStats || d.activeTab == tabConfig
+}
+
 func (d *Dashboard) clampCursor() {
 	max := d.tabItemCount()
-	if max > 0 && d.cursor >= max {
-		d.cursor = max - 1
+	if d.isScrollOffsetTab() {
+		// cursor is a scroll offset: clamp so the last line is visible
+		// at the bottom of the viewport.
+		visible := d.contentHeight()
+		if d.activeTab == tabConfig {
+			visible -= 2 // header + separator
+		}
+		if visible < 1 {
+			visible = 1
+		}
+		upper := max - visible
+		if upper < 0 {
+			upper = 0
+		}
+		if d.cursor > upper {
+			d.cursor = upper
+		}
+	} else {
+		if max > 0 && d.cursor >= max {
+			d.cursor = max - 1
+		}
 	}
 	if d.cursor < 0 {
 		d.cursor = 0
@@ -814,11 +841,24 @@ func (d *Dashboard) renderConfig(height int) string {
 		return b.String()
 	}
 
-	maxVisible := height - 2
+	maxVisible := height - 2 // header + separator
 	if maxVisible < 1 {
 		maxVisible = 1
 	}
-	start, end := visibleRange(d.cursor, len(lines), maxVisible)
+
+	// cursor is a scroll offset (first visible line).
+	start := d.cursor
+	if start > len(lines)-maxVisible {
+		start = len(lines) - maxVisible
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxVisible
+	if end > len(lines) {
+		end = len(lines)
+	}
+
 	for i := start; i < end; i++ {
 		b.WriteString(lines[i])
 		b.WriteString("\n")
@@ -845,7 +885,20 @@ func (d *Dashboard) renderStats(height int) string {
 	if maxVisible < 1 {
 		maxVisible = 1
 	}
-	start, end := visibleRange(d.cursor, len(lines), maxVisible)
+
+	// cursor is a scroll offset (first visible line).
+	start := d.cursor
+	if start > len(lines)-maxVisible {
+		start = len(lines) - maxVisible
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxVisible
+	if end > len(lines) {
+		end = len(lines)
+	}
+
 	for i := start; i < end; i++ {
 		b.WriteString(lines[i])
 		b.WriteString("\n")
