@@ -21,10 +21,9 @@ const (
 	tabIssues
 	tabConfig
 	tabStats
-	tabLogs
 )
 
-var tabNames = []string{"Activity", "PRs", "Issues", "Config", "Stats", "Logs"}
+var tabNames = []string{"Activity", "PRs", "Issues", "Config", "Stats"}
 
 type Dashboard struct {
 	client *api.Client
@@ -34,11 +33,10 @@ type Dashboard struct {
 	activeTab tab
 	cursor    int
 
-	prs      []api.PR
-	issues   []api.Issue
-	config   map[string]any
-	stats    *api.Stats
-	activity []activityLine
+	prs    []api.PR
+	issues []api.Issue
+	config map[string]any
+	stats  *api.Stats
 
 	logLines  []logLine
 	logFollow bool
@@ -62,13 +60,6 @@ type Dashboard struct {
 	showDetail   bool
 	detailScroll int
 	detailLines  []string
-}
-
-type activityLine struct {
-	Time     string
-	Event    string
-	Info     string
-	ItemType string // "pr" or "issue"
 }
 
 type tickMsg time.Time
@@ -198,7 +189,7 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.MouseButtonWheelUp:
 			if d.showDetail {
 				d.scrollDetailUp()
-			} else if d.activeTab == tabLogs {
+			} else if d.activeTab == tabActivity {
 				for i := 0; i < 3; i++ {
 					d.scrollLogsUp()
 				}
@@ -211,7 +202,7 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.MouseButtonWheelDown:
 			if d.showDetail {
 				d.scrollDetailDown()
-			} else if d.activeTab == tabLogs {
+			} else if d.activeTab == tabActivity {
 				for i := 0; i < 3; i++ {
 					d.scrollLogsDown()
 				}
@@ -249,15 +240,6 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			d.config = msg.config
 			d.stats = msg.stats
 			if msg.activity != nil {
-				d.activity = make([]activityLine, 0, len(msg.activity.Entries))
-				for _, e := range msg.activity.Entries {
-					d.activity = append(d.activity, activityLine{
-						Time:     formatActivityTime(e.TS),
-						Event:    e.Action,
-						Info:     formatActivityInfo(e.Repo, e.ItemType, e.ItemNumber),
-						ItemType: e.ItemType,
-					})
-				}
 				if !d.logSeeded {
 					entries := msg.activity.Entries
 					d.logLines = make([]logLine, 0, len(entries))
@@ -271,17 +253,6 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return d, nil
 
 	case sseMsg:
-		itemType, info := formatSSEData(msg.Data)
-		line := activityLine{
-			Time:     time.Now().Format("15:04"),
-			Event:    msg.Type,
-			Info:     info,
-			ItemType: itemType,
-		}
-		d.activity = append([]activityLine{line}, d.activity...)
-		if len(d.activity) > 100 {
-			d.activity = d.activity[:100]
-		}
 		d.logLines = append(d.logLines, sseToLogLine(api.SSEEvent(msg)))
 		if len(d.logLines) > 1000 {
 			excess := len(d.logLines) - 1000
@@ -361,14 +332,14 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		d.activeTab = (d.activeTab - 1 + tab(len(tabNames))) % tab(len(tabNames))
 		d.cursor = 0
 	case "j", "down":
-		if d.activeTab == tabLogs {
+		if d.activeTab == tabActivity {
 			d.scrollLogsDown()
 		} else {
 			d.cursor++
 			d.clampCursor()
 		}
 	case "k", "up":
-		if d.activeTab == tabLogs {
+		if d.activeTab == tabActivity {
 			d.scrollLogsUp()
 		} else {
 			if d.cursor > 0 {
@@ -376,7 +347,7 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "pgdown":
-		if d.activeTab == tabLogs {
+		if d.activeTab == tabActivity {
 			for i := 0; i < d.contentHeight(); i++ {
 				d.scrollLogsDown()
 			}
@@ -385,7 +356,7 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			d.clampCursor()
 		}
 	case "pgup":
-		if d.activeTab == tabLogs {
+		if d.activeTab == tabActivity {
 			for i := 0; i < d.contentHeight(); i++ {
 				d.scrollLogsUp()
 			}
@@ -396,14 +367,14 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "home":
-		if d.activeTab == tabLogs {
+		if d.activeTab == tabActivity {
 			d.logOffset = 0
 			d.logFollow = false
 		} else {
 			d.cursor = 0
 		}
 	case "end":
-		if d.activeTab == tabLogs {
+		if d.activeTab == tabActivity {
 			d.logFollow = true
 		} else {
 			max := d.tabItemCount()
@@ -412,7 +383,7 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "G":
-		if d.activeTab == tabLogs {
+		if d.activeTab == tabActivity {
 			d.logFollow = true
 		} else {
 			max := d.tabItemCount()
@@ -448,9 +419,6 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		d.cursor = 0
 	case "5":
 		d.activeTab = tabStats
-		d.cursor = 0
-	case "6":
-		d.activeTab = tabLogs
 		d.cursor = 0
 	}
 	return d, nil
@@ -685,7 +653,7 @@ func (d *Dashboard) renderContent(height int) string {
 	}
 	switch d.activeTab {
 	case tabActivity:
-		return d.renderActivity(height)
+		return d.renderLogs(height)
 	case tabPRs:
 		return d.renderPRs(height)
 	case tabIssues:
@@ -694,47 +662,8 @@ func (d *Dashboard) renderContent(height int) string {
 		return d.renderConfig(height)
 	case tabStats:
 		return d.renderStats(height)
-	case tabLogs:
-		return d.renderLogs(height)
 	}
 	return ""
-}
-
-func (d *Dashboard) renderActivity(height int) string {
-	if len(d.activity) == 0 {
-		return lipgloss.NewStyle().Foreground(colorMuted).Render("  No activity yet. Events will appear here in real-time.")
-	}
-
-	var b strings.Builder
-	header := fmt.Sprintf("  %-7s %-7s %-25s %s", "TIME", "TYPE", "EVENT", "INFO")
-	b.WriteString(headerStyle.Render(header))
-	b.WriteString("\n")
-	b.WriteString("  " + strings.Repeat("─", 78))
-	b.WriteString("\n")
-
-	maxVisible := height - 2
-	if maxVisible < 1 {
-		maxVisible = 1
-	}
-	start, end := visibleRange(d.cursor, len(d.activity), maxVisible)
-
-	for i := start; i < end; i++ {
-		a := d.activity[i]
-		badge := activityBadge(a.ItemType)
-		info := itemTypeStyle(a.ItemType).Render(a.Info)
-		line := fmt.Sprintf("  %-7s %s %-25s %s", a.Time, badge, a.Event, info)
-		if i == d.cursor {
-			b.WriteString(selectedRowStyle.Render(line))
-		} else {
-			b.WriteString(line)
-		}
-		b.WriteString("\n")
-	}
-
-	if ind := scrollIndicator(start, end, len(d.activity)); ind != "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render(ind))
-	}
-	return b.String()
 }
 
 func (d *Dashboard) renderPRs(height int) string {
@@ -999,9 +928,12 @@ func (d *Dashboard) renderHelp() string {
 		return helpStyle.Render("[esc]close  [j/k]scroll  [pgup/pgdn]page  [q]uit")
 	}
 	if d.activeTab == tabPRs || d.activeTab == tabIssues {
-		return helpStyle.Render("[q]uit  [r]efresh  [s]top  [enter]detail  [tab]switch  [j/k]scroll  [pgup/pgdn]page  [1-6]jump")
+		return helpStyle.Render("[q]uit  [r]efresh  [s]top  [enter]detail  [tab]switch  [j/k]scroll  [pgup/pgdn]page  [1-5]jump")
 	}
-	return helpStyle.Render("[q]uit  [r]efresh  [s]top  [tab]switch  [j/k]scroll  [pgup/pgdn]page  [1-6]jump  [G]follow")
+	if d.activeTab == tabActivity {
+		return helpStyle.Render("[q]uit  [r]efresh  [s]top  [tab]switch  [j/k]scroll  [pgup/pgdn]page  [1-5]jump  [G]follow")
+	}
+	return helpStyle.Render("[q]uit  [r]efresh  [s]top  [tab]switch  [j/k]scroll  [pgup/pgdn]page  [1-5]jump")
 }
 
 func (d *Dashboard) contentHeight() int {
@@ -1015,7 +947,7 @@ func (d *Dashboard) contentHeight() int {
 func (d *Dashboard) tabItemCount() int {
 	switch d.activeTab {
 	case tabActivity:
-		return len(d.activity)
+		return len(d.logLines)
 	case tabPRs:
 		return len(d.prs)
 	case tabIssues:
@@ -1100,14 +1032,6 @@ func formatConfigValue(v any) string {
 	}
 }
 
-func formatActivityTime(ts string) string {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return ts
-	}
-	return t.Format("15:04")
-}
-
 func formatSSEData(data string) (itemType string, info string) {
 	var m map[string]any
 	if err := json.Unmarshal([]byte(data), &m); err != nil {
@@ -1140,42 +1064,6 @@ func formatSSEData(data string) (itemType string, info string) {
 		return itemType, strings.Join(parts, " ")
 	}
 	return itemType, data
-}
-
-func formatActivityInfo(repo, itemType string, itemNumber int) string {
-	if itemNumber == 0 {
-		return repo
-	}
-	switch itemType {
-	case "pr":
-		return fmt.Sprintf("%s PR #%d", repo, itemNumber)
-	case "issue":
-		return fmt.Sprintf("%s Issue #%d", repo, itemNumber)
-	default:
-		return fmt.Sprintf("%s #%d", repo, itemNumber)
-	}
-}
-
-func activityBadge(itemType string) string {
-	switch itemType {
-	case "pr":
-		return logBadgeStyleFn("PR").Render(fmt.Sprintf("[%-5s]", "PR"))
-	case "issue":
-		return logBadgeStyleFn("ISSUE").Render(fmt.Sprintf("[%-5s]", "ISSUE"))
-	default:
-		return fmt.Sprintf("%-7s", "")
-	}
-}
-
-func itemTypeStyle(itemType string) lipgloss.Style {
-	switch itemType {
-	case "pr":
-		return lipgloss.NewStyle().Foreground(colorPR)
-	case "issue":
-		return lipgloss.NewStyle().Foreground(colorIssue)
-	default:
-		return lipgloss.NewStyle()
-	}
 }
 
 func toInt(v any) int {
